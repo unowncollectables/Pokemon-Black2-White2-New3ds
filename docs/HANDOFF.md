@@ -224,8 +224,9 @@ Software compositor in `n3ds/nitro/ds2d_compose.c`: mode-0 text (4/8 bpp), modes
 bitmap BG2/BG3 (8/16 bpp with BG scroll), main vs sub engines (`HW_DB_*` VRAM/pltt/OAM),
 POWCNT bit 15: main engine → upper 3DS LCD when set (`0x8000`). Extended BG pltt from
 LCDC F/G when `DISPCNT` bit 30 (slot from `BGxCNT` bit 13). Mode-5 CDemo DC bitmap: `BGxCNT` bit7=1 bitmap, bit2=1 → 16bpp direct (bit15
-opaque); bit2=0 → 8bpp + ext palette when DISPCNT bit 30. Bitmap base =
-`screenBase × 0x4000` with main-BG VRAM banks A–D (trace `vramcnt` in log).
+opaque); bit2=0 → 8bpp + ext palette when DISPCNT bit 30. Affine sampling uses
+BGx PA–PD and BGxX/Y (20.8 ref); PA/PD default `0x100`. Main BG reads go through
+VRAMCNT A–D (MST main-BG, OFS × 0x20000). Logs: `vramcnt on/+60`, `mode5-on/+60`.
 OBJ ext pltt when `DISPCNT` bit 31. Shell console skip after first present is
 `PBW2_LINK_GAME` only; default `game_present.c` matches r15 (`146976` B,
 `b7c59f88` / `fd82c634`).

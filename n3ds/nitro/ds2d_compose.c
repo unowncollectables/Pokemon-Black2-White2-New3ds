@@ -54,20 +54,59 @@ static u32 engine_obj_vram_base(int is_sub) {
     return is_sub ? HW_DB_OBJ_VRAM : HW_OBJ_VRAM;
 }
 
-static u32 main_bg_bank_mask(void) {
+static int vramcnt_is_main_bg_bank(u8 bank, u32 bank_index) {
+    u32 mst;
+
+    if ((bank & REG_GX_VRAMCNT_A_E_MASK) == 0 || bank_index >= 4u) {
+        return 0;
+    }
+    mst = bank & 7u;
+    /* Nitro GX_VRAMCNT(1,ofs) uses MST=1; hardware often shows MST=2/3 for A–D main BG. */
+    return mst == 1u || mst == 2u || mst == 3u;
+}
+
+static u32 vramcnt_bank_slot_base(u8 bank) {
+    u32 ofs = ((u32)bank >> REG_GX_VRAMCNT_A_OFS_SHIFT) & 0x1fu;
+
+    return HW_BG_VRAM + ofs * 0x20000u;
+}
+
+static u32 main_bg_linear_addr(u32 byte_off) {
     u32 vramcnt = *(const u32 *)(pbw2_io + 0x240);
-    u32 mask = 0;
+    u32 i;
+
+    for (i = 0; i < 4u; i++) {
+        u8 bank = (u8)((vramcnt >> (i * 8u)) & 0xffu);
+        u32 slot;
+        u32 slot_start;
+        u32 slot_end;
+
+        if (!vramcnt_is_main_bg_bank(bank, i)) {
+            continue;
+        }
+        slot = ((u32)bank >> REG_GX_VRAMCNT_A_OFS_SHIFT) & 0x1fu;
+        slot_start = slot * 0x20000u;
+        slot_end = slot_start + 0x20000u;
+        if (byte_off >= slot_start && byte_off < slot_end) {
+            return HW_BG_VRAM + byte_off;
+        }
+    }
+    return HW_BG_VRAM + byte_off;
+}
+
+static void log_vramcnt_banks(const char *tag) {
+    u32 vramcnt = *(const u32 *)(pbw2_io + 0x240);
     u32 i;
 
     for (i = 0; i < 4u; i++) {
         u8 bank = (u8)((vramcnt >> (i * 8u)) & 0xffu);
         u32 mst = bank & 7u;
+        u32 ofs = ((u32)bank >> REG_GX_VRAMCNT_A_OFS_SHIFT) & 0x1fu;
+        u32 map = vramcnt_is_main_bg_bank(bank, i) ? vramcnt_bank_slot_base(bank) : 0u;
 
-        if ((bank & REG_GX_VRAMCNT_A_E_MASK) != 0 && (mst == 2u || mst == 3u)) {
-            mask |= 1u << i;
-        }
+        Log_Line("GX", "vramcnt %s %c raw=0x%02x mst=%u ofs=%u map=0x%08x", tag, (char)('A' + (int)i),
+                 (unsigned)bank, (unsigned)mst, (unsigned)ofs, (unsigned)map);
     }
-    return mask;
 }
 
 static u32 bg_screen_addr(u32 dc, u16 cnt, int is_sub, u32 bgmode, int bg) {
@@ -76,14 +115,42 @@ static u32 bg_screen_addr(u32 dc, u16 cnt, int is_sub, u32 bgmode, int bg) {
     u32 off;
 
     if (bg >= 2 && bgmode >= GX_BGMODE_3 && bgmode <= GX_BGMODE_5 && (cnt & REG_G2_BG0CNT_COLORMODE_MASK)) {
-        (void)main_bg_bank_mask();
-        return base + screen_base * 0x4000u;
+        off = screen_base * 0x4000u;
+        if (!is_sub) {
+            return main_bg_linear_addr(off);
+        }
+        return base + off;
     }
     off = screen_base * 0x800u;
     if (!is_sub) {
         off += ((dc >> REG_GX_DISPCNT_BGSCREENOFFSET_SHIFT) & 7u) * 0x10000u;
     }
     return base + off;
+}
+
+static s32 affine_ref28(u32 v) {
+    v &= 0x0fffffffu;
+    if (v & 0x08000000u) {
+        v |= 0xf0000000u;
+    }
+    return (s32)v;
+}
+
+static void read_bg_affine(const u8 *regs, int bg, s16 *pa, s16 *pb, s16 *pc, s16 *pd, s32 *rx, s32 *ry) {
+    u32 b = (bg == 2) ? 0x20u : 0x30u;
+    u32 m01 = reg_u32(regs, b);
+    u32 m23 = reg_u32(regs, b + 4u);
+
+    *pa = (s16)(m01 & 0xffffu);
+    *pb = (s16)(m01 >> 16);
+    *pc = (s16)(m23 & 0xffffu);
+    *pd = (s16)(m23 >> 16);
+    *rx = affine_ref28(reg_u32(regs, b + 8u));
+    *ry = affine_ref28(reg_u32(regs, b + 12u));
+    if (*pa == 0 && *pd == 0) {
+        *pa = (s16)0x0100;
+        *pd = (s16)0x0100;
+    }
 }
 
 static const u16 *bg_layer_pltt(u32 dc, u16 cnt, int is_sub, int bg) {
@@ -191,41 +258,163 @@ static void bitmap_dims(u16 cnt, int *bw, int *bh) {
     }
 }
 
-static void log_mode5_bitmap_once(int bg, u16 cnt, u32 bmp_addr, int is16, const u16 *pix16) {
-    static u8 s_logged[2];
-    u32 opaque;
-    u32 i;
+static struct {
+    u32 compose_frames;
+    u32 mode5_on_frame;
+    u8 logged_at_on;
+    u8 logged_delayed;
+    u8 vram_on;
+    u8 vram_delay;
+} s_mode5_diag;
 
-    if (bg < 2 || bg > 3 || s_logged[bg - 2]) {
-        return;
-    }
-    s_logged[bg - 2] = 1;
-    opaque = 0;
-    if (is16 && pix16 != NULL) {
-        for (i = 0; i < 256u * 256u; i++) {
-            if ((pix16[i] & 0x8000u) != 0) {
-                opaque++;
-            }
+static u32 count_opaque16_at_base(u16 cnt, int bw, int bh) {
+    u32 screen_base = ((u32)cnt >> REG_G2_BG0CNT_SCREENBASE_SHIFT) & 0x1fu;
+    u32 addr = main_bg_linear_addr(screen_base * 0x4000u);
+    const u16 *p = (const u16 *)(void *)vram_ptr(addr);
+    u32 opaque = 0;
+    u32 i;
+    u32 pixels = (u32)bw * (u32)bh;
+
+    for (i = 0; i < pixels; i++) {
+        if ((p[i] & 0x8000u) != 0) {
+            opaque++;
         }
     }
+    return opaque;
+}
+
+static void log_mode5_bitmap(int bg, u16 cnt, u32 bmp_addr, int is16, u32 opaque, const char *phase) {
+    u32 screen_base = ((u32)cnt >> REG_G2_BG0CNT_SCREENBASE_SHIFT) & 0x1fu;
+    const u16 *samp;
+
+    samp = NULL;
+    if (is16) {
+        samp = (const u16 *)(void *)vram_ptr(bmp_addr);
+    }
     Log_Line("GX",
-             "mode5 bg%d cnt=0x%04x is16=%d addr=0x%08x bank_mask=0x%x samp=0x%04x,0x%04x,0x%04x,0x%04x "
-             "opaque=%u",
-             bg, (unsigned)cnt, is16, (unsigned)bmp_addr, (unsigned)main_bg_bank_mask(),
-             pix16 ? (unsigned)pix16[0] : 0u, pix16 ? (unsigned)pix16[1] : 0u, pix16 ? (unsigned)pix16[2] : 0u,
-             pix16 ? (unsigned)pix16[3] : 0u, (unsigned)opaque);
+             "mode5-%s bg%d cnt=0x%04x prio=%u is16=%d screen=%u addr=0x%08x vram=%u samp=0x%04x,0x%04x,0x%04x,"
+             "0x%04x opaque=%u",
+             phase, bg, (unsigned)cnt, (unsigned)(cnt & 3u), is16, (unsigned)screen_base, (unsigned)bmp_addr,
+             (unsigned)PbW2_VramLoadBytes(), samp ? (unsigned)samp[0] : 0u, samp ? (unsigned)samp[1] : 0u,
+             samp ? (unsigned)samp[2] : 0u, samp ? (unsigned)samp[3] : 0u, (unsigned)opaque);
+}
+
+static void maybe_log_mode5(const u8 *regs, u32 dc, u32 bgmode, int bg, u16 cnt, u32 bmp_addr, int is16, int bw,
+                            int bh) {
+    u32 opaque;
+    u16 cnt3;
+    u32 addr3;
+
+    if (bgmode != GX_BGMODE_5 || bg != 2) {
+        return;
+    }
+    opaque = is16 ? count_opaque16_at_base(cnt, bw, bh) : 0u;
+    cnt3 = reg_u16(regs, 0x0e);
+    addr3 = bg_screen_addr(dc, cnt3, 0, bgmode, 3);
+    if (!s_mode5_diag.logged_at_on) {
+        if (!s_mode5_diag.vram_on) {
+            log_vramcnt_banks("on");
+            s_mode5_diag.vram_on = 1;
+        }
+        s_mode5_diag.mode5_on_frame = s_mode5_diag.compose_frames;
+        s_mode5_diag.logged_at_on = 1;
+        log_mode5_bitmap(2, cnt, bmp_addr, is16, opaque, "on");
+        log_mode5_bitmap(3, cnt3, addr3, 1, count_opaque16_at_base(cnt3, 256, 256), "on");
+        return;
+    }
+    if (!s_mode5_diag.logged_delayed && s_mode5_diag.compose_frames >= s_mode5_diag.mode5_on_frame + 60u) {
+        if (!s_mode5_diag.vram_delay) {
+            log_vramcnt_banks("+60");
+            s_mode5_diag.vram_delay = 1;
+        }
+        s_mode5_diag.logged_delayed = 1;
+        log_mode5_bitmap(2, cnt, bmp_addr, is16, opaque, "+60");
+        log_mode5_bitmap(3, cnt3, addr3, 1, count_opaque16_at_base(cnt3, 256, 256), "+60");
+    }
+}
+
+static u16 sample_bitmap16(const u8 *regs, int bg, u16 cnt, int is_sub, int bw, int bh, int x, int y) {
+    s16 pa;
+    s16 pb;
+    s16 pc;
+    s16 pd;
+    s32 rx;
+    s32 ry;
+    s32 tx;
+    s32 ty;
+    u32 screen_base;
+    u32 byte_off;
+    u32 addr;
+    int wrap;
+    const u16 *p;
+    u16 c;
+
+    read_bg_affine(regs, bg, &pa, &pb, &pc, &pd, &rx, &ry);
+    tx = (s32)((((s64)rx + (s64)pa * x + (s64)pb * y) >> 8));
+    ty = (s32)((((s64)ry + (s64)pc * x + (s64)pd * y) >> 8));
+    wrap = (cnt & (1u << REG_G2_BG2CNT_AREAOVER_SHIFT)) == 0;
+    if (wrap) {
+        tx &= (s32)(bw - 1);
+        ty &= (s32)(bh - 1);
+    } else if (tx < 0 || ty < 0 || tx >= bw || ty >= bh) {
+        return 0;
+    }
+    screen_base = ((u32)cnt >> REG_G2_BG0CNT_SCREENBASE_SHIFT) & 0x1fu;
+    byte_off = screen_base * 0x4000u + ((u32)ty * (u32)bw + (u32)tx) * 2u;
+    addr = is_sub ? (engine_bg_vram_base(1) + byte_off) : main_bg_linear_addr(byte_off);
+    p = (const u16 *)(void *)vram_ptr(addr);
+    c = p[0];
+    if ((c & 0x8000u) == 0) {
+        return 0;
+    }
+    return rgb555_to_565(c & 0x7fffu);
+}
+
+static u16 sample_bitmap8(const u8 *regs, int bg, u16 cnt, int is_sub, int bw, int bh, int x, int y,
+                          const u16 *pltt) {
+    s16 pa;
+    s16 pb;
+    s16 pc;
+    s16 pd;
+    s32 rx;
+    s32 ry;
+    s32 tx;
+    s32 ty;
+    u32 screen_base;
+    u32 byte_off;
+    u32 addr;
+    int wrap;
+    const u8 *p;
+    u8 ci;
+
+    read_bg_affine(regs, bg, &pa, &pb, &pc, &pd, &rx, &ry);
+    tx = (s32)((((s64)rx + (s64)pa * x + (s64)pb * y) >> 8));
+    ty = (s32)((((s64)ry + (s64)pc * x + (s64)pd * y) >> 8));
+    wrap = (cnt & (1u << REG_G2_BG2CNT_AREAOVER_SHIFT)) == 0;
+    if (wrap) {
+        tx &= (s32)(bw - 1);
+        ty &= (s32)(bh - 1);
+    } else if (tx < 0 || ty < 0 || tx >= bw || ty >= bh) {
+        return 0;
+    }
+    screen_base = ((u32)cnt >> REG_G2_BG0CNT_SCREENBASE_SHIFT) & 0x1fu;
+    byte_off = screen_base * 0x4000u + (u32)ty * (u32)bw + (u32)tx;
+    addr = is_sub ? (engine_bg_vram_base(1) + byte_off) : main_bg_linear_addr(byte_off);
+    p = vram_ptr(addr);
+    ci = p[0];
+    if (ci == 0) {
+        return 0;
+    }
+    return rgb555_to_565(pltt[ci]);
 }
 
 static void compose_bitmap_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmode, u16 *out) {
     u16 cnt = reg_u16(regs, 8 + bg * 2);
-    const u8 *bmp;
     const u16 *pltt;
     u32 bmp_addr;
     int bw;
     int bh;
     int is16;
-    s32 scroll_x = 0;
-    s32 scroll_y = 0;
     int y;
     int x;
 
@@ -238,61 +427,29 @@ static void compose_bitmap_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bg
     /* bit7=1 bitmap; bit2=1 direct color 16bpp (ABGR1555, bit15 opaque). */
     is16 = (cnt & 0x0004u) != 0;
     bmp_addr = bg_screen_addr(dc, cnt, is_sub, bgmode, bg);
-    bmp = vram_ptr(bmp_addr);
     pltt = bg_layer_pltt(dc, cnt, is_sub, bg);
     bitmap_dims(cnt, &bw, &bh);
-    if (bg == 2) {
-        scroll_x = (s16)reg_u16(regs, 0x28);
-        scroll_y = (s16)reg_u16(regs, 0x2a);
-    } else if (bg == 3) {
-        scroll_x = (s16)reg_u16(regs, 0x2c);
-        scroll_y = (s16)reg_u16(regs, 0x2e);
-    }
+
+    maybe_log_mode5(regs, dc, bgmode, bg, cnt, bmp_addr, is16, bw, bh);
 
     if (is16) {
-        const u16 *pix16 = (const u16 *)(const void *)bmp;
-
-        if (bgmode == GX_BGMODE_5) {
-            log_mode5_bitmap_once(bg, cnt, bmp_addr, is16, pix16);
-        }
         for (y = 0; y < 192; y++) {
-            int sy = y + scroll_y;
             for (x = 0; x < 256; x++) {
-                int sx = x + scroll_x;
-                u32 src;
-                u16 c;
+                u16 pix = sample_bitmap16(regs, bg, cnt, is_sub, bw, bh, x, y);
 
-                if (sx < 0 || sy < 0 || sx >= bw || sy >= bh) {
-                    continue;
+                if (pix != 0) {
+                    out[y * 256 + x] = pix;
                 }
-                src = (u32)sy * (u32)bw + (u32)sx;
-                c = pix16[src];
-                if ((c & 0x8000u) == 0) {
-                    continue;
-                }
-                out[y * 256 + x] = rgb555_to_565(c & 0x7fffu);
             }
         }
     } else {
-        if (bgmode == GX_BGMODE_5) {
-            log_mode5_bitmap_once(bg, cnt, bmp_addr, is16, NULL);
-        }
         for (y = 0; y < 192; y++) {
-            int sy = y + scroll_y;
             for (x = 0; x < 256; x++) {
-                int sx = x + scroll_x;
-                u32 src;
-                u8 ci;
+                u16 pix = sample_bitmap8(regs, bg, cnt, is_sub, bw, bh, x, y, pltt);
 
-                if (sx < 0 || sy < 0 || sx >= bw || sy >= bh) {
-                    continue;
+                if (pix != 0) {
+                    out[y * 256 + x] = pix;
                 }
-                src = (u32)sy * (u32)bw + (u32)sx;
-                ci = bmp[src];
-                if (ci == 0) {
-                    continue;
-                }
-                out[y * 256 + x] = rgb555_to_565(pltt[ci]);
             }
         }
     }
@@ -472,6 +629,7 @@ int PbW2_ComposeScreens(u16 *top_rgb565, u16 *bottom_rgb565) {
     u16 *main_fb;
     u16 *sub_fb;
 
+    s_mode5_diag.compose_frames++;
     if (main_upper) {
         main_fb = top_rgb565;
         sub_fb = bottom_rgb565;
