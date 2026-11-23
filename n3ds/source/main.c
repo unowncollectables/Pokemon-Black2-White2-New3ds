@@ -194,7 +194,7 @@ int main(int argc, char **argv) {
         uint32_t flags = Present_Flags();
         if (PbW2_ShellShouldDrawTitle() && TitlePic_Ready()) {
             Present_DrawTitle(flags, TitlePic_Top(), TitlePic_Bottom());
-        } else {
+        } else if (!PbW2_GameHasPresented()) {
             if (flags & PBW2_SCREEN_TOP) {
                 Draw_Top(new3ds);
             }

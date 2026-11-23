@@ -24,44 +24,66 @@ static u16 rgb555_to_565(u16 c) {
     return (u16)((r << 11) | (g << 6) | b);
 }
 
-static const u16 *bg_palette(void) {
-    return (const u16 *)(void *)PbW2_VramMap((void *)HW_BG_PLTT);
+static u16 reg_u16(const u8 *regs, u32 off) {
+    return *(const u16 *)(regs + off);
 }
 
-static const u16 *obj_palette(void) {
-    return (const u16 *)(void *)PbW2_VramMap((void *)HW_OBJ_PLTT);
+static u32 reg_u32(const u8 *regs, u32 off) {
+    return *(const u32 *)(regs + off);
 }
 
 static const u8 *vram_ptr(u32 addr) {
     return (const u8 *)(void *)PbW2_VramMap((void *)(uintptr_t)addr);
 }
 
-static u32 bg_char_base(const u8 *regs) {
-    u32 dc = *(const u32 *)(regs + 0);
-    return 0x06000000u + ((dc >> 24) & 7u) * 0x10000u;
+static const u16 *engine_bg_pltt(int is_sub) {
+    if (is_sub) {
+        return (const u16 *)(void *)PbW2_VramMap((void *)HW_DB_BG_PLTT);
+    }
+    return (const u16 *)(void *)PbW2_VramMap((void *)HW_BG_PLTT);
 }
 
-static u32 bg_screen_base(u32 cnt) {
-    return 0x06000000u + ((cnt >> 8) & 0x1fu) * 0x800u;
+static const u16 *engine_obj_pltt(int is_sub) {
+    if (is_sub) {
+        return (const u16 *)(void *)PbW2_VramMap((void *)HW_DB_OBJ_PLTT);
+    }
+    return (const u16 *)(void *)PbW2_VramMap((void *)HW_OBJ_PLTT);
 }
 
-static u32 obj_vram_base(void) {
-    return 0x06400000u;
+static u32 engine_bg_vram_base(int is_sub) {
+    return is_sub ? HW_DB_BG_VRAM : HW_BG_VRAM;
 }
 
-static u16 reg_u16(const u8 *regs, u32 off) {
-    return *(const u16 *)(regs + off);
+static u32 engine_obj_vram_base(int is_sub) {
+    return is_sub ? HW_DB_OBJ_VRAM : HW_OBJ_VRAM;
 }
 
-static void compose_text_bg(const u8 *regs, int bg, u16 *out) {
-    u32 dc = *(const u32 *)(regs + 0);
-    u16 cnt = *(const u16 *)(regs + 8 + bg * 2);
+static u32 bg_screen_addr(u32 dc, u16 cnt, int is_sub) {
+    u32 base = engine_bg_vram_base(is_sub);
+    u32 screen = ((u32)cnt & 0x1f00u) << 3;
+    if (!is_sub) {
+        screen += ((dc >> REG_GX_DISPCNT_BGSCREENOFFSET_SHIFT) & 7u) * 0x10000u;
+    }
+    return base + screen;
+}
+
+static u32 bg_char_addr(u32 dc, u16 cnt, int is_sub) {
+    u32 base = engine_bg_vram_base(is_sub);
+    u32 off = ((u32)(cnt >> 2) & 0xfu) * 0x4000u;
+    if (!is_sub) {
+        off += ((dc >> REG_GX_DISPCNT_BGCHAROFFSET_SHIFT) & 7u) * 0x10000u;
+    }
+    return base + off;
+}
+
+static void compose_text_bg(const u8 *regs, u32 dc, int is_sub, int bg, u16 *out) {
+    u16 cnt = reg_u16(regs, 8 + bg * 2);
     int pw = ((cnt >> 14) & 1) ? 64 : 32;
     int ph = ((cnt >> 14) & 2) ? 64 : 32;
     u32 mapw = (u32)pw * 8;
-    const u16 *map = (const u16 *)(void *)vram_ptr(bg_screen_base(cnt));
-    const u8 *chars = vram_ptr(bg_char_base(regs) + ((cnt >> 2) & 0xf) * 0x4000u);
-    const u16 *pltt = bg_palette();
+    const u16 *map = (const u16 *)(void *)vram_ptr(bg_screen_addr(dc, cnt, is_sub));
+    const u8 *chars = vram_ptr(bg_char_addr(dc, cnt, is_sub));
+    const u16 *pltt = engine_bg_pltt(is_sub);
     u32 hofs_base = reg_u16(regs, 0x10u + (u32)bg * 4u) & 0x1ffu;
     u32 vofs_base = reg_u16(regs, 0x12u + (u32)bg * 4u) & 0x1ffu;
     int y;
@@ -88,6 +110,7 @@ static void compose_text_bg(const u8 *regs, int bg, u16 *out) {
             u32 flip_h = sc & 0x0400u;
             u32 flip_v = sc & 0x0800u;
             u32 px;
+            u8 nib;
             u8 pix;
 
             if (flip_h) {
@@ -100,7 +123,8 @@ static void compose_text_bg(const u8 *regs, int bg, u16 *out) {
                 pix = chars[tile * 64u + ty * 8u + tx];
             } else {
                 px = tx >> 1;
-                pix = (chars[tile * 32u + ty * 4u + px] >> ((tx & 1) ? 0 : 4)) & 0x0f;
+                nib = chars[tile * 32u + ty * 4u + px];
+                pix = (tx & 1) ? (nib >> 4) : (nib & 0x0f);
             }
             if (pix == 0) {
                 continue;
@@ -114,13 +138,112 @@ static void compose_text_bg(const u8 *regs, int bg, u16 *out) {
     }
 }
 
-static void draw_obj_layer(const u8 *regs, u16 *out) {
+static void bitmap_dims(u16 cnt, int *bw, int *bh) {
+    u32 sz = (cnt >> 14) & 3u;
+    switch (sz) {
+    default:
+    case 0:
+        *bw = 128;
+        *bh = 128;
+        break;
+    case 1:
+        *bw = 256;
+        *bh = 256;
+        break;
+    case 2:
+        *bw = 512;
+        *bh = 256;
+        break;
+    case 3:
+        *bw = 512;
+        *bh = 512;
+        break;
+    }
+}
+
+static void compose_bitmap_bg(const u8 *regs, u32 dc, int is_sub, int bg, u16 *out) {
+    u16 cnt = reg_u16(regs, 8 + bg * 2);
+    const u8 *bmp;
+    const u16 *pltt = engine_bg_pltt(is_sub);
+    int bw;
+    int bh;
+    s32 scroll_x = 0;
+    s32 scroll_y = 0;
+    int y;
+    int x;
+
+    if ((dc & (0x100u << bg)) == 0) {
+        return;
+    }
+    bmp = vram_ptr(bg_screen_addr(dc, cnt, is_sub));
+    bitmap_dims(cnt, &bw, &bh);
+    if (bg == 2) {
+        scroll_x = (s16)reg_u16(regs, 0x28);
+        scroll_y = (s16)reg_u16(regs, 0x2a);
+    } else if (bg == 3) {
+        scroll_x = (s16)reg_u16(regs, 0x2c);
+        scroll_y = (s16)reg_u16(regs, 0x2e);
+    }
+
+    if (cnt & 0x80u) {
+        for (y = 0; y < 192; y++) {
+            int sy = y + scroll_y;
+            for (x = 0; x < 256; x++) {
+                int sx = x + scroll_x;
+                u32 src;
+                u8 ci;
+
+                if (sx < 0 || sy < 0 || sx >= bw || sy >= bh) {
+                    continue;
+                }
+                src = (u32)sy * (u32)bw + (u32)sx;
+                ci = bmp[src];
+                if (ci == 0) {
+                    continue;
+                }
+                out[y * 256 + x] = rgb555_to_565(pltt[ci]);
+            }
+        }
+    } else {
+        const u16 *pix16 = (const u16 *)(const void *)bmp;
+        for (y = 0; y < 192; y++) {
+            int sy = y + scroll_y;
+            for (x = 0; x < 256; x++) {
+                int sx = x + scroll_x;
+                u32 src;
+                u16 c;
+
+                if (sx < 0 || sy < 0 || sx >= bw || sy >= bh) {
+                    continue;
+                }
+                src = (u32)sy * (u32)bw + (u32)sx;
+                c = pix16[src];
+                if (c == 0) {
+                    continue;
+                }
+                out[y * 256 + x] = rgb555_to_565(c);
+            }
+        }
+    }
+}
+
+static void draw_bg_layer(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmode, u16 *out) {
+    if (bg >= 2 && bgmode >= 3) {
+        compose_bitmap_bg(regs, dc, is_sub, bg, out);
+    } else {
+        compose_text_bg(regs, dc, is_sub, bg, out);
+    }
+}
+
+static void draw_obj_layer(const u8 *regs, u32 dc, int is_sub, u16 *out) {
     static const u8 spw[3][4] = {{8, 16, 32, 64}, {16, 32, 32, 64}, {8, 8, 16, 32}};
     static const u8 sph[3][4] = {{8, 16, 32, 64}, {8, 8, 16, 32}, {16, 32, 32, 64}};
-    u32 dc = *(const u32 *)(regs + 0);
-    const u16 *oam = (const u16 *)(void *)PbW2_VramMap((void *)HW_OAM);
-    const u8 *ovram = vram_ptr(obj_vram_base());
-    const u16 *pltt = obj_palette();
+    u32 oam_base = is_sub ? HW_DB_OAM : HW_OAM;
+    const u16 *oam = (const u16 *)(void *)PbW2_VramMap((void *)(uintptr_t)oam_base);
+    const u8 *ovram = vram_ptr(engine_obj_vram_base(is_sub));
+    const u16 *pltt = engine_obj_pltt(is_sub);
+    u32 obj1d = dc & 0x10u;
+    u32 obj1d_shift = (dc >> 20) & 3u;
     int pri;
     int i;
 
@@ -178,8 +301,8 @@ static void draw_obj_layer(const u8 *regs, u16 *out) {
                     }
                     px = (a[1] & 0x1000) ? (width - 1 - xo) : xo;
                     py = (a[1] & 0x2000) ? (height - 1 - yo) : yo;
-                    if (dc & 0x10u) {
-                        tile <<= (dc >> 20) & 3u;
+                    if (obj1d) {
+                        tile <<= obj1d_shift;
                         addr = tile + (((u32)py >> 3) * (width >> 3) << (bpp8 ? 1 : 0));
                     } else {
                         addr = tile + ((py >> 3) * 0x20);
@@ -234,8 +357,9 @@ static void apply_master_bright(u16 *fb, u16 reg) {
     }
 }
 
-static void compose_engine(const u8 *regs, u16 *out) {
-    u32 dc = *(const u32 *)(regs + 0);
+static void compose_engine(const u8 *regs, int is_sub, u16 *out) {
+    u32 dc = reg_u32(regs, 0);
+    u32 bgmode = dc & REG_GX_DISPCNT_BGMODE_MASK;
     u16 backdrop;
     int pri;
     int bg;
@@ -249,40 +373,43 @@ static void compose_engine(const u8 *regs, u16 *out) {
         memset(out, 0, 256u * 192u * 2u);
         return;
     }
-    backdrop = rgb555_to_565(bg_palette()[0]);
+    backdrop = rgb555_to_565(engine_bg_pltt(is_sub)[0]);
     for (i = 0; i < 256u * 192u; i++) {
         out[i] = backdrop;
     }
     for (pri = 3; pri >= 0; pri--) {
         for (bg = 0; bg < 4; bg++) {
-            u16 cnt = *(const u16 *)(regs + 8 + bg * 2);
+            u16 cnt = reg_u16(regs, 8 + bg * 2);
             if ((dc & (0x100u << bg)) == 0) {
                 continue;
             }
             if ((cnt & 3u) != (u32)pri) {
                 continue;
             }
-            compose_text_bg(regs, bg, out);
+            draw_bg_layer(regs, dc, is_sub, bg, bgmode, out);
         }
     }
-    draw_obj_layer(regs, out);
+    draw_obj_layer(regs, dc, is_sub, out);
     apply_master_bright(out, reg_u16(regs, 0x6cu));
 }
 
 int PbW2_ComposeScreens(u16 *top_rgb565, u16 *bottom_rgb565) {
     int swap = (*(const u16 *)(pbw2_io + 0x304) & 0x8000u) != 0;
+    u16 *phys_top;
+    u16 *phys_bottom;
 
-    if (top_rgb565) {
-        compose_engine(pbw2_io + 0, top_rgb565);
+    if (swap) {
+        phys_top = bottom_rgb565;
+        phys_bottom = top_rgb565;
+    } else {
+        phys_top = top_rgb565;
+        phys_bottom = bottom_rgb565;
     }
-    if (bottom_rgb565) {
-        compose_engine(pbw2_io + 0x1000, bottom_rgb565);
+    if (phys_top) {
+        compose_engine(pbw2_io + 0, 0, phys_top);
     }
-    if (swap && top_rgb565 && bottom_rgb565) {
-        u32 fb_bytes = PBW2_SCR_W * PBW2_SCR_H * (u32)sizeof(u16);
-        memcpy(s_powcnt_swap_buf, top_rgb565, fb_bytes);
-        memcpy(top_rgb565, bottom_rgb565, fb_bytes);
-        memcpy(bottom_rgb565, s_powcnt_swap_buf, fb_bytes);
+    if (phys_bottom) {
+        compose_engine(pbw2_io + 0x1000, 1, phys_bottom);
     }
     return (top_rgb565 != NULL || bottom_rgb565 != NULL);
 }

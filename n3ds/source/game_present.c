@@ -5,6 +5,10 @@
 
 static volatile int s_game_has_presented;
 
+int PbW2_GameHasPresented(void) {
+    return s_game_has_presented != 0;
+}
+
 void pbw2_game_system_init_done(void) {
     /* Legacy hook; shell title is gated on first present instead. */
 }

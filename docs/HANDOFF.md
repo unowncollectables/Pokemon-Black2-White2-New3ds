@@ -218,6 +218,13 @@ python3 configure.py && ninja
 That is the step that reads the ROM. Header generation and the 3DS shell do
 not.
 
+## N3DS 2D compositor (r18+)
+
+Software compositor in `n3ds/nitro/ds2d_compose.c`: mode-0 text (4/8 bpp), modes **3–5**
+bitmap BG2/BG3 (8/16 bpp with BG scroll), main vs sub engines (`HW_DB_*` VRAM/pltt/OAM),
+POWCNT LCD swap (engine routing, not buffer swap). After `first game present`, the shell
+console is not drawn over the 256×192 game area (`PbW2_GameHasPresented`).
+
 ## N3DS 3D path (planned; not implemented)
 
 Title and CDEMO opening use **NNS_G3d** (`NNS_G3dInit`, tex/palette VRAM via GFD,

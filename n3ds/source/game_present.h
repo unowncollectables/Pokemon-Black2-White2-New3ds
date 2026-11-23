@@ -4,3 +4,4 @@
 void pbw2_game_system_init_done(void);
 void pbw2_game_notify_present(void);
 int PbW2_ShellShouldDrawTitle(void);
+int PbW2_GameHasPresented(void);

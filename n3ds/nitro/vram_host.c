@@ -13,7 +13,7 @@
 #define PBW2_LCDC_BASE 0x06800000u
 #define PBW2_LCDC_SIZE 0x000a4000u
 #define PBW2_OAM_BASE 0x07000000u
-#define PBW2_OAM_SIZE 0x00000400u
+#define PBW2_OAM_SIZE 0x00000800u
 
 static u8 s_pltt[PBW2_PLTT_SIZE];
 static u8 s_bg[PBW2_BG_SIZE];
