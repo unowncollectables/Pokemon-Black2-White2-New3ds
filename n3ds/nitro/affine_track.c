@@ -6,6 +6,7 @@
 #include "types.h"
 
 #include <stdint.h>
+#include <string.h>
 
 extern u8 pbw2_io[];
 

@@ -12,7 +12,7 @@
 
 #include <string.h>
 
-#define G3_RING_WORDS 4096u
+#define G3_RING_WORDS 16384u
 
 static u32 s_fifo[G3_RING_WORDS];
 static u32 s_fifo_head;
@@ -48,7 +48,6 @@ unsigned PbW2_G3FifoWords(void) {
 
 void PbW2_G3Compose(int is_main, u16 *fb_rgb565) {
     u32 dc;
-    u32 disp3d;
 
     (void)fb_rgb565;
     if (!is_main || fb_rgb565 == NULL) {
@@ -58,11 +57,12 @@ void PbW2_G3Compose(int is_main, u16 *fb_rgb565) {
     if ((dc & REG_GX_DISPCNT_BG02D3D_MASK) == 0) {
         return;
     }
-    disp3d = PBW2_VU16(0x04000060);
-  (void)disp3d;
-    if (!s_logged && s_fifo_count != 0) {
+    if (s_fifo_count == 0) {
+        return;
+    }
+    if (!s_logged) {
         s_logged = 1;
-        Log_Line("G3", "fifo words=%u (Citro3D replay not wired yet)", (unsigned)s_fifo_count);
+        Log_Line("G3", "fifo words=%u (Citro3D replay next)", (unsigned)s_fifo_count);
     }
 }
 

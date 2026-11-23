@@ -26,6 +26,7 @@ void GX_Init(void) {
 #if defined(PBW2_LINK_GAME)
     PbW2_VramHostInit();
     PbW2_G3InterceptInit();
+    PbW2_G3GeProvideDefaultBuffer();
     PbW2_PadHostInit();
     /* Hardware reset: identity 8.8 affine for BG2/BG3 on both engines until the game writes. */
     PBW2_VU16(0x04000020) = (u16)0x0100;

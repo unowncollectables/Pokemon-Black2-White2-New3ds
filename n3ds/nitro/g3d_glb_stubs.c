@@ -1,5 +1,30 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "nnsys/g3d.h"
+
+#if defined(PBW2_LINK_GAME)
+
+#include "nitro/gx.h"
+#include "stub_log.h"
+
+void NNS_G3dGlbInit(void) {
+}
+
+void NNS_G3dGlbFlushP(void) {
+    u32 mode = GX_MTXMODE_PROJECTION;
+    NNS_G3dGeBufferOP_N(G3OP_MTX_MODE, &mode, 1);
+}
+
+void NNS_G3dGlbFlushVP(void) {
+    u32 mode = GX_MTXMODE_POSITION;
+    NNS_G3dGeBufferOP_N(G3OP_MTX_MODE, &mode, 1);
+}
+
+void NNS_G3dGlbFlushWVP(void) {
+    NNS_G3dGlbFlushVP();
+}
+
+#else
+
 #include "stub_log.h"
 
 void NNS_G3dGlbInit(void) {
@@ -14,6 +39,8 @@ void NNS_G3dGlbFlushVP(void) {
 
 void NNS_G3dGlbFlushWVP(void) {
 }
+
+#endif
 
 void NNS_G3dGlbLightColor(GXLightId lightID, GXRgb rgb) {
     (void)lightID;

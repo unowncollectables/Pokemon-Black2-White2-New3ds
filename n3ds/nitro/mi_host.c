@@ -5,6 +5,8 @@
 #include <string.h>
 
 #if defined(PBW2_LINK_GAME)
+#include "g3_intercept.h"
+#include "nitro/mi.h"
 #include "vram_host.h"
 
 static void *pbw2_map_ptr(const void *p) {
@@ -156,10 +158,16 @@ void MIi_CpuCopyFast(const void *src, void *dest, u32 size) {
 
 void MIi_CpuSend32(const void *src, volatile void *dest, u32 size) {
 #if defined(PBW2_LINK_GAME)
-    void *d = pbw2_map_ptr((void *)dest);
-    const void *s = pbw2_map_ptr(src);
-    pbw2_note_copy((void *)dest, size);
-    memcpy(d, s, size);
+    if ((uintptr_t)dest == (uintptr_t)REG_GXFIFO_ADDR) {
+        PbW2_G3RecordFifo(src, size / sizeof(u32));
+        return;
+    }
+    {
+        void *d = pbw2_map_ptr((void *)dest);
+        const void *s = pbw2_map_ptr(src);
+        pbw2_note_copy((void *)dest, size);
+        memcpy(d, s, size);
+    }
 #else
     memcpy((void *)dest, src, size);
 #endif

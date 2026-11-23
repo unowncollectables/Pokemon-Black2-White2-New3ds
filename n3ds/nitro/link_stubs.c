@@ -99,15 +99,9 @@ void NNS_G3dBindMdlTex(void) { PBW2_STUB_LOG("link", "NNS_G3dBindMdlTex"); }
 void NNS_G3dDraw(void) { PBW2_STUB_LOG("link", "NNS_G3dDraw"); }
 void NNS_G3dFreeAnmObj(void) { PBW2_STUB_LOG("link", "NNS_G3dFreeAnmObj"); }
 void NNS_G3dFreeRenderObj(void) { PBW2_STUB_LOG("link", "NNS_G3dFreeRenderObj"); }
-void NNS_G3dGeBufferOP_N(void) { PBW2_STUB_LOG("link", "NNS_G3dGeBufferOP_N"); }
-void NNS_G3dGeFlushBuffer(void) { PBW2_STUB_LOG("link", "NNS_G3dGeFlushBuffer"); }
-void NNS_G3dGeIsBufferExist(void) { PBW2_STUB_LOG("link", "NNS_G3dGeIsBufferExist"); }
-void NNS_G3dGeReleaseBuffer(void) { PBW2_STUB_LOG("link", "NNS_G3dGeReleaseBuffer"); }
-void NNS_G3dGeSetBuffer(void) { PBW2_STUB_LOG("link", "NNS_G3dGeSetBuffer"); }
 void NNS_G3dGetAnmByIdx(void) { PBW2_STUB_LOG("link", "NNS_G3dGetAnmByIdx"); }
 void NNS_G3dGetMdlSet(void) { PBW2_STUB_LOG("link", "NNS_G3dGetMdlSet"); }
 void NNS_G3dGetTex(void) { PBW2_STUB_LOG("link", "NNS_G3dGetTex"); }
-void NNS_G3dInit(void) { PBW2_STUB_LOG("link", "NNS_G3dInit"); }
 void NNS_G3dPlttGetRequiredSize(void) { PBW2_STUB_LOG("link", "NNS_G3dPlttGetRequiredSize"); }
 void NNS_G3dPlttLoad(void) { PBW2_STUB_LOG("link", "NNS_G3dPlttLoad"); }
 void NNS_G3dPlttReleasePlttKey(void) { PBW2_STUB_LOG("link", "NNS_G3dPlttReleasePlttKey"); }
