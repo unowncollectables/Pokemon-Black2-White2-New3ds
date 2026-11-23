@@ -79,6 +79,11 @@ void SystemInit(void) {
     if (amp == PM_AMP_ON) {
         PM_SetAmp(PM_AMP_OFF);
     }
+
+#ifdef PBW2_N3DS
+    void pbw2_game_system_init_done(void);
+    pbw2_game_system_init_done();
+#endif
 }
 
 void Machine_ProcessExitRequest(void) {

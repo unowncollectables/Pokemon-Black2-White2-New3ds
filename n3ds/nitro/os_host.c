@@ -231,10 +231,17 @@ void OS_Sleep(u32 msec) {
 void OS_InitAlarm(void) {
 }
 
+#if defined(PBW2_LINK_GAME)
+void PbW2_DtcmHostInit(void);
+#endif
+
 void OS_Init(void) {
     memset(&s_work, 0, sizeof s_work);
     memset(s_irq, 0, sizeof s_irq);
     OS_InitArena();
+#if defined(PBW2_LINK_GAME)
+    PbW2_DtcmHostInit();
+#endif
     s_irq_on = 1;
 }
 

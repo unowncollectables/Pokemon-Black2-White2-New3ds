@@ -107,7 +107,7 @@ void OS_SpinWaitSysCycles(u32 cycles) {
 }
 
 u32 OS_GetDTCMAddress(void) {
-    return 0x27e0000u;
+    return HW_DTCM;
 }
 
 OSProcMode OS_GetProcMode(void) {

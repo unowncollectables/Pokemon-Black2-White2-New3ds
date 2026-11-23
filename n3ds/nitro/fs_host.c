@@ -52,11 +52,18 @@ static FsSlot *slot_of(FSFile *file) {
     return file->argument;
 }
 
+#if defined(PBW2_LINK_GAME)
+void FSi_InitOverlay(void);
+#endif
+
 void FS_Init(u32 dma) {
     (void)dma;
     root_path();
     memset(s_slots, 0, sizeof s_slots);
     s_ready = 1;
+#if defined(PBW2_LINK_GAME)
+    FSi_InitOverlay();
+#endif
 }
 
 u32 FS_TryLoadTable(void *memory, u32 size) {

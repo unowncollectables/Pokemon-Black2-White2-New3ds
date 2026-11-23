@@ -50,12 +50,14 @@ EXCLUDE_LIB_NITRO_FILES = {
     "lib/nitro/src/gx/gx_load2d.c",
     "lib/nitro/src/fx/fx_atanidx.c",
     "lib/nitro/src/fx/fx_cp.c",
+    "lib/nitro/src/spi/pm.c",
 }
 
 EXCLUDE_LIB_NITRO_PREFIXES = (
     "lib/nitro/src/wm/",
     "lib/nitro/src/mb/",
     "lib/nitro/src/ctrdg/",
+    "lib/nitro/src/pxi/",
 )
 
 

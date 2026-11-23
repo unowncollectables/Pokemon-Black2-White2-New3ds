@@ -10,6 +10,7 @@
 #include "settings.h"
 #include "title_pic.h"
 #include "workers.h"
+#include "game_present.h"
 #if defined(PBW2_LINK_GAME)
 #include "game_thread.h"
 #endif
@@ -191,7 +192,7 @@ int main(int argc, char **argv) {
         /* Both screens, one commit. The title pictures use that same pair. */
         Present_Commit(true, true);
         uint32_t flags = Present_Flags();
-        if (TitlePic_Ready()) {
+        if (PbW2_ShellShouldDrawTitle() && TitlePic_Ready()) {
             Present_DrawTitle(flags, TitlePic_Top(), TitlePic_Bottom());
         } else {
             if (flags & PBW2_SCREEN_TOP) {

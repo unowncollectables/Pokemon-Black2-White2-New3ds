@@ -153,14 +153,16 @@ from game C land in `pbw2_io`. DSi/TWL stays stubbed. Sound stays silent.
    staged and confirm the logo over the title background, the lower screen,
    no crash, and no `.sav`. Then White 2, in its own directory.
 2. Experimental title link: after `game-objects`, `python3
-   scripts/n3ds_link_closure.py` builds a boot/title `game_objects.rsp` (~256
-   objects; no wifi/field/app/tournament trees; host-colliding Nitro FS/GX/OS
-   objects excluded). `PBW2_LINK_GAME=1 make -C n3ds b2` links
-   `Pbw2_GameMain` on a 3DS thread. Stage overlays on SD only:
+   scripts/n3ds_link_closure.py` builds a boot/title `game_objects.rsp` (~253
+   objects; wifi/field/app trees excluded; `lib/nitro/src/spi/pm.c` and
+   `lib/nitro/src/pxi/*` excluded — host `pm_host.c` / `pxi_host.c` instead).
+   `PBW2_LINK_GAME=1 make -C n3ds b2 w2` links `Pbw2_GameMain` on a worker
+   thread. Stage overlays on SD only:
    `sdmc:/3ds/<game>_3ds/overlays/arm9_ovt.bin`, `ov012.bin`, `ov027.bin`.
-   Expect `[game] Pbw2_GameMain enter` in the log when stubs are hit before
-   hardware paths; refine `n3ds/nitro/link_stubs.c` when the closure changes.
-   Default `n3ds_build.sh` does not set `PBW2_LINK_GAME`.
+   After `SystemInit` the game should pass `PM_GetAmp` (no PXI wait); the
+   shell stops drawing `TitlePic` once `pbw2_game_system_init_done` runs.
+   Stub hits go to `log.txt` via `Log_Line` (`PBW2_STUB_LOG`). Default
+   `n3ds_build.sh` does not set `PBW2_LINK_GAME`.
 3. Do not write the save from the platform when the game starts calling
    `Save_GameWrite`. Remove the refusal in that function at the same time the
    game becomes the caller, and keep the bytes the cartridge format.
