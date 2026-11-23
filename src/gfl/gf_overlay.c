@@ -7,6 +7,7 @@
 
 #ifdef PBW2_N3DS
 #include "log.h"
+u32 PbW2_NormalizeOverlayId(u32 overlayId);
 #endif
 
 // The memory an overlay is loaded to
@@ -71,6 +72,9 @@ void GFL_OvlUnload(u32 overlayId) {
     if (overlayId == OVERLAY_NONE) {
         return;
     }
+#ifdef PBW2_N3DS
+    overlayId = PbW2_NormalizeOverlayId(overlayId);
+#endif
     region = GFL_OvlGetMemoryRegion(overlayId);
     list = GFL_OvlGetList(region);
     count = GFL_OvlGetListCount(region);
@@ -94,6 +98,9 @@ BOOL GFL_OvlLoad(u32 overlayId) {
     if (overlayId == OVERLAY_NONE) {
         return TRUE;
     }
+#ifdef PBW2_N3DS
+    overlayId = PbW2_NormalizeOverlayId(overlayId);
+#endif
     if (!GFL_OvlCheckMemoryCollision(overlayId)) {
 #ifdef PBW2_N3DS
         Log_Line("overlay", "GFL_OvlLoad id=%u collision", (unsigned)overlayId);

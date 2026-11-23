@@ -132,11 +132,16 @@ void MIi_DmaCopy32Async(u32 dmaNo, const void *src, void *dest, u32 size, MIDmaC
 
 void MI_WaitDma(u32 dmaNo) {
     OSIntrMode enabled = OS_DisableInterrupts();
+#ifdef PBW2_N3DS
+    MIDmaRegs *dmaRegs = (MIDmaRegs *)(void *)PBW2_IO(0x040000b0);
+#else
+    MIDmaRegs *dmaRegs = MI_DMA_REGS;
+#endif
 
-    while (MI_DMA_REGS[dmaNo].cnt & MI_DMA_ENABLE) {
+    while (dmaRegs[dmaNo].cnt & MI_DMA_ENABLE) {
     }
     if (dmaNo == 0) {
-        MIDmaRegs *regs = &MI_DMA_REGS[dmaNo];
+        MIDmaRegs *regs = &dmaRegs[dmaNo];
         regs->src = 0;
         regs->dest = 0;
         regs->cnt = MIi_DUMMY_CNT;

@@ -13,26 +13,30 @@ typedef struct {
 } CPContext;
 
 // The divider and square root unit's registers
-#define reg_CP_DIVCNT PBW2_VU16(0x04000280)
 #ifdef PBW2_N3DS
+#define reg_CP_DIVCNT PBW2_VU16(0x04000280)
 #define reg_CP_DIV_NUMER (*(volatile u64 *)(void *)PBW2_IO(0x04000290))
 #define reg_CP_DIV_NUMER_L PBW2_VU32(0x04000290)
 #define reg_CP_DIV_DENOM (*(volatile u64 *)(void *)PBW2_IO(0x04000298))
 #define reg_CP_DIV_RESULT (*(volatile u64 *)(void *)PBW2_IO(0x040002a0))
 #define reg_CP_DIV_RESULT_L PBW2_VU32(0x040002a0)
 #define reg_CP_DIVREM_RESULT PBW2_VU32(0x040002a8)
+#define reg_CP_SQRTCNT PBW2_VU16(0x040002b0)
+#define reg_CP_SQRT_RESULT PBW2_VU32(0x040002b4)
+#define reg_CP_SQRT_PARAM (*(volatile u64 *)(void *)PBW2_IO(0x040002b8))
 #else
+#define reg_CP_DIVCNT (*(vu16 *)0x04000280)
 #define reg_CP_DIV_NUMER (*(volatile u64 *)0x04000290)
-#define reg_CP_DIV_NUMER_L PBW2_VU32(0x04000290)
+#define reg_CP_DIV_NUMER_L (*(vu32 *)0x04000290)
 #define reg_CP_DIV_DENOM (*(volatile u64 *)0x04000298)
 // Not volatile: FX_InvFx64c and FX_GetDivResultFx64c read the 64-bit result as plain memory, after the busy wait
 #define reg_CP_DIV_RESULT (*(u64 *)0x040002a0)
-#define reg_CP_DIV_RESULT_L PBW2_VU32(0x040002a0)
-#define reg_CP_DIVREM_RESULT PBW2_VU32(0x040002a8)
-#endif
-#define reg_CP_SQRTCNT PBW2_VU16(0x040002b0)
-#define reg_CP_SQRT_RESULT PBW2_VU32(0x040002b4)
+#define reg_CP_DIV_RESULT_L (*(vu32 *)0x040002a0)
+#define reg_CP_DIVREM_RESULT (*(vu32 *)0x040002a8)
+#define reg_CP_SQRTCNT (*(vu16 *)0x040002b0)
+#define reg_CP_SQRT_RESULT (*(vu32 *)0x040002b4)
 #define reg_CP_SQRT_PARAM (*(volatile u64 *)0x040002b8)
+#endif
 #define REG_CP_BUSY_MASK 0x8000
 
 // The divider's registers by address, which NitroSDK's divider inlines write and read through plain pointers
