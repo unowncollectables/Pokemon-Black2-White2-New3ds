@@ -1,0 +1,1561 @@
+// TwlSDK's camera library (libcamera), the PXI and I2C API in the DSi's LTD autoload: the commands that the ARM9 sends
+// to the ARM7, which drives the cameras' I2C bus, and the interrupt, thread and PM callbacks that keep the cameras
+// running. ARM code. The ROM names none of it; the file's name is a guess, after the SDK's camera_api.h. The public
+// functions, the PXI commands and results have the names of libntr's reconstruction of TwlSDK's headers (camera_api.h,
+// fifo.h), by the command each function sends; the others have those of the TwlSDK symbols that Black 1's
+// decompilation (aletheia) recovered from camera_api.o at the same addresses.
+//
+// Each command is a word of the camera's PXI tag, with a payload of three bytes per further word, and the ARM7
+// answers it in the same form. camera_api.c caches what the settings were set to (CAMERASettings) so that, when the
+// camera stops answering, the thread starts the camera again and sends them all anew (CAMERA_Reboot).
+//
+// The file is built with -ipa function (file_flags in lib/twl/library.toml): every static has a literal of its own, and
+// sUnused, which nothing reads, stays in .bss. The work is one object: its fields beyond 0xfff are reached through a
+// second literal, the work's address + 0x1000.
+
+#include "types.h"
+#include "nitro/hw.h"
+#include "nitro/os.h"
+#include "nitro/pxi.h"
+#include "twl/camera.h"
+#include "twl/scfg.h"
+
+#define CAMERA_THREAD_PRIORITY 4
+#define CAMERA_STACK_SIZE 0x1000
+#define CAMERA_PM_CALLBACK_PRIORITY 0x3fc
+
+// The camera's clock in SCFG_CLK (twl/scfg.h) is on while a command is on its way and, for an active camera, after it.
+// It is cleared with `reg = reg & ~mask`: the compound assignment narrows the mask to 0xfeff, an AND with a literal
+// where the ROM has a BIC
+
+// The commands, in bits 8 to 14 of the word that the ARM9 sends, and the answer, whose command is the same
+#define CAMERA_PXI_COMMAND_INIT 0x00
+#define CAMERA_PXI_COMMAND_ACTIVATE 0x10
+#define CAMERA_PXI_COMMAND_CONTEXT_SWITCH 0x12 // A DSi-only choice between the contexts A and B of a camera
+#define CAMERA_PXI_COMMAND_SIZE 0x30
+#define CAMERA_PXI_COMMAND_FRAME_RATE 0x31
+#define CAMERA_PXI_COMMAND_EFFECT 0x32
+#define CAMERA_PXI_COMMAND_FLIP 0x33
+#define CAMERA_PXI_COMMAND_PHOTO_MODE 0x34
+#define CAMERA_PXI_COMMAND_WHITE_BALANCE 0x35
+#define CAMERA_PXI_COMMAND_EXPOSURE 0x36
+#define CAMERA_PXI_COMMAND_SHARPNESS 0x37
+#define CAMERA_PXI_COMMAND_AUTO_EXPOSURE 0x39
+#define CAMERA_PXI_COMMAND_AUTO_WHITE_BALANCE 0x3a
+#define CAMERA_PXI_COMMAND_SET_LED 0x40 // Whether the outer camera's LED blinks; sent again when it is restarted
+
+// The first word of a command or an answer has this bit set, the others do not
+#define CAMERA_PXI_START 0x02000000
+
+// What the ARM7 says of a command in the first word's low byte (CAMERAPxiResult); the code tells only SUCCESS,
+// SUCCESS_FALSE and ILLEGAL_STATUS apart, and takes any other for a fatal error
+enum {
+    CAMERA_PXI_RESULT_SUCCESS,
+    CAMERA_PXI_RESULT_SUCCESS_FALSE,
+    CAMERA_PXI_RESULT_INVALID_COMMAND,
+    CAMERA_PXI_RESULT_INVALID_PARAMETER,
+    CAMERA_PXI_RESULT_ILLEGAL_STATUS,
+    CAMERA_PXI_RESULT_BUSY,
+    CAMERA_PXI_RESULT_FATAL_ERROR,
+};
+
+// What the camera was last set to: CAMERA_I2C*Ex's contexts A and B are the two elements of size, effect and flip
+typedef struct {
+    CAMERASize size[2];              // 0x00
+    CAMERAEffect effect[2];          // 0x08
+    CAMERAFlip flip[2];              // 0x10
+    CAMERAPhotoMode photoMode;       // 0x18
+    CAMERAWhiteBalance whiteBalance; // 0x1c
+    CAMERAFrameRate frameRate;       // 0x20
+    int exposure;                    // 0x24
+    int sharpness;                   // 0x28
+    BOOL autoExposure;               // 0x2c
+    BOOL autoWhiteBalance;           // 0x30
+    CAMERAContext context;           // 0x34: the context in use
+    BOOL ledBlink;                   // 0x38: the outer camera's: SET_LED sets it, ACTIVATE clears it
+} CAMERASettings;
+
+typedef struct {
+    BOOL busy;                              // 0x00: set while a command is on its way, until the ARM7 has answered
+    CAMERACallback callback;                // 0x04
+    CAMERAResult result;                    // 0x08: of the synchronous functions
+    void *callbackArg;                      // 0x0c
+    int command;                            // 0x10: of the answer that is being received
+    u32 response;                           // 0x14: the low byte of its first word
+    u8 received;                            // 0x18: bytes of the payload received so far
+    u8 length;                              // 0x19: the length that the first word says
+    u8 *buffer;                             // 0x1c: where the payload goes
+    u32 bufferSize;                         // 0x20
+    BOOL clockWasOn;                        // 0x24: whether the interface's clock was on before the command was sent
+    BOOL keepClock;                         // 0x28: leave the clock on after the answer
+    BOOL stopClock;                         // 0x2c: turn the clock off after the answer
+    PMSleepCallbackInfo sleepInfo;          // 0x30
+    PMExitCallbackInfo exitInfo;            // 0x40
+    u64 vsyncTick;                          // 0x50: when the interface last had a frame
+    CAMERAIntrCallback vsyncCallback;       // 0x58
+    CAMERAIntrCallback bufferErrorCallback; // 0x5c
+    CAMERAIntrCallback rebootCallback;      // 0x60
+    OSThread thread;                        // 0x64: watches the camera and starts it again
+    u32 stack[CAMERA_STACK_SIZE / sizeof(u32)]; // 0x124
+    CAMERASelect activeCamera;                  // 0x1124
+    CAMERASettings settings[2];                 // 0x1128: for the inner and the outer camera
+    int sentCamera;        // 0x11a0: what the command that is on its way set, for the answer to store
+    int sentContext;       // 0x11a4
+    int sentValue;         // 0x11a8
+    u32 errorCount;        // 0x11ac: the answers that said the state was wrong, and the timeouts
+    int pollCount;         // 0x11b0
+    OSMessageQueue queue;  // 0x11b4: the answers' way to wake the thread
+    OSMessage messages[1]; // 0x11d4
+} CAMERAWork;
+
+// MWCC lays these out in reverse order of declaration: the flag first, then the word, then the work
+static CAMERAWork sCameraWork;
+static u32 sUnused; // Nothing reads it; the library's other code that used it was stripped
+static BOOL sCameraInitialized;
+
+static void CameraPxiCallback(PXIFifoTag tag, u32 data, BOOL err);
+static void CameraSyncCallback(CAMERAResult result, void *arg);
+static void CameraWaitBusy(void);
+static void CameraStandbyCallback(void *arg);
+static CAMERAResult CAMERA_I2CInitAsyncCore(CAMERASelect camera, CAMERACallback callback, void *arg);
+static CAMERAResult CAMERA_I2CActivateAsyncCore(CAMERASelect camera, CAMERACallback callback, void *arg);
+static CAMERAResult CAMERA_I2CContextSwitchAsyncCore(CAMERASelect camera, CAMERAContext context,
+                                                     CAMERACallback callback, void *arg);
+static CAMERAResult CAMERA_I2CSizeExAsyncCore(CAMERASelect camera, CAMERAContext context, CAMERASize size,
+                                              CAMERACallback callback, void *arg);
+static CAMERAResult CAMERA_I2CFrameRateAsyncCore(CAMERASelect camera, CAMERAFrameRate rate, CAMERACallback callback,
+                                                 void *arg);
+static CAMERAResult CAMERA_I2CEffectExAsyncCore(CAMERASelect camera, CAMERAContext context, CAMERAEffect effect,
+                                                CAMERACallback callback, void *arg);
+static CAMERAResult CAMERA_I2CFlipExAsyncCore(CAMERASelect camera, CAMERAContext context, CAMERAFlip flip,
+                                              CAMERACallback callback, void *arg);
+static CAMERAResult CAMERA_I2CPhotoModeAsyncCore(CAMERASelect camera, CAMERAPhotoMode mode, CAMERACallback callback,
+                                                 void *arg);
+static CAMERAResult CAMERA_I2CWhiteBalanceAsyncCore(CAMERASelect camera, CAMERAWhiteBalance whiteBalance,
+                                                    CAMERACallback callback, void *arg);
+static CAMERAResult CAMERA_I2CExposureAsyncCore(CAMERASelect camera, int exposure, CAMERACallback callback, void *arg);
+static CAMERAResult CAMERA_I2CSharpnessAsyncCore(CAMERASelect camera, int sharpness, CAMERACallback callback,
+                                                 void *arg);
+static CAMERAResult CAMERA_I2CAutoExposureAsyncCore(CAMERASelect camera, BOOL on, CAMERACallback callback, void *arg);
+static CAMERAResult CAMERA_I2CAutoWhiteBalanceAsyncCore(CAMERASelect camera, BOOL on, CAMERACallback callback,
+                                                        void *arg);
+static CAMERAResult CAMERA_SetLEDAsyncCore(BOOL isBlink, CAMERACallback callback, void *arg);
+static BOOL CameraSendPxiCommand(u32 command, u32 length, u8 data);
+static void CameraSendPxiData(const u8 *data);
+// The bytes of a command after the first go out three at a time, so a command's buffer has room for the two bytes
+// that the last three can reach past its size
+#define CAMERA_COMMAND_BUFFER_SIZE(size) ((size) + 2)
+static void CameraCallCallbackAndUnlock(CAMERAResult result);
+static void CAMERA_GoReboot(void);
+
+// The interrupt of the camera interface: a frame is ready, or the buffer overflowed
+static void CAMERA_CameraIntr(void) {
+    OS_SetIrqCheckFlag(OS_IE_CAMERA);
+    if (CAMERA_GetErrorStatus()) {
+        if (sCameraWork.bufferErrorCallback != NULL) {
+            sCameraWork.bufferErrorCallback(CAMERA_RESULT_SUCCESS);
+        }
+    } else {
+        sCameraWork.vsyncTick = OS_GetTick();
+        if (sCameraWork.vsyncCallback != NULL) {
+            sCameraWork.vsyncCallback(CAMERA_RESULT_SUCCESS);
+        }
+    }
+}
+
+void CAMERA_SetVsyncCallbackCore(CAMERAIntrCallback callback) {
+    sCameraWork.vsyncCallback = callback;
+}
+
+void CAMERA_SetBufferErrorCallbackCore(CAMERAIntrCallback callback) {
+    sCameraWork.bufferErrorCallback = callback;
+}
+
+void CAMERA_SetRebootCallbackCore(CAMERAIntrCallback callback) {
+    sCameraWork.rebootCallback = callback;
+}
+
+// What a camera's white balance, sharpness and exposure are for a photo mode
+static CAMERAWhiteBalance CAMERA_GetWhiteBalanceFromPhotoMode(CAMERAPhotoMode mode) {
+    switch (mode) {
+    case CAMERA_PHOTO_MODE_NORMAL:
+    case CAMERA_PHOTO_MODE_PORTRAIT:
+        return CAMERA_WHITE_BALANCE_AUTO;
+    case CAMERA_PHOTO_MODE_LANDSCAPE:
+        return CAMERA_WHITE_BALANCE_5200K;
+    case CAMERA_PHOTO_MODE_NIGHTVIEW:
+    case CAMERA_PHOTO_MODE_LETTER:
+        return CAMERA_WHITE_BALANCE_AUTO;
+    default:
+        return CAMERA_WHITE_BALANCE_AUTO;
+    }
+}
+
+static int CAMERA_GetSharpnessFromPhotoMode(CAMERAPhotoMode mode) {
+    switch (mode) {
+    case CAMERA_PHOTO_MODE_NORMAL:
+        return 0;
+    case CAMERA_PHOTO_MODE_PORTRAIT:
+        return -2;
+    case CAMERA_PHOTO_MODE_LANDSCAPE:
+        return 1;
+    case CAMERA_PHOTO_MODE_NIGHTVIEW:
+        return -1;
+    case CAMERA_PHOTO_MODE_LETTER:
+        return 2;
+    default:
+        return 0;
+    }
+}
+
+static int CAMERA_GetExposureFromPhotoMode(CAMERAPhotoMode mode) {
+    switch (mode) {
+    case CAMERA_PHOTO_MODE_NORMAL:
+    case CAMERA_PHOTO_MODE_PORTRAIT:
+    case CAMERA_PHOTO_MODE_LANDSCAPE:
+        return 0;
+    case CAMERA_PHOTO_MODE_NIGHTVIEW:
+    case CAMERA_PHOTO_MODE_LETTER:
+        return 2;
+    default:
+        return 0;
+    }
+}
+
+// The camera answered with a wrong state: count it and wake the thread
+static void CAMERA_GoReboot(void) {
+    sCameraWork.busy = TRUE;
+    sCameraWork.errorCount++;
+    OS_SendMessage(&sCameraWork.queue, 0, OS_MESSAGE_NOBLOCK);
+}
+
+// The steps of the camera's reboot, in the order they are sent: the argument of CAMERA_Reboot is the step to run, and
+// a step whose setting is the camera's default falls through to the next
+enum {
+    CAMERA_REBOOT_STEP_I2C_INIT,
+    CAMERA_REBOOT_STEP_IN_PHOTO_MODE,
+    CAMERA_REBOOT_STEP_OUT_PHOTO_MODE,
+    CAMERA_REBOOT_STEP_IN_SIZE_A,
+    CAMERA_REBOOT_STEP_IN_SIZE_B,
+    CAMERA_REBOOT_STEP_OUT_SIZE_A,
+    CAMERA_REBOOT_STEP_OUT_SIZE_B,
+    CAMERA_REBOOT_STEP_IN_FRAME_RATE,
+    CAMERA_REBOOT_STEP_OUT_FRAME_RATE,
+    CAMERA_REBOOT_STEP_IN_EFFECT_A,
+    CAMERA_REBOOT_STEP_IN_EFFECT_B,
+    CAMERA_REBOOT_STEP_OUT_EFFECT_A,
+    CAMERA_REBOOT_STEP_OUT_EFFECT_B,
+    CAMERA_REBOOT_STEP_IN_FLIP_A,
+    CAMERA_REBOOT_STEP_IN_FLIP_B,
+    CAMERA_REBOOT_STEP_OUT_FLIP_A,
+    CAMERA_REBOOT_STEP_OUT_FLIP_B,
+    CAMERA_REBOOT_STEP_IN_WHITE_BALANCE,
+    CAMERA_REBOOT_STEP_OUT_WHITE_BALANCE,
+    CAMERA_REBOOT_STEP_IN_EXPOSURE,
+    CAMERA_REBOOT_STEP_OUT_EXPOSURE,
+    CAMERA_REBOOT_STEP_IN_SHARPNESS,
+    CAMERA_REBOOT_STEP_OUT_SHARPNESS,
+    CAMERA_REBOOT_STEP_IN_AUTO_EXPOSURE,
+    CAMERA_REBOOT_STEP_OUT_AUTO_EXPOSURE,
+    CAMERA_REBOOT_STEP_IN_AUTO_WHITE_BALANCE,
+    CAMERA_REBOOT_STEP_OUT_AUTO_WHITE_BALANCE,
+    CAMERA_REBOOT_STEP_IN_CONTEXT,
+    CAMERA_REBOOT_STEP_OUT_CONTEXT,
+    CAMERA_REBOOT_STEP_ACTIVATE,
+    CAMERA_REBOOT_STEP_LED,
+    CAMERA_REBOOT_STEP_DONE,
+};
+
+// The callback of the commands that start the camera again: sends the next setting that is not the camera's default,
+// one command per step, until all are sent. A step is the argument that the command before gave; a case whose
+// setting is the default falls through to the next step
+static void CAMERA_Reboot(CAMERAResult result, void *arg) {
+    if (result != CAMERA_RESULT_SUCCESS) {
+        return;
+    }
+    switch ((int)arg) {
+    case CAMERA_REBOOT_STEP_I2C_INIT:
+        CAMERA_I2CInitAsyncCore(CAMERA_SELECT_BOTH, CAMERA_Reboot, (void *)CAMERA_REBOOT_STEP_IN_PHOTO_MODE);
+        return;
+    case CAMERA_REBOOT_STEP_IN_PHOTO_MODE:
+        if (sCameraWork.settings[0].photoMode != CAMERA_PHOTO_MODE_PORTRAIT) {
+            CAMERA_I2CPhotoModeAsyncCore(CAMERA_SELECT_IN, sCameraWork.settings[0].photoMode, CAMERA_Reboot,
+                                         (void *)CAMERA_REBOOT_STEP_OUT_PHOTO_MODE);
+            return;
+        }
+    case CAMERA_REBOOT_STEP_OUT_PHOTO_MODE:
+        if (sCameraWork.settings[1].photoMode != CAMERA_PHOTO_MODE_NORMAL) {
+            CAMERA_I2CPhotoModeAsyncCore(CAMERA_SELECT_OUT, sCameraWork.settings[1].photoMode, CAMERA_Reboot,
+                                         (void *)CAMERA_REBOOT_STEP_IN_SIZE_A);
+            return;
+        }
+    case CAMERA_REBOOT_STEP_IN_SIZE_A:
+        if (sCameraWork.settings[0].size[0] != CAMERA_SIZE_DS_LCD) {
+            CAMERA_I2CSizeExAsyncCore(CAMERA_SELECT_IN, CAMERA_CONTEXT_A, sCameraWork.settings[0].size[0],
+                                      CAMERA_Reboot, (void *)CAMERA_REBOOT_STEP_IN_SIZE_B);
+            return;
+        }
+    case CAMERA_REBOOT_STEP_IN_SIZE_B:
+        if (sCameraWork.settings[0].size[1] != CAMERA_SIZE_VGA) {
+            CAMERA_I2CSizeExAsyncCore(CAMERA_SELECT_IN, CAMERA_CONTEXT_B, sCameraWork.settings[0].size[1],
+                                      CAMERA_Reboot, (void *)CAMERA_REBOOT_STEP_OUT_SIZE_A);
+            return;
+        }
+    case CAMERA_REBOOT_STEP_OUT_SIZE_A:
+        if (sCameraWork.settings[1].size[0] != CAMERA_SIZE_DS_LCD) {
+            CAMERA_I2CSizeExAsyncCore(CAMERA_SELECT_OUT, CAMERA_CONTEXT_A, sCameraWork.settings[1].size[0],
+                                      CAMERA_Reboot, (void *)CAMERA_REBOOT_STEP_OUT_SIZE_B);
+            return;
+        }
+    case CAMERA_REBOOT_STEP_OUT_SIZE_B:
+        if (sCameraWork.settings[1].size[1] != CAMERA_SIZE_VGA) {
+            CAMERA_I2CSizeExAsyncCore(CAMERA_SELECT_OUT, CAMERA_CONTEXT_B, sCameraWork.settings[1].size[1],
+                                      CAMERA_Reboot, (void *)CAMERA_REBOOT_STEP_IN_FRAME_RATE);
+            return;
+        }
+    case CAMERA_REBOOT_STEP_IN_FRAME_RATE:
+        if (sCameraWork.settings[0].frameRate != CAMERA_FRAME_RATE_15) {
+            CAMERA_I2CFrameRateAsyncCore(CAMERA_SELECT_IN, sCameraWork.settings[0].frameRate, CAMERA_Reboot,
+                                         (void *)CAMERA_REBOOT_STEP_OUT_FRAME_RATE);
+            return;
+        }
+    case CAMERA_REBOOT_STEP_OUT_FRAME_RATE:
+        if (sCameraWork.settings[1].frameRate != CAMERA_FRAME_RATE_15) {
+            CAMERA_I2CFrameRateAsyncCore(CAMERA_SELECT_OUT, sCameraWork.settings[1].frameRate, CAMERA_Reboot,
+                                         (void *)CAMERA_REBOOT_STEP_IN_EFFECT_A);
+            return;
+        }
+    case CAMERA_REBOOT_STEP_IN_EFFECT_A:
+        if (sCameraWork.settings[0].effect[0] != CAMERA_EFFECT_NONE) {
+            CAMERA_I2CEffectExAsyncCore(CAMERA_SELECT_IN, CAMERA_CONTEXT_A, sCameraWork.settings[0].effect[0],
+                                        CAMERA_Reboot, (void *)CAMERA_REBOOT_STEP_IN_EFFECT_B);
+            return;
+        }
+    case CAMERA_REBOOT_STEP_IN_EFFECT_B:
+        if (sCameraWork.settings[0].effect[1] != CAMERA_EFFECT_NONE) {
+            CAMERA_I2CEffectExAsyncCore(CAMERA_SELECT_IN, CAMERA_CONTEXT_B, sCameraWork.settings[0].effect[1],
+                                        CAMERA_Reboot, (void *)CAMERA_REBOOT_STEP_OUT_EFFECT_A);
+            return;
+        }
+    case CAMERA_REBOOT_STEP_OUT_EFFECT_A:
+        if (sCameraWork.settings[1].effect[0] != CAMERA_EFFECT_NONE) {
+            CAMERA_I2CEffectExAsyncCore(CAMERA_SELECT_OUT, CAMERA_CONTEXT_A, sCameraWork.settings[1].effect[0],
+                                        CAMERA_Reboot, (void *)CAMERA_REBOOT_STEP_OUT_EFFECT_B);
+            return;
+        }
+    case CAMERA_REBOOT_STEP_OUT_EFFECT_B:
+        if (sCameraWork.settings[1].effect[1] != CAMERA_EFFECT_NONE) {
+            CAMERA_I2CEffectExAsyncCore(CAMERA_SELECT_OUT, CAMERA_CONTEXT_B, sCameraWork.settings[1].effect[1],
+                                        CAMERA_Reboot, (void *)CAMERA_REBOOT_STEP_IN_FLIP_A);
+            return;
+        }
+    case CAMERA_REBOOT_STEP_IN_FLIP_A:
+        if (sCameraWork.settings[0].flip[0] != CAMERA_FLIP_HORIZONTAL) {
+            CAMERA_I2CFlipExAsyncCore(CAMERA_SELECT_IN, CAMERA_CONTEXT_A, sCameraWork.settings[0].flip[0],
+                                      CAMERA_Reboot, (void *)CAMERA_REBOOT_STEP_IN_FLIP_B);
+            return;
+        }
+    case CAMERA_REBOOT_STEP_IN_FLIP_B:
+        if (sCameraWork.settings[0].flip[1] != CAMERA_FLIP_HORIZONTAL) {
+            CAMERA_I2CFlipExAsyncCore(CAMERA_SELECT_IN, CAMERA_CONTEXT_B, sCameraWork.settings[0].flip[1],
+                                      CAMERA_Reboot, (void *)CAMERA_REBOOT_STEP_OUT_FLIP_A);
+            return;
+        }
+    case CAMERA_REBOOT_STEP_OUT_FLIP_A:
+        if (sCameraWork.settings[1].flip[0] != CAMERA_FLIP_NONE) {
+            CAMERA_I2CFlipExAsyncCore(CAMERA_SELECT_OUT, CAMERA_CONTEXT_A, sCameraWork.settings[1].flip[0],
+                                      CAMERA_Reboot, (void *)CAMERA_REBOOT_STEP_OUT_FLIP_B);
+            return;
+        }
+    case CAMERA_REBOOT_STEP_OUT_FLIP_B:
+        if (sCameraWork.settings[1].flip[1] != CAMERA_FLIP_NONE) {
+            CAMERA_I2CFlipExAsyncCore(CAMERA_SELECT_OUT, CAMERA_CONTEXT_B, sCameraWork.settings[1].flip[1],
+                                      CAMERA_Reboot, (void *)CAMERA_REBOOT_STEP_IN_WHITE_BALANCE);
+            return;
+        }
+    case CAMERA_REBOOT_STEP_IN_WHITE_BALANCE:
+        if (sCameraWork.settings[0].whiteBalance !=
+            CAMERA_GetWhiteBalanceFromPhotoMode(sCameraWork.settings[0].photoMode)) {
+            CAMERA_I2CWhiteBalanceAsyncCore(CAMERA_SELECT_IN, sCameraWork.settings[0].whiteBalance, CAMERA_Reboot,
+                                            (void *)CAMERA_REBOOT_STEP_OUT_WHITE_BALANCE);
+            return;
+        }
+    case CAMERA_REBOOT_STEP_OUT_WHITE_BALANCE:
+        if (sCameraWork.settings[1].whiteBalance !=
+            CAMERA_GetWhiteBalanceFromPhotoMode(sCameraWork.settings[1].photoMode)) {
+            CAMERA_I2CWhiteBalanceAsyncCore(CAMERA_SELECT_OUT, sCameraWork.settings[1].whiteBalance, CAMERA_Reboot,
+                                            (void *)CAMERA_REBOOT_STEP_IN_EXPOSURE);
+            return;
+        }
+    case CAMERA_REBOOT_STEP_IN_EXPOSURE: {
+        int exposure = sCameraWork.settings[0].exposure;
+        if (exposure != CAMERA_GetExposureFromPhotoMode(sCameraWork.settings[0].photoMode)) {
+            CAMERA_I2CExposureAsyncCore(CAMERA_SELECT_IN, exposure, CAMERA_Reboot,
+                                        (void *)CAMERA_REBOOT_STEP_OUT_EXPOSURE);
+            return;
+        }
+    }
+    case CAMERA_REBOOT_STEP_OUT_EXPOSURE: {
+        int exposure = sCameraWork.settings[1].exposure;
+        if (exposure != CAMERA_GetExposureFromPhotoMode(sCameraWork.settings[1].photoMode)) {
+            CAMERA_I2CExposureAsyncCore(CAMERA_SELECT_OUT, exposure, CAMERA_Reboot,
+                                        (void *)CAMERA_REBOOT_STEP_IN_SHARPNESS);
+            return;
+        }
+    }
+    case CAMERA_REBOOT_STEP_IN_SHARPNESS: {
+        int sharpness = sCameraWork.settings[0].sharpness;
+        if (sharpness != CAMERA_GetSharpnessFromPhotoMode(sCameraWork.settings[0].photoMode)) {
+            CAMERA_I2CSharpnessAsyncCore(CAMERA_SELECT_IN, sharpness, CAMERA_Reboot,
+                                         (void *)CAMERA_REBOOT_STEP_OUT_SHARPNESS);
+            return;
+        }
+    }
+    case CAMERA_REBOOT_STEP_OUT_SHARPNESS: {
+        int sharpness = sCameraWork.settings[1].sharpness;
+        if (sharpness != CAMERA_GetSharpnessFromPhotoMode(sCameraWork.settings[1].photoMode)) {
+            CAMERA_I2CSharpnessAsyncCore(CAMERA_SELECT_OUT, sharpness, CAMERA_Reboot,
+                                         (void *)CAMERA_REBOOT_STEP_IN_AUTO_EXPOSURE);
+            return;
+        }
+    }
+    case CAMERA_REBOOT_STEP_IN_AUTO_EXPOSURE:
+        if (sCameraWork.settings[0].autoExposure != TRUE) {
+            CAMERA_I2CAutoExposureAsyncCore(CAMERA_SELECT_IN, sCameraWork.settings[0].autoExposure, CAMERA_Reboot,
+                                            (void *)CAMERA_REBOOT_STEP_OUT_AUTO_EXPOSURE);
+            return;
+        }
+    case CAMERA_REBOOT_STEP_OUT_AUTO_EXPOSURE:
+        if (sCameraWork.settings[1].autoExposure != TRUE) {
+            CAMERA_I2CAutoExposureAsyncCore(CAMERA_SELECT_OUT, sCameraWork.settings[1].autoExposure, CAMERA_Reboot,
+                                            (void *)CAMERA_REBOOT_STEP_IN_AUTO_WHITE_BALANCE);
+            return;
+        }
+    case CAMERA_REBOOT_STEP_IN_AUTO_WHITE_BALANCE:
+        if (sCameraWork.settings[0].autoWhiteBalance != TRUE) {
+            CAMERA_I2CAutoWhiteBalanceAsyncCore(CAMERA_SELECT_IN, sCameraWork.settings[0].autoWhiteBalance,
+                                                CAMERA_Reboot, (void *)CAMERA_REBOOT_STEP_OUT_AUTO_WHITE_BALANCE);
+            return;
+        }
+    case CAMERA_REBOOT_STEP_OUT_AUTO_WHITE_BALANCE:
+        if (sCameraWork.settings[1].autoWhiteBalance != TRUE) {
+            CAMERA_I2CAutoWhiteBalanceAsyncCore(CAMERA_SELECT_OUT, sCameraWork.settings[1].autoWhiteBalance,
+                                                CAMERA_Reboot, (void *)CAMERA_REBOOT_STEP_IN_CONTEXT);
+            return;
+        }
+    case CAMERA_REBOOT_STEP_IN_CONTEXT: {
+        CAMERAContext context = sCameraWork.settings[0].context;
+        if (context != CAMERA_CONTEXT_A) {
+            if (OS_IsRunOnTwl() == TRUE) {
+                CAMERA_I2CContextSwitchAsyncCore(CAMERA_SELECT_IN, context, CAMERA_Reboot,
+                                                 (void *)CAMERA_REBOOT_STEP_OUT_CONTEXT);
+            }
+            return;
+        }
+    }
+    case CAMERA_REBOOT_STEP_OUT_CONTEXT: {
+        CAMERAContext context = sCameraWork.settings[1].context;
+        if (context != CAMERA_CONTEXT_A) {
+            if (OS_IsRunOnTwl() == TRUE) {
+                CAMERA_I2CContextSwitchAsyncCore(CAMERA_SELECT_OUT, context, CAMERA_Reboot,
+                                                 (void *)CAMERA_REBOOT_STEP_ACTIVATE);
+            }
+            return;
+        }
+    }
+    case CAMERA_REBOOT_STEP_ACTIVATE:
+        if (sCameraWork.activeCamera != CAMERA_SELECT_NONE) {
+            CAMERA_I2CActivateAsyncCore(sCameraWork.activeCamera, CAMERA_Reboot, (void *)CAMERA_REBOOT_STEP_LED);
+            return;
+        }
+    case CAMERA_REBOOT_STEP_LED:
+        if (sCameraWork.activeCamera == CAMERA_SELECT_OUT && sCameraWork.settings[1].ledBlink == TRUE) {
+            if (OS_IsRunOnTwl() == TRUE) {
+                CAMERA_SetLEDAsyncCore(TRUE, CAMERA_Reboot, (void *)CAMERA_REBOOT_STEP_DONE);
+            }
+            return;
+        }
+    default:
+        break;
+    }
+    sCameraWork.errorCount = 0;
+    if (sCameraWork.rebootCallback != NULL) {
+        sCameraWork.rebootCallback(CAMERA_RESULT_SUCCESS);
+    }
+}
+
+// Checks that the camera may take a command: FATAL_ERROR, after it has stopped the active camera, once it failed more
+// than twice, ILLEGAL_STATUS while it is being started again
+static CAMERAResult CAMERA_CheckRetryCount(void) {
+    if (sCameraWork.errorCount > 2) {
+        if (sCameraWork.activeCamera != CAMERA_SELECT_NONE) {
+            sCameraWork.stopClock = TRUE;
+            sCameraWork.activeCamera = CAMERA_SELECT_NONE;
+            CameraSendPxiCommand(CAMERA_PXI_COMMAND_ACTIVATE, 1, 0);
+        }
+        return CAMERA_RESULT_FATAL_ERROR;
+    }
+    if (sCameraWork.errorCount != 0) {
+        return CAMERA_RESULT_ILLEGAL_STATUS;
+    }
+    return CAMERA_RESULT_SUCCESS;
+}
+
+// The thread: every 100 ms it looks for an answer that said the camera was in a wrong state and, every second, for a
+// frame; if there is none for a second, it counts that as a failure as well. On a failure it resets the interface
+// and sends the settings again
+static void CAMERA_MonitorThread(void *arg) {
+    OSMessage message;
+    int elapsed;
+
+    OS_DisableInterrupts();
+    for (;;) {
+        OS_Sleep(100);
+        if (!OS_ReceiveMessage(&sCameraWork.queue, &message, OS_MESSAGE_NOBLOCK)) {
+            if (sCameraWork.errorCount != 0) {
+                continue;
+            }
+            if (sCameraWork.activeCamera == CAMERA_SELECT_NONE) {
+                continue;
+            }
+            if (sCameraWork.busy) {
+                continue;
+            }
+            if (++sCameraWork.pollCount < 10) {
+                continue;
+            }
+            sCameraWork.pollCount = 0;
+            // The ticks since the last frame as an int, which the comparison widens to an unsigned 64 bits
+            elapsed = OS_GetTick() - sCameraWork.vsyncTick;
+            if (elapsed < OS_MilliSecondsToTicks(1000)) {
+                continue;
+            }
+            sCameraWork.busy = TRUE;
+            sCameraWork.errorCount++;
+        }
+        if (CAMERA_CheckRetryCount() == CAMERA_RESULT_FATAL_ERROR) {
+            sCameraWork.busy = FALSE;
+            if (sCameraWork.rebootCallback != NULL) {
+                sCameraWork.rebootCallback(CAMERA_RESULT_FATAL_ERROR);
+            }
+            return;
+        }
+        OS_EnableInterrupts();
+        CAMERA_ResetCore();
+        OS_DisableInterrupts();
+        sCameraWork.busy = FALSE;
+        CAMERA_Reboot(CAMERA_RESULT_SUCCESS, NULL);
+    }
+}
+
+CAMERAResult CAMERA_InitCore(void) {
+    if (sCameraInitialized) {
+        return CAMERA_RESULT_BUSY;
+    }
+    sCameraInitialized = TRUE;
+    sCameraWork.vsyncCallback = NULL;
+    sCameraWork.bufferErrorCallback = NULL;
+    sCameraWork.rebootCallback = NULL;
+    sCameraWork.busy = FALSE;
+    sCameraWork.callback = NULL;
+    sCameraWork.keepClock = FALSE;
+    sCameraWork.stopClock = FALSE;
+    sCameraWork.activeCamera = CAMERA_SELECT_NONE;
+    sCameraWork.errorCount = 0;
+    sCameraWork.pollCount = 0;
+    PXI_Init();
+    if (!PXI_IsCallbackReady(PXI_FIFO_TAG_CAMERA, PXI_PROC_ARM7)) {
+        return CAMERA_RESULT_FATAL_ERROR;
+    }
+    PXI_SetFifoRecvCallback(PXI_FIFO_TAG_CAMERA, CameraPxiCallback);
+    CAMERA_ResetCore();
+    CAMERA_StopCaptureCore();
+    CAMERA_ClearBufferCore();
+    PM_SetSleepCallbackInfo(&sCameraWork.sleepInfo, CameraStandbyCallback, NULL);
+    PMi_InsertPreSleepCallbackEx(&sCameraWork.sleepInfo, CAMERA_PM_CALLBACK_PRIORITY);
+    PM_SetExitCallbackInfo(&sCameraWork.exitInfo, CameraStandbyCallback, NULL);
+    PMi_InsertPostExitCallbackEx(&sCameraWork.exitInfo, CAMERA_PM_CALLBACK_PRIORITY);
+    CAMERA_SetVsyncInterruptCore(CAMERA_INTR_VSYNC_NEGATIVE_EDGE);
+    CAMERA_SetBufferErrorInterruptCore(TRUE);
+    CAMERA_SetMasterInterruptCore(TRUE);
+    OS_SetIrqFunction(OS_IE_CAMERA, CAMERA_CameraIntr);
+    OS_EnableIrqMask(OS_IE_CAMERA);
+    sCameraWork.settings[0].size[0] = CAMERA_SIZE_DS_LCD;
+    sCameraWork.settings[0].size[1] = CAMERA_SIZE_VGA;
+    sCameraWork.settings[0].effect[0] = CAMERA_EFFECT_NONE;
+    sCameraWork.settings[0].effect[1] = CAMERA_EFFECT_NONE;
+    sCameraWork.settings[0].flip[0] = CAMERA_FLIP_HORIZONTAL;
+    sCameraWork.settings[0].flip[1] = CAMERA_FLIP_HORIZONTAL;
+    sCameraWork.settings[0].photoMode = CAMERA_PHOTO_MODE_PORTRAIT;
+    sCameraWork.settings[0].whiteBalance = CAMERA_WHITE_BALANCE_AUTO;
+    sCameraWork.settings[0].frameRate = CAMERA_FRAME_RATE_15;
+    sCameraWork.settings[0].exposure = 0;
+    sCameraWork.settings[0].sharpness = -2;
+    sCameraWork.settings[0].autoExposure = TRUE;
+    sCameraWork.settings[0].autoWhiteBalance = TRUE;
+    sCameraWork.settings[0].context = CAMERA_CONTEXT_A;
+    sCameraWork.settings[0].ledBlink = 0;
+    sCameraWork.settings[1].size[0] = CAMERA_SIZE_DS_LCD;
+    sCameraWork.settings[1].size[1] = CAMERA_SIZE_VGA;
+    sCameraWork.settings[1].effect[0] = CAMERA_EFFECT_NONE;
+    sCameraWork.settings[1].effect[1] = CAMERA_EFFECT_NONE;
+    sCameraWork.settings[1].flip[0] = CAMERA_FLIP_NONE;
+    sCameraWork.settings[1].flip[1] = CAMERA_FLIP_NONE;
+    sCameraWork.settings[1].photoMode = CAMERA_PHOTO_MODE_NORMAL;
+    sCameraWork.settings[1].whiteBalance = CAMERA_WHITE_BALANCE_AUTO;
+    sCameraWork.settings[1].frameRate = CAMERA_FRAME_RATE_15;
+    sCameraWork.settings[1].exposure = 0;
+    sCameraWork.settings[1].sharpness = 0;
+    sCameraWork.settings[1].autoExposure = TRUE;
+    sCameraWork.settings[1].autoWhiteBalance = TRUE;
+    sCameraWork.settings[1].context = CAMERA_CONTEXT_A;
+    sCameraWork.settings[1].ledBlink = 0;
+    OS_InitMessageQueue(&sCameraWork.queue, sCameraWork.messages, 1);
+    OS_CreateThread(&sCameraWork.thread, CAMERA_MonitorThread, NULL,
+                    sCameraWork.stack + CAMERA_STACK_SIZE / sizeof(u32), CAMERA_STACK_SIZE, CAMERA_THREAD_PRIORITY);
+    OS_WakeupThreadDirect(&sCameraWork.thread);
+    return CAMERA_RESULT_SUCCESS;
+}
+
+void CAMERA_EndCore(void) {
+    if (!sCameraInitialized) {
+        return;
+    }
+    sCameraInitialized = FALSE;
+    PM_DeletePreSleepCallback(&sCameraWork.sleepInfo);
+    PM_DeletePostExitCallback(&sCameraWork.exitInfo);
+    CAMERA_I2CActivateCore(CAMERA_SELECT_NONE);
+    CAMERA_ResetCore();
+    CAMERA_StopCaptureCore();
+    CAMERA_ClearBufferCore();
+    PXI_SetFifoRecvCallback(PXI_FIFO_TAG_CAMERA, NULL);
+    CAMERA_SetVsyncInterruptCore(CAMERA_INTR_VSYNC_NONE);
+    CAMERA_SetBufferErrorInterruptCore(FALSE);
+    CAMERA_SetMasterInterruptCore(FALSE);
+    OS_SetIrqFunction(OS_IE_CAMERA, NULL);
+    OS_DisableIrqMask(OS_IE_CAMERA);
+    OS_KillThread(&sCameraWork.thread, NULL);
+}
+
+// Stops the capture, waits for the interface to finish, clears its buffer and deactivates the cameras
+CAMERAResult CAMERA_StopCore(void) {
+    int timeout = 0x1991b0;
+
+    CAMERA_StopCaptureCore();
+    while (timeout-- > 0 && CAMERA_IsBusyCore()) {
+        OS_SpinWaitSysCycles(4);
+    }
+    CAMERA_ClearBufferCore();
+    return CAMERA_I2CActivateCore(CAMERA_SELECT_NONE);
+}
+
+// Starts the I2C of the cameras
+static CAMERAResult CAMERA_I2CInitAsyncCore(CAMERASelect camera, CAMERACallback callback, void *arg) {
+    CAMERAResult state = CAMERA_CheckRetryCount();
+    OSIntrMode enabled;
+
+    if (state == CAMERA_RESULT_FATAL_ERROR) {
+        return state;
+    }
+    if (camera != CAMERA_SELECT_IN && camera != CAMERA_SELECT_OUT && camera != CAMERA_SELECT_BOTH) {
+        return CAMERA_RESULT_ILLEGAL_PARAMETER;
+    }
+    enabled = OS_DisableInterrupts();
+    if (sCameraWork.busy) {
+        OS_RestoreInterrupts(enabled);
+        return state == CAMERA_RESULT_ILLEGAL_STATUS ? CAMERA_RESULT_ILLEGAL_STATUS : CAMERA_RESULT_BUSY;
+    }
+    sCameraWork.busy = TRUE;
+    OS_RestoreInterrupts(enabled);
+    sCameraWork.callback = callback;
+    sCameraWork.callbackArg = arg;
+    sCameraWork.stopClock = TRUE;
+    return CameraSendPxiCommand(CAMERA_PXI_COMMAND_INIT, 1, camera) ? CAMERA_RESULT_SUCCESS : CAMERA_RESULT_SEND_ERROR;
+}
+
+CAMERAResult CAMERA_I2CInitCore(CAMERASelect camera) {
+    CAMERAResult result = CAMERA_I2CInitAsyncCore(camera, CameraSyncCallback, NULL);
+
+    sCameraWork.result = result;
+    if (result == CAMERA_RESULT_SUCCESS) {
+        CameraWaitBusy();
+    }
+    return sCameraWork.result;
+}
+
+// Activates a camera, or none
+static CAMERAResult CAMERA_I2CActivateAsyncCore(CAMERASelect camera, CAMERACallback callback, void *arg) {
+    CAMERAResult state = CAMERA_CheckRetryCount();
+    OSIntrMode enabled;
+
+    if (state == CAMERA_RESULT_FATAL_ERROR) {
+        return state;
+    }
+    if (camera != CAMERA_SELECT_NONE && camera != CAMERA_SELECT_IN && camera != CAMERA_SELECT_OUT) {
+        return CAMERA_RESULT_ILLEGAL_PARAMETER;
+    }
+    enabled = OS_DisableInterrupts();
+    if (sCameraWork.busy) {
+        OS_RestoreInterrupts(enabled);
+        return state == CAMERA_RESULT_ILLEGAL_STATUS ? CAMERA_RESULT_ILLEGAL_STATUS : CAMERA_RESULT_BUSY;
+    }
+    sCameraWork.busy = TRUE;
+    OS_RestoreInterrupts(enabled);
+    sCameraWork.callback = callback;
+    sCameraWork.callbackArg = arg;
+    if (camera == CAMERA_SELECT_NONE) {
+        sCameraWork.stopClock = TRUE;
+    } else {
+        sCameraWork.keepClock = TRUE;
+    }
+    sCameraWork.activeCamera = camera;
+    if (sCameraWork.errorCount == 0) {
+        sCameraWork.sentValue = 0;
+    }
+    sCameraWork.vsyncTick = OS_GetTick();
+    return CameraSendPxiCommand(CAMERA_PXI_COMMAND_ACTIVATE, 1, camera) ? CAMERA_RESULT_SUCCESS
+                                                                        : CAMERA_RESULT_SEND_ERROR;
+}
+
+CAMERAResult CAMERA_I2CActivateCore(CAMERASelect camera) {
+    CAMERAResult result = CAMERA_I2CActivateAsyncCore(camera, CameraSyncCallback, NULL);
+
+    sCameraWork.result = result;
+    if (result == CAMERA_RESULT_SUCCESS) {
+        CameraWaitBusy();
+    }
+    return sCameraWork.result;
+}
+
+// Chooses the context of a camera that it uses
+static CAMERAResult CAMERA_I2CContextSwitchAsyncCore(CAMERASelect camera, CAMERAContext context,
+                                                     CAMERACallback callback, void *arg) {
+    CAMERAResult state = CAMERA_CheckRetryCount();
+    u8 data[CAMERA_COMMAND_BUFFER_SIZE(2)];
+    OSIntrMode enabled;
+
+    if (state == CAMERA_RESULT_FATAL_ERROR) {
+        return state;
+    }
+    if (camera != CAMERA_SELECT_IN && camera != CAMERA_SELECT_OUT) {
+        return CAMERA_RESULT_ILLEGAL_PARAMETER;
+    }
+    if (context != CAMERA_CONTEXT_A && context != CAMERA_CONTEXT_B) {
+        return CAMERA_RESULT_ILLEGAL_PARAMETER;
+    }
+    enabled = OS_DisableInterrupts();
+    if (sCameraWork.busy) {
+        OS_RestoreInterrupts(enabled);
+        return state == CAMERA_RESULT_ILLEGAL_STATUS ? CAMERA_RESULT_ILLEGAL_STATUS : CAMERA_RESULT_BUSY;
+    }
+    sCameraWork.busy = TRUE;
+    OS_RestoreInterrupts(enabled);
+    sCameraWork.callback = callback;
+    sCameraWork.callbackArg = arg;
+    data[0] = camera;
+    data[1] = context;
+    sCameraWork.sentCamera = camera;
+    sCameraWork.sentValue = context;
+    if (!CameraSendPxiCommand(CAMERA_PXI_COMMAND_CONTEXT_SWITCH, 2, data[0])) {
+        return CAMERA_RESULT_SEND_ERROR;
+    }
+    CameraSendPxiData(&data[1]);
+    return CAMERA_RESULT_SUCCESS;
+}
+
+static CAMERAResult CAMERA_I2CSizeExAsyncCore(CAMERASelect camera, CAMERAContext context, CAMERASize size,
+                                              CAMERACallback callback, void *arg) {
+    CAMERAResult state = CAMERA_CheckRetryCount();
+    u8 data[CAMERA_COMMAND_BUFFER_SIZE(3)];
+    OSIntrMode enabled;
+
+    if (state == CAMERA_RESULT_FATAL_ERROR) {
+        return state;
+    }
+    if (camera != CAMERA_SELECT_IN && camera != CAMERA_SELECT_OUT && camera != CAMERA_SELECT_BOTH) {
+        return CAMERA_RESULT_ILLEGAL_PARAMETER;
+    }
+    if (context != CAMERA_CONTEXT_A && context != CAMERA_CONTEXT_B && context != CAMERA_CONTEXT_BOTH) {
+        return CAMERA_RESULT_ILLEGAL_PARAMETER;
+    }
+    switch (size) {
+    case CAMERA_SIZE_VGA:
+    case CAMERA_SIZE_QVGA:
+    case CAMERA_SIZE_QQVGA:
+    case CAMERA_SIZE_CIF:
+    case CAMERA_SIZE_QCIF:
+    case CAMERA_SIZE_DS_LCD:
+    case CAMERA_SIZE_DS_LCDx4:
+        break;
+    default:
+        return CAMERA_RESULT_ILLEGAL_PARAMETER;
+    }
+    enabled = OS_DisableInterrupts();
+    if (sCameraWork.busy) {
+        OS_RestoreInterrupts(enabled);
+        return state == CAMERA_RESULT_ILLEGAL_STATUS ? CAMERA_RESULT_ILLEGAL_STATUS : CAMERA_RESULT_BUSY;
+    }
+    sCameraWork.busy = TRUE;
+    OS_RestoreInterrupts(enabled);
+    sCameraWork.callback = callback;
+    sCameraWork.callbackArg = arg;
+    data[0] = camera;
+    data[1] = context;
+    data[2] = size;
+    sCameraWork.sentCamera = camera;
+    sCameraWork.sentContext = context;
+    sCameraWork.sentValue = size;
+    if (!CameraSendPxiCommand(CAMERA_PXI_COMMAND_SIZE, 3, data[0])) {
+        return CAMERA_RESULT_SEND_ERROR;
+    }
+    CameraSendPxiData(&data[1]);
+    return CAMERA_RESULT_SUCCESS;
+}
+
+CAMERAResult CAMERA_I2CSizeExCore(CAMERASelect camera, CAMERAContext context, CAMERASize size) {
+    CAMERAResult result = CAMERA_I2CSizeExAsyncCore(camera, context, size, CameraSyncCallback, NULL);
+
+    sCameraWork.result = result;
+    if (result == CAMERA_RESULT_SUCCESS) {
+        CameraWaitBusy();
+    }
+    return sCameraWork.result;
+}
+
+static CAMERAResult CAMERA_I2CFrameRateAsyncCore(CAMERASelect camera, CAMERAFrameRate rate, CAMERACallback callback,
+                                                 void *arg) {
+    CAMERAResult state = CAMERA_CheckRetryCount();
+    u8 data[CAMERA_COMMAND_BUFFER_SIZE(2)];
+    OSIntrMode enabled;
+
+    if (state == CAMERA_RESULT_FATAL_ERROR) {
+        return state;
+    }
+    if (camera != CAMERA_SELECT_IN && camera != CAMERA_SELECT_OUT && camera != CAMERA_SELECT_BOTH) {
+        return CAMERA_RESULT_ILLEGAL_PARAMETER;
+    }
+    switch (rate) {
+    case CAMERA_FRAME_RATE_15:
+    case CAMERA_FRAME_RATE_15_TO_5:
+    case CAMERA_FRAME_RATE_15_TO_2:
+    case CAMERA_FRAME_RATE_8_5:
+    case CAMERA_FRAME_RATE_5:
+    case CAMERA_FRAME_RATE_20:
+    case CAMERA_FRAME_RATE_20_TO_5:
+    case CAMERA_FRAME_RATE_30:
+    case CAMERA_FRAME_RATE_30_TO_5:
+    case CAMERA_FRAME_RATE_15_TO_10:
+    case CAMERA_FRAME_RATE_20_TO_10:
+    case CAMERA_FRAME_RATE_30_TO_10:
+        break;
+    default:
+        return CAMERA_RESULT_ILLEGAL_PARAMETER;
+    }
+    enabled = OS_DisableInterrupts();
+    if (sCameraWork.busy) {
+        OS_RestoreInterrupts(enabled);
+        return state == CAMERA_RESULT_ILLEGAL_STATUS ? CAMERA_RESULT_ILLEGAL_STATUS : CAMERA_RESULT_BUSY;
+    }
+    sCameraWork.busy = TRUE;
+    OS_RestoreInterrupts(enabled);
+    sCameraWork.callback = callback;
+    sCameraWork.callbackArg = arg;
+    data[0] = camera;
+    data[1] = rate;
+    sCameraWork.sentCamera = camera;
+    sCameraWork.sentValue = rate;
+    if (!CameraSendPxiCommand(CAMERA_PXI_COMMAND_FRAME_RATE, 2, data[0])) {
+        return CAMERA_RESULT_SEND_ERROR;
+    }
+    CameraSendPxiData(&data[1]);
+    return CAMERA_RESULT_SUCCESS;
+}
+
+static CAMERAResult CAMERA_I2CEffectExAsyncCore(CAMERASelect camera, CAMERAContext context, CAMERAEffect effect,
+                                                CAMERACallback callback, void *arg) {
+    CAMERAResult state = CAMERA_CheckRetryCount();
+    u8 data[CAMERA_COMMAND_BUFFER_SIZE(3)];
+    OSIntrMode enabled;
+
+    if (state == CAMERA_RESULT_FATAL_ERROR) {
+        return state;
+    }
+    if (camera != CAMERA_SELECT_IN && camera != CAMERA_SELECT_OUT && camera != CAMERA_SELECT_BOTH) {
+        return CAMERA_RESULT_ILLEGAL_PARAMETER;
+    }
+    if (context != CAMERA_CONTEXT_A && context != CAMERA_CONTEXT_B && context != CAMERA_CONTEXT_BOTH) {
+        return CAMERA_RESULT_ILLEGAL_PARAMETER;
+    }
+    switch (effect) {
+    case CAMERA_EFFECT_NONE:
+    case CAMERA_EFFECT_MONO:
+    case CAMERA_EFFECT_SEPIA:
+    case CAMERA_EFFECT_NEGATIVE:
+    case CAMERA_EFFECT_NEGAFILM:
+    case CAMERA_EFFECT_SEPIA01:
+        break;
+    default:
+        return CAMERA_RESULT_ILLEGAL_PARAMETER;
+    }
+    enabled = OS_DisableInterrupts();
+    if (sCameraWork.busy) {
+        OS_RestoreInterrupts(enabled);
+        return state == CAMERA_RESULT_ILLEGAL_STATUS ? CAMERA_RESULT_ILLEGAL_STATUS : CAMERA_RESULT_BUSY;
+    }
+    sCameraWork.busy = TRUE;
+    OS_RestoreInterrupts(enabled);
+    sCameraWork.callback = callback;
+    sCameraWork.callbackArg = arg;
+    data[0] = camera;
+    data[1] = context;
+    data[2] = effect;
+    sCameraWork.sentCamera = camera;
+    sCameraWork.sentContext = context;
+    sCameraWork.sentValue = effect;
+    if (!CameraSendPxiCommand(CAMERA_PXI_COMMAND_EFFECT, 3, data[0])) {
+        return CAMERA_RESULT_SEND_ERROR;
+    }
+    CameraSendPxiData(&data[1]);
+    return CAMERA_RESULT_SUCCESS;
+}
+
+CAMERAResult CAMERA_I2CEffectExCore(CAMERASelect camera, CAMERAContext context, CAMERAEffect effect) {
+    CAMERAResult result = CAMERA_I2CEffectExAsyncCore(camera, context, effect, CameraSyncCallback, NULL);
+
+    sCameraWork.result = result;
+    if (result == CAMERA_RESULT_SUCCESS) {
+        CameraWaitBusy();
+    }
+    return sCameraWork.result;
+}
+
+static CAMERAResult CAMERA_I2CFlipExAsyncCore(CAMERASelect camera, CAMERAContext context, CAMERAFlip flip,
+                                              CAMERACallback callback, void *arg) {
+    CAMERAResult state = CAMERA_CheckRetryCount();
+    u8 data[CAMERA_COMMAND_BUFFER_SIZE(3)];
+    OSIntrMode enabled;
+
+    if (state == CAMERA_RESULT_FATAL_ERROR) {
+        return state;
+    }
+    if (camera != CAMERA_SELECT_IN && camera != CAMERA_SELECT_OUT && camera != CAMERA_SELECT_BOTH) {
+        return CAMERA_RESULT_ILLEGAL_PARAMETER;
+    }
+    if (context != CAMERA_CONTEXT_A && context != CAMERA_CONTEXT_B && context != CAMERA_CONTEXT_BOTH) {
+        return CAMERA_RESULT_ILLEGAL_PARAMETER;
+    }
+    switch (flip) {
+    case CAMERA_FLIP_NONE:
+    case CAMERA_FLIP_VERTICAL:
+    case CAMERA_FLIP_HORIZONTAL:
+    case CAMERA_FLIP_REVERSE:
+        break;
+    default:
+        return CAMERA_RESULT_ILLEGAL_PARAMETER;
+    }
+    enabled = OS_DisableInterrupts();
+    if (sCameraWork.busy) {
+        OS_RestoreInterrupts(enabled);
+        return state == CAMERA_RESULT_ILLEGAL_STATUS ? CAMERA_RESULT_ILLEGAL_STATUS : CAMERA_RESULT_BUSY;
+    }
+    sCameraWork.busy = TRUE;
+    OS_RestoreInterrupts(enabled);
+    sCameraWork.callback = callback;
+    sCameraWork.callbackArg = arg;
+    data[0] = camera;
+    data[1] = context;
+    data[2] = flip;
+    sCameraWork.sentCamera = camera;
+    sCameraWork.sentContext = context;
+    sCameraWork.sentValue = flip;
+    if (!CameraSendPxiCommand(CAMERA_PXI_COMMAND_FLIP, 3, data[0])) {
+        return CAMERA_RESULT_SEND_ERROR;
+    }
+    CameraSendPxiData(&data[1]);
+    return CAMERA_RESULT_SUCCESS;
+}
+
+static CAMERAResult CAMERA_I2CPhotoModeAsyncCore(CAMERASelect camera, CAMERAPhotoMode mode, CAMERACallback callback,
+                                                 void *arg) {
+    CAMERAResult state = CAMERA_CheckRetryCount();
+    u8 data[CAMERA_COMMAND_BUFFER_SIZE(2)];
+    OSIntrMode enabled;
+
+    if (state == CAMERA_RESULT_FATAL_ERROR) {
+        return state;
+    }
+    if (camera != CAMERA_SELECT_IN && camera != CAMERA_SELECT_OUT && camera != CAMERA_SELECT_BOTH) {
+        return CAMERA_RESULT_ILLEGAL_PARAMETER;
+    }
+    switch (mode) {
+    case CAMERA_PHOTO_MODE_NORMAL:
+    case CAMERA_PHOTO_MODE_PORTRAIT:
+    case CAMERA_PHOTO_MODE_LANDSCAPE:
+    case CAMERA_PHOTO_MODE_NIGHTVIEW:
+    case CAMERA_PHOTO_MODE_LETTER:
+        break;
+    default:
+        return CAMERA_RESULT_ILLEGAL_PARAMETER;
+    }
+    enabled = OS_DisableInterrupts();
+    if (sCameraWork.busy) {
+        OS_RestoreInterrupts(enabled);
+        return state == CAMERA_RESULT_ILLEGAL_STATUS ? CAMERA_RESULT_ILLEGAL_STATUS : CAMERA_RESULT_BUSY;
+    }
+    sCameraWork.busy = TRUE;
+    OS_RestoreInterrupts(enabled);
+    sCameraWork.callback = callback;
+    sCameraWork.callbackArg = arg;
+    data[0] = camera;
+    data[1] = mode;
+    sCameraWork.sentCamera = camera;
+    sCameraWork.sentValue = mode;
+    if (!CameraSendPxiCommand(CAMERA_PXI_COMMAND_PHOTO_MODE, 2, data[0])) {
+        return CAMERA_RESULT_SEND_ERROR;
+    }
+    CameraSendPxiData(&data[1]);
+    return CAMERA_RESULT_SUCCESS;
+}
+
+static CAMERAResult CAMERA_I2CWhiteBalanceAsyncCore(CAMERASelect camera, CAMERAWhiteBalance whiteBalance,
+                                                    CAMERACallback callback, void *arg) {
+    CAMERAResult state = CAMERA_CheckRetryCount();
+    u8 data[CAMERA_COMMAND_BUFFER_SIZE(2)];
+    OSIntrMode enabled;
+
+    if (state == CAMERA_RESULT_FATAL_ERROR) {
+        return state;
+    }
+    if (camera != CAMERA_SELECT_IN && camera != CAMERA_SELECT_OUT && camera != CAMERA_SELECT_BOTH) {
+        return CAMERA_RESULT_ILLEGAL_PARAMETER;
+    }
+    switch (whiteBalance) {
+    case CAMERA_WHITE_BALANCE_AUTO:
+    case CAMERA_WHITE_BALANCE_3200K:
+    case CAMERA_WHITE_BALANCE_4150K:
+    case CAMERA_WHITE_BALANCE_5200K:
+    case CAMERA_WHITE_BALANCE_6000K:
+    case CAMERA_WHITE_BALANCE_7000K:
+        break;
+    default:
+        return CAMERA_RESULT_ILLEGAL_PARAMETER;
+    }
+    enabled = OS_DisableInterrupts();
+    if (sCameraWork.busy) {
+        OS_RestoreInterrupts(enabled);
+        return state == CAMERA_RESULT_ILLEGAL_STATUS ? CAMERA_RESULT_ILLEGAL_STATUS : CAMERA_RESULT_BUSY;
+    }
+    sCameraWork.busy = TRUE;
+    OS_RestoreInterrupts(enabled);
+    sCameraWork.callback = callback;
+    sCameraWork.callbackArg = arg;
+    data[0] = camera;
+    data[1] = whiteBalance;
+    sCameraWork.sentCamera = camera;
+    sCameraWork.sentValue = whiteBalance;
+    if (!CameraSendPxiCommand(CAMERA_PXI_COMMAND_WHITE_BALANCE, 2, data[0])) {
+        return CAMERA_RESULT_SEND_ERROR;
+    }
+    CameraSendPxiData(&data[1]);
+    return CAMERA_RESULT_SUCCESS;
+}
+
+static CAMERAResult CAMERA_I2CExposureAsyncCore(CAMERASelect camera, int exposure, CAMERACallback callback, void *arg) {
+    CAMERAResult state = CAMERA_CheckRetryCount();
+    u8 data[CAMERA_COMMAND_BUFFER_SIZE(2)];
+    OSIntrMode enabled;
+
+    if (state == CAMERA_RESULT_FATAL_ERROR) {
+        return state;
+    }
+    if (camera != CAMERA_SELECT_IN && camera != CAMERA_SELECT_OUT && camera != CAMERA_SELECT_BOTH) {
+        return CAMERA_RESULT_ILLEGAL_PARAMETER;
+    }
+    if (exposure < -5 || exposure > 5) {
+        return CAMERA_RESULT_ILLEGAL_PARAMETER;
+    }
+    enabled = OS_DisableInterrupts();
+    if (sCameraWork.busy) {
+        OS_RestoreInterrupts(enabled);
+        return state == CAMERA_RESULT_ILLEGAL_STATUS ? CAMERA_RESULT_ILLEGAL_STATUS : CAMERA_RESULT_BUSY;
+    }
+    sCameraWork.busy = TRUE;
+    OS_RestoreInterrupts(enabled);
+    sCameraWork.callback = callback;
+    sCameraWork.callbackArg = arg;
+    data[0] = camera;
+    data[1] = exposure;
+    sCameraWork.sentCamera = camera;
+    sCameraWork.sentValue = exposure;
+    if (!CameraSendPxiCommand(CAMERA_PXI_COMMAND_EXPOSURE, 2, data[0])) {
+        return CAMERA_RESULT_SEND_ERROR;
+    }
+    CameraSendPxiData(&data[1]);
+    return CAMERA_RESULT_SUCCESS;
+}
+
+static CAMERAResult CAMERA_I2CSharpnessAsyncCore(CAMERASelect camera, int sharpness, CAMERACallback callback,
+                                                 void *arg) {
+    CAMERAResult state = CAMERA_CheckRetryCount();
+    u8 data[CAMERA_COMMAND_BUFFER_SIZE(2)];
+    OSIntrMode enabled;
+
+    if (state == CAMERA_RESULT_FATAL_ERROR) {
+        return state;
+    }
+    if (camera != CAMERA_SELECT_IN && camera != CAMERA_SELECT_OUT && camera != CAMERA_SELECT_BOTH) {
+        return CAMERA_RESULT_ILLEGAL_PARAMETER;
+    }
+    if (sharpness < -3 || sharpness > 5) {
+        return CAMERA_RESULT_ILLEGAL_PARAMETER;
+    }
+    enabled = OS_DisableInterrupts();
+    if (sCameraWork.busy) {
+        OS_RestoreInterrupts(enabled);
+        return state == CAMERA_RESULT_ILLEGAL_STATUS ? CAMERA_RESULT_ILLEGAL_STATUS : CAMERA_RESULT_BUSY;
+    }
+    sCameraWork.busy = TRUE;
+    OS_RestoreInterrupts(enabled);
+    sCameraWork.callback = callback;
+    sCameraWork.callbackArg = arg;
+    data[0] = camera;
+    data[1] = sharpness;
+    sCameraWork.sentCamera = camera;
+    sCameraWork.sentValue = sharpness;
+    if (!CameraSendPxiCommand(CAMERA_PXI_COMMAND_SHARPNESS, 2, data[0])) {
+        return CAMERA_RESULT_SEND_ERROR;
+    }
+    CameraSendPxiData(&data[1]);
+    return CAMERA_RESULT_SUCCESS;
+}
+
+static CAMERAResult CAMERA_I2CAutoExposureAsyncCore(CAMERASelect camera, BOOL on, CAMERACallback callback, void *arg) {
+    CAMERAResult state = CAMERA_CheckRetryCount();
+    u8 data[CAMERA_COMMAND_BUFFER_SIZE(2)];
+    OSIntrMode enabled;
+
+    if (state == CAMERA_RESULT_FATAL_ERROR) {
+        return state;
+    }
+    if (camera != CAMERA_SELECT_IN && camera != CAMERA_SELECT_OUT && camera != CAMERA_SELECT_BOTH) {
+        return CAMERA_RESULT_ILLEGAL_PARAMETER;
+    }
+    enabled = OS_DisableInterrupts();
+    if (sCameraWork.busy) {
+        OS_RestoreInterrupts(enabled);
+        return state == CAMERA_RESULT_ILLEGAL_STATUS ? CAMERA_RESULT_ILLEGAL_STATUS : CAMERA_RESULT_BUSY;
+    }
+    sCameraWork.busy = TRUE;
+    OS_RestoreInterrupts(enabled);
+    sCameraWork.callback = callback;
+    sCameraWork.callbackArg = arg;
+    data[0] = camera;
+    data[1] = on != FALSE;
+    sCameraWork.sentCamera = camera;
+    sCameraWork.sentValue = on;
+    if (!CameraSendPxiCommand(CAMERA_PXI_COMMAND_AUTO_EXPOSURE, 2, data[0])) {
+        return CAMERA_RESULT_SEND_ERROR;
+    }
+    CameraSendPxiData(&data[1]);
+    return CAMERA_RESULT_SUCCESS;
+}
+
+CAMERAResult CAMERA_I2CAutoExposureCore(CAMERASelect camera, BOOL on) {
+    CAMERAResult result = CAMERA_I2CAutoExposureAsyncCore(camera, on, CameraSyncCallback, NULL);
+
+    sCameraWork.result = result;
+    if (result == CAMERA_RESULT_SUCCESS) {
+        CameraWaitBusy();
+    }
+    return sCameraWork.result;
+}
+
+static CAMERAResult CAMERA_I2CAutoWhiteBalanceAsyncCore(CAMERASelect camera, BOOL on, CAMERACallback callback,
+                                                        void *arg) {
+    CAMERAResult state = CAMERA_CheckRetryCount();
+    u8 data[CAMERA_COMMAND_BUFFER_SIZE(2)];
+    OSIntrMode enabled;
+
+    if (state == CAMERA_RESULT_FATAL_ERROR) {
+        return state;
+    }
+    if (camera != CAMERA_SELECT_IN && camera != CAMERA_SELECT_OUT && camera != CAMERA_SELECT_BOTH) {
+        return CAMERA_RESULT_ILLEGAL_PARAMETER;
+    }
+    // The white balance is automatic only while its setting is the first
+    if ((camera & CAMERA_SELECT_IN) && sCameraWork.settings[0].whiteBalance != CAMERA_WHITE_BALANCE_AUTO) {
+        return CAMERA_RESULT_INVALID_COMMAND;
+    }
+    if ((camera & CAMERA_SELECT_OUT) && sCameraWork.settings[1].whiteBalance != CAMERA_WHITE_BALANCE_AUTO) {
+        return CAMERA_RESULT_INVALID_COMMAND;
+    }
+    enabled = OS_DisableInterrupts();
+    if (sCameraWork.busy) {
+        OS_RestoreInterrupts(enabled);
+        return state == CAMERA_RESULT_ILLEGAL_STATUS ? CAMERA_RESULT_ILLEGAL_STATUS : CAMERA_RESULT_BUSY;
+    }
+    sCameraWork.busy = TRUE;
+    OS_RestoreInterrupts(enabled);
+    sCameraWork.callback = callback;
+    sCameraWork.callbackArg = arg;
+    data[0] = camera;
+    data[1] = on != FALSE;
+    sCameraWork.sentCamera = camera;
+    sCameraWork.sentValue = on;
+    if (!CameraSendPxiCommand(CAMERA_PXI_COMMAND_AUTO_WHITE_BALANCE, 2, data[0])) {
+        return CAMERA_RESULT_SEND_ERROR;
+    }
+    CameraSendPxiData(&data[1]);
+    return CAMERA_RESULT_SUCCESS;
+}
+
+CAMERAResult CAMERA_I2CAutoWhiteBalanceCore(CAMERASelect camera, BOOL on) {
+    CAMERAResult result = CAMERA_I2CAutoWhiteBalanceAsyncCore(camera, on, CameraSyncCallback, NULL);
+
+    sCameraWork.result = result;
+    if (result == CAMERA_RESULT_SUCCESS) {
+        CameraWaitBusy();
+    }
+    return sCameraWork.result;
+}
+
+static CAMERAResult CAMERA_SetLEDAsyncCore(BOOL isBlink, CAMERACallback callback, void *arg) {
+    OSIntrMode enabled = OS_DisableInterrupts();
+
+    if (sCameraWork.busy) {
+        OS_RestoreInterrupts(enabled);
+        return CAMERA_RESULT_BUSY;
+    }
+    sCameraWork.busy = TRUE;
+    OS_RestoreInterrupts(enabled);
+    sCameraWork.callback = callback;
+    sCameraWork.callbackArg = arg;
+    sCameraWork.sentValue = isBlink;
+    return CameraSendPxiCommand(CAMERA_PXI_COMMAND_SET_LED, 1, isBlink) ? CAMERA_RESULT_SUCCESS
+                                                                        : CAMERA_RESULT_SEND_ERROR;
+}
+
+// Sends the first word of a command, with its first byte of data, after turning the interface's clock on
+static BOOL CameraSendPxiCommand(u32 command, u32 length, u8 data) {
+    u32 word = ((command << 8) & 0x7f00) | CAMERA_PXI_START | ((length << 16) & 0xff0000) | (data & 0xff);
+    OSIntrMode enabled;
+    u16 clk;
+    int wasOn;
+
+    enabled = OS_DisableInterrupts();
+    clk = reg_SCFG_CLK;
+    reg_SCFG_CLK = clk | SCFG_CLK_CAMERA;
+    OS_RestoreInterrupts(enabled);
+    wasOn = clk & SCFG_CLK_CAMERA;
+    if (!wasOn) {
+        OS_SpinWaitSysCycles(0x14);
+    }
+    sCameraWork.clockWasOn = wasOn >> 8;
+    if (PXI_SendWordByFifo(PXI_FIFO_TAG_CAMERA, word, FALSE) < 0) {
+        if (!sCameraWork.clockWasOn) {
+            enabled = OS_DisableInterrupts();
+            reg_SCFG_CLK = reg_SCFG_CLK & ~SCFG_CLK_CAMERA;
+            OS_RestoreInterrupts(enabled);
+        }
+        return FALSE;
+    }
+    return TRUE;
+}
+
+// Sends the next three bytes of a command
+static void CameraSendPxiData(const u8 *data) {
+    u32 word = (data[0] << 16) | (data[1] << 8) | data[2];
+
+    while (PXI_SendWordByFifo(PXI_FIFO_TAG_CAMERA, word, FALSE) < 0) {
+    }
+}
+
+// BUG: the stores for context B of a command with a context are outside the test of the camera, so a command for the
+// outer camera also sets context B of the inner camera and the other way round. The cached settings of the camera
+// that was not addressed are then wrong, and the thread sends them when it starts the cameras again.
+#ifdef BUGFIX
+#define SENT_CONTEXT_B(camera) ((sCameraWork.sentCamera & (camera)) && (sCameraWork.sentContext & CAMERA_CONTEXT_B))
+#else
+#define SENT_CONTEXT_B(camera) (sCameraWork.sentContext & CAMERA_CONTEXT_B)
+#endif
+
+// The camera interface's PXI callback: puts together an answer from its words and, with the whole answer, updates
+// what the settings are
+static void CameraPxiCallback(PXIFifoTag tag, u32 data, BOOL err) {
+    CAMERAResult result;
+
+    if (err) {
+        CameraCallCallbackAndUnlock(CAMERA_RESULT_FATAL_ERROR);
+        return;
+    }
+    if (data & CAMERA_PXI_START) {
+        sCameraWork.length = (data & 0xff0000) >> 16;
+        sCameraWork.received = 0;
+        sCameraWork.command = (data & 0x7f00) >> 8;
+        sCameraWork.response = data & 0xff;
+    } else {
+        if (sCameraWork.buffer == NULL) {
+            CameraCallCallbackAndUnlock(CAMERA_RESULT_FATAL_ERROR);
+            return;
+        }
+        if (sCameraWork.received < sCameraWork.bufferSize) {
+            sCameraWork.buffer[sCameraWork.received++] = (data & 0xff0000) >> 16;
+        }
+        if (sCameraWork.received < sCameraWork.bufferSize) {
+            sCameraWork.buffer[sCameraWork.received++] = (data & 0xff00) >> 8;
+        }
+        if (sCameraWork.received < sCameraWork.bufferSize) {
+            sCameraWork.buffer[sCameraWork.received++] = data;
+        }
+    }
+    if (sCameraWork.received < sCameraWork.length - 1) {
+        return;
+    }
+    if (sCameraWork.stopClock || (!sCameraWork.keepClock && !sCameraWork.clockWasOn)) {
+        OSIntrMode enabled = OS_DisableInterrupts();
+
+        reg_SCFG_CLK = reg_SCFG_CLK & ~SCFG_CLK_CAMERA;
+        OS_RestoreInterrupts(enabled);
+    }
+    sCameraWork.keepClock = FALSE;
+    sCameraWork.stopClock = FALSE;
+    result = CAMERA_RESULT_SUCCESS;
+    switch (sCameraWork.response) {
+    case CAMERA_PXI_RESULT_SUCCESS:
+        switch (sCameraWork.command) {
+        case CAMERA_PXI_COMMAND_ACTIVATE:
+            sCameraWork.settings[1].ledBlink = sCameraWork.sentValue;
+            break;
+        case CAMERA_PXI_COMMAND_CONTEXT_SWITCH:
+            if (sCameraWork.sentCamera & CAMERA_SELECT_IN) {
+                sCameraWork.settings[0].context = sCameraWork.sentValue;
+            }
+            if (sCameraWork.sentCamera & CAMERA_SELECT_OUT) {
+                sCameraWork.settings[1].context = sCameraWork.sentValue;
+            }
+            break;
+        case CAMERA_PXI_COMMAND_SIZE:
+            if (sCameraWork.sentCamera & CAMERA_SELECT_IN) {
+                if (sCameraWork.sentContext & CAMERA_CONTEXT_A) {
+                    sCameraWork.settings[0].size[0] = sCameraWork.sentValue;
+                }
+            }
+            if (SENT_CONTEXT_B(CAMERA_SELECT_IN)) {
+                sCameraWork.settings[0].size[1] = sCameraWork.sentValue;
+            }
+            if (sCameraWork.sentCamera & CAMERA_SELECT_OUT) {
+                if (sCameraWork.sentContext & CAMERA_CONTEXT_A) {
+                    sCameraWork.settings[1].size[0] = sCameraWork.sentValue;
+                }
+            }
+            if (SENT_CONTEXT_B(CAMERA_SELECT_OUT)) {
+                sCameraWork.settings[1].size[1] = sCameraWork.sentValue;
+            }
+            break;
+        case CAMERA_PXI_COMMAND_FRAME_RATE:
+            if (sCameraWork.sentCamera & CAMERA_SELECT_IN) {
+                sCameraWork.settings[0].frameRate = sCameraWork.sentValue;
+            }
+            if (sCameraWork.sentCamera & CAMERA_SELECT_OUT) {
+                sCameraWork.settings[1].frameRate = sCameraWork.sentValue;
+            }
+            break;
+        case CAMERA_PXI_COMMAND_EFFECT:
+            if (sCameraWork.sentCamera & CAMERA_SELECT_IN) {
+                if (sCameraWork.sentContext & CAMERA_CONTEXT_A) {
+                    sCameraWork.settings[0].effect[0] = sCameraWork.sentValue;
+                }
+            }
+            if (SENT_CONTEXT_B(CAMERA_SELECT_IN)) {
+                sCameraWork.settings[0].effect[1] = sCameraWork.sentValue;
+            }
+            if (sCameraWork.sentCamera & CAMERA_SELECT_OUT) {
+                if (sCameraWork.sentContext & CAMERA_CONTEXT_A) {
+                    sCameraWork.settings[1].effect[0] = sCameraWork.sentValue;
+                }
+            }
+            if (SENT_CONTEXT_B(CAMERA_SELECT_OUT)) {
+                sCameraWork.settings[1].effect[1] = sCameraWork.sentValue;
+            }
+            break;
+        case CAMERA_PXI_COMMAND_FLIP:
+            if (sCameraWork.sentCamera & CAMERA_SELECT_IN) {
+                if (sCameraWork.sentContext & CAMERA_CONTEXT_A) {
+                    sCameraWork.settings[0].flip[0] = sCameraWork.sentValue;
+                }
+            }
+            if (SENT_CONTEXT_B(CAMERA_SELECT_IN)) {
+                sCameraWork.settings[0].flip[1] = sCameraWork.sentValue;
+            }
+            if (sCameraWork.sentCamera & CAMERA_SELECT_OUT) {
+                if (sCameraWork.sentContext & CAMERA_CONTEXT_A) {
+                    sCameraWork.settings[1].flip[0] = sCameraWork.sentValue;
+                }
+            }
+            if (SENT_CONTEXT_B(CAMERA_SELECT_OUT)) {
+                sCameraWork.settings[1].flip[1] = sCameraWork.sentValue;
+            }
+            break;
+        case CAMERA_PXI_COMMAND_PHOTO_MODE:
+            if (sCameraWork.sentCamera & CAMERA_SELECT_IN) {
+                sCameraWork.settings[0].photoMode = sCameraWork.sentValue;
+                switch (sCameraWork.settings[0].photoMode) {
+                case CAMERA_PHOTO_MODE_NORMAL:
+                    sCameraWork.settings[0].sharpness = 0;
+                    sCameraWork.settings[0].exposure = 0;
+                    sCameraWork.settings[0].whiteBalance = CAMERA_WHITE_BALANCE_AUTO;
+                    break;
+                case CAMERA_PHOTO_MODE_PORTRAIT:
+                    sCameraWork.settings[0].sharpness = -2;
+                    sCameraWork.settings[0].exposure = 0;
+                    sCameraWork.settings[0].whiteBalance = CAMERA_WHITE_BALANCE_AUTO;
+                    break;
+                case CAMERA_PHOTO_MODE_LANDSCAPE:
+                    sCameraWork.settings[0].sharpness = 1;
+                    sCameraWork.settings[0].exposure = 0;
+                    sCameraWork.settings[0].whiteBalance = CAMERA_WHITE_BALANCE_5200K;
+                    break;
+                case CAMERA_PHOTO_MODE_NIGHTVIEW:
+                    sCameraWork.settings[0].sharpness = -1;
+                    sCameraWork.settings[0].exposure = 2;
+                    sCameraWork.settings[0].whiteBalance = CAMERA_WHITE_BALANCE_AUTO;
+                    break;
+                case CAMERA_PHOTO_MODE_LETTER:
+                    sCameraWork.settings[0].sharpness = 2;
+                    sCameraWork.settings[0].exposure = 2;
+                    sCameraWork.settings[0].whiteBalance = CAMERA_WHITE_BALANCE_AUTO;
+                    break;
+                }
+            }
+            if (sCameraWork.sentCamera & CAMERA_SELECT_OUT) {
+                sCameraWork.settings[1].photoMode = sCameraWork.sentValue;
+                switch (sCameraWork.settings[1].photoMode) {
+                case CAMERA_PHOTO_MODE_NORMAL:
+                    sCameraWork.settings[1].sharpness = 0;
+                    sCameraWork.settings[1].exposure = 0;
+                    sCameraWork.settings[1].whiteBalance = CAMERA_WHITE_BALANCE_AUTO;
+                    break;
+                case CAMERA_PHOTO_MODE_PORTRAIT:
+                    sCameraWork.settings[1].sharpness = -2;
+                    sCameraWork.settings[1].exposure = 0;
+                    sCameraWork.settings[1].whiteBalance = CAMERA_WHITE_BALANCE_AUTO;
+                    break;
+                case CAMERA_PHOTO_MODE_LANDSCAPE:
+                    sCameraWork.settings[1].sharpness = 1;
+                    sCameraWork.settings[1].exposure = 0;
+                    sCameraWork.settings[1].whiteBalance = CAMERA_WHITE_BALANCE_5200K;
+                    break;
+                case CAMERA_PHOTO_MODE_NIGHTVIEW:
+                    sCameraWork.settings[1].sharpness = -1;
+                    sCameraWork.settings[1].exposure = 2;
+                    sCameraWork.settings[1].whiteBalance = CAMERA_WHITE_BALANCE_AUTO;
+                    break;
+                case CAMERA_PHOTO_MODE_LETTER:
+                    sCameraWork.settings[1].sharpness = 2;
+                    sCameraWork.settings[1].exposure = 2;
+                    sCameraWork.settings[1].whiteBalance = CAMERA_WHITE_BALANCE_AUTO;
+                    break;
+                }
+            }
+            break;
+        case CAMERA_PXI_COMMAND_WHITE_BALANCE:
+            if (sCameraWork.sentCamera & CAMERA_SELECT_IN) {
+                sCameraWork.settings[0].whiteBalance = sCameraWork.sentValue;
+                sCameraWork.settings[0].autoWhiteBalance = TRUE;
+            }
+            if (sCameraWork.sentCamera & CAMERA_SELECT_OUT) {
+                sCameraWork.settings[1].whiteBalance = sCameraWork.sentValue;
+                sCameraWork.settings[1].autoWhiteBalance = TRUE;
+            }
+            break;
+        case CAMERA_PXI_COMMAND_EXPOSURE:
+            if (sCameraWork.sentCamera & CAMERA_SELECT_IN) {
+                sCameraWork.settings[0].exposure = sCameraWork.sentValue;
+            }
+            if (sCameraWork.sentCamera & CAMERA_SELECT_OUT) {
+                sCameraWork.settings[1].exposure = sCameraWork.sentValue;
+            }
+            break;
+        case CAMERA_PXI_COMMAND_SHARPNESS:
+            if (sCameraWork.sentCamera & CAMERA_SELECT_IN) {
+                sCameraWork.settings[0].sharpness = sCameraWork.sentValue;
+            }
+            if (sCameraWork.sentCamera & CAMERA_SELECT_OUT) {
+                sCameraWork.settings[1].sharpness = sCameraWork.sentValue;
+            }
+            break;
+        case CAMERA_PXI_COMMAND_AUTO_EXPOSURE:
+            if (sCameraWork.sentCamera & CAMERA_SELECT_IN) {
+                sCameraWork.settings[0].autoExposure = sCameraWork.sentValue;
+            }
+            if (sCameraWork.sentCamera & CAMERA_SELECT_OUT) {
+                sCameraWork.settings[1].autoExposure = sCameraWork.sentValue;
+            }
+            break;
+        case CAMERA_PXI_COMMAND_AUTO_WHITE_BALANCE:
+            if (sCameraWork.sentCamera & CAMERA_SELECT_IN) {
+                sCameraWork.settings[0].autoWhiteBalance = sCameraWork.sentValue;
+            }
+            if (sCameraWork.sentCamera & CAMERA_SELECT_OUT) {
+                sCameraWork.settings[1].autoWhiteBalance = sCameraWork.sentValue;
+            }
+            break;
+        case CAMERA_PXI_COMMAND_SET_LED:
+            sCameraWork.settings[1].ledBlink = sCameraWork.sentValue;
+            break;
+        }
+        break;
+    case CAMERA_PXI_RESULT_SUCCESS_FALSE:
+        result = CAMERA_RESULT_SUCCESS_FALSE;
+        break;
+    case CAMERA_PXI_RESULT_ILLEGAL_STATUS:
+        result = CAMERA_RESULT_ILLEGAL_STATUS;
+        break;
+    case CAMERA_PXI_RESULT_INVALID_COMMAND:
+    case CAMERA_PXI_RESULT_INVALID_PARAMETER:
+    case CAMERA_PXI_RESULT_BUSY:
+    default:
+        result = CAMERA_RESULT_FATAL_ERROR;
+        break;
+    }
+    CameraCallCallbackAndUnlock(result);
+    if (result == CAMERA_RESULT_ILLEGAL_STATUS) {
+        CAMERA_GoReboot();
+    }
+}
+
+// The synchronous functions' callback
+static void CameraSyncCallback(CAMERAResult result, void *arg) {
+    sCameraWork.result = result;
+}
+
+// Ends the command that is on its way: calls its callback with the result
+static void CameraCallCallbackAndUnlock(CAMERAResult result) {
+    CAMERACallback callback;
+
+    if (sCameraWork.busy) {
+        sCameraWork.busy = FALSE;
+    }
+    callback = sCameraWork.callback;
+    if (callback == NULL) {
+        return;
+    }
+    sCameraWork.callback = NULL;
+    callback(result, sCameraWork.callbackArg);
+}
+
+// Waits for the command to end, by reading the PXI FIFO itself when the interrupts are off
+static void CameraWaitBusy(void) {
+    CAMERAWork *work = &sCameraWork;
+
+    while (work->busy) {
+        if (OS_GetCpsrIrq() == 0x80 || reg_OS_IME == 0) {
+            PXIi_HandlerRecvFifoNotEmpty();
+        }
+    }
+}
+
+// The PM callback, for the system sleeping and exiting: deactivates the cameras
+static void CameraStandbyCallback(void *arg) {
+    CAMERA_I2CActivateCore(CAMERA_SELECT_NONE);
+}

@@ -1,0 +1,25 @@
+MusicalInfoWords_Text_Men = men
+MusicalInfoWords_Text_Girls = girls
+MusicalInfoWords_Text_Women = women
+MusicalInfoWords_Text_Boys = boys
+MusicalInfoWords_Text_Cool = cool
+MusicalInfoWords_Text_Cute = cute
+MusicalInfoWords_Text_Elegant = elegant
+MusicalInfoWords_Text_Unique = unique
+MusicalInfoWords_Text_Quirky = quirky
+MusicalInfoWords_Text_Balanced = balanced
+MusicalInfoWords_Text_Empty =       \x{ffff}
+MusicalInfoWords_Text_Empty_2 =        \x{ffff}
+MusicalInfoWords_Text_Empty_3 =         \x{ffff}
+MusicalInfoWords_Text_Empty_4 =        \x{ffff}
+MusicalInfoWords_Text_Empty_5 =        \x{ffff}
+MusicalInfoWords_Text_Empty_6 =        \x{ffff}
+MusicalInfoWords_Text_Ear = ear
+MusicalInfoWords_Text_Head = head
+MusicalInfoWords_Text_Face = face
+MusicalInfoWords_Text_Face_2 = face
+MusicalInfoWords_Text_Body = body
+MusicalInfoWords_Text_Waist = waist
+MusicalInfoWords_Text_Arm = arm
+MusicalInfoWords_Text_Face_3 = face
+\pad{f0}

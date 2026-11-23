@@ -1,0 +1,4553 @@
+// The battle effect VM, which runs the move and effect scripts: their commands (swan's MOVE_SCRCMD) move the camera
+// and the Pokémon, add cell actors and particles, change the background and play the sounds of each move's
+// animation. The name is the ROM's string, from GFL_HeapAllocate's asserts. BtlvEffect_QueueCommands and MOVE_SCRCMD
+// are swan's names; the others are ours
+
+#include "moveeffect/btlv_effvm.h"
+#include "types.h"
+#include "battle/btl_pokeparam.h"
+#include "battle/btlv.h"
+#include "battle/graphic/btlv_bg.h"
+#include "battle/graphic/btlv_camera.h"
+#include "battle/graphic/btlv_clact.h"
+#include "battle/graphic/btlv_gauge.h"
+#include "battle/graphic/btlv_mcss.h"
+#include "constants/arc.h"
+#include "constants/battle.h"
+#include "constants/moves.h"
+#include "gfl/arc.h"
+#include "gfl/arc_util.h"
+#include "gfl/bg_sys.h"
+#include "gfl/g3d.h"
+#include "gfl/graphics.h"
+#include "gfl/heap.h"
+#include "gfl/net.h"
+#include "gfl/particle.h"
+#include "gfl/sound.h"
+#include "gfl/std.h"
+#include "gfl/tcb.h"
+#include "moveeffect/btlv_effect.h"
+#include "nitro/fx.h"
+#include "nitro/gx.h"
+#include "nitro/hw.h"
+#include "nnsys/g3d.h"
+#include "pml/item.h"
+#include "system/palanm.h"
+#include "system/vm.h"
+
+struct BtlvEffvm {
+    u32 flipSides : 1;   // bit 0   swaps the sides of the positions; nothing in the file sets it
+    u32 cameraReset : 1; // bit 1   the camera returns to its default with the effect's end
+    u32 seDelayed : 1;   // bit 2   a delayed sound effect waits (BtlvEffvm_PlaySEAt)
+    u32 seSliding : 1;   // bit 3   a sound player's parameter moves (BtlvEffvm_SlideSE)
+    u32 bgMoved : 1;     // bit 4   BG 3 was loaded; the end restores its priority and offset
+    u32 alphaBlend : 1;  // bit 5   the blend was changed; the end restores it
+    u32 isEffect
+        : 1; // bit 6   the script is an effect's, from ARCID_BTLV_EFFVM_EFFECT_SCRIPTS, rather than a move's, from 65
+    u32 paused : 1;             // bit 7   until BtlvEffvm_Resume
+    u32 windowTask : 1;         // bit 8   BtlvEffect_QueueCommands' window task runs
+    u32 bgmLowered : 1;         // bit 9
+    u32 bgmLowerRequested : 1;  // bit 10
+    u32 cryDelayed : 1;         // bit 11
+    u32 sePlayed : 1;           // bit 12  the end stops the sounds
+    u32 mcssScaled : 1;         // bit 13
+    u32 padding0_14 : 1;        // bit 14  never used
+    u32 cameraLocked : 1;       // bit 15  the camera commands do nothing
+    u32 particleLoading : 1;    // bit 16  a particle resource uploads in the V-blank
+    u32 substituteRestore : 1;  // bit 17
+    u32 skipReverseRestore : 1; // bit 18  set for effect 0x27e, cleared for 0x291; suppresses the automatic
+                                // SetPokemonReverse(TRUE) at script end
+    u32 paletteAnim : 1;        // bit 19
+    u32 padding0_20 : 12;       // bits 20-31  never used
+    s32 value;                  // 0x004  the scripts' value register, variable 16
+    TCBManager *tcbManager;     // 0x008
+    ParticleSystem *particles[EFFVM_PARTICLE_CAPACITY]; // 0x00c
+    s32 particleIds[EFFVM_PARTICLE_CAPACITY];           // 0x04c  each particle system's file, -1 for none
+    u32 emitterCounts[EFFVM_PARTICLE_CAPACITY];         // 0x08c  each particle resource's count of emitters
+    s32 clactIndexes[4];                                // 0x0cc  -1 for none
+    int attacker;                                       // 0x0dc  a position, or BTLV_MCSS_POS_NONE
+    int defender;                                       // 0x0e0
+    u32 callAttackers[16];                              // 0x0e4  the call stack, by callDepth
+    u32 callDefenders[16];                              // 0x124
+    void *callScripts[16];                              // 0x164
+    s32 callValues[16];                                 // 0x1a4
+    s32 waitTimer;                                      // 0x1e4
+    void *script;                                       // 0x1e8
+    void *savedScript;                                  // 0x1ec  the move's script while the substitute's runs first
+    u32 savedOffset;                                    // 0x1f0
+    void *allocs[16];                                   // 0x1f4  the emitters' works, freed with the effect's end
+    int allocCount;                                     // 0x234
+    HeapID heapId;                                      // 0x238
+    BOOL ret;                                           // 0x23c  what the commands return, TRUE to make VM_Run return
+    u32 waitKind;                                       // 0x240  what BtlvEffvm_WaitNative waits for
+    u32 mcssCameraMode;   // 0x244  McssCameraMode's type: 1 makes BtlvEffvm_ResetMcss clear the Pokémon's flat
+                          //        mode, others set it
+    BtlvEffvmParam param; // 0x248
+    u16 move;             // 0x258  a move, or an effect from BTLV_EFFECT_FIRST
+    u32 ballSource;       // 0x25c  whose ball the ball particles show: 8 for param's item, 9 the attacker's
+    u32 callDepth;        // 0x260
+    int bgX;              // 0x264  BG 3's offset before the effect
+    int bgY;              // 0x268
+    s32 voices[EFFVM_VOICE_CAPACITY]; // 0x26c  PokeVoice handles, -1 for none
+    BOOL camSaved;                    // 0x284
+    VecFx32 camPos;                   // 0x288
+    VecFx32 camTarget;                // 0x294
+    u32 messageIdleNeedsRestore;      // 0x2a0  effects025/026 set it; effect032 restores the view and clears it
+    u32 lastMove;                     // 0x2a4  effects 0x261 and 0x262 don't repeat for the same attacker
+    u32 lastAttacker;                 // 0x2a8
+};
+
+#define BTLV_EFFECT_FIRST 0x231
+
+// The emitter parameters the particle commands pass BtlvEffvm_InitEmitter, 0x5c bytes
+typedef struct {
+    VM *vm;             // 0x00
+    u32 from;           // 0x04  where the emitter starts: a position code, 8 for fromPos
+    u32 to;             // 0x08  where it aims: a position code, 8 for toPos
+    VecFx32 offset;     // 0x0c  added to both, turned toward the side
+    u32 arcAngle;       // 0x18  written only (aletheia's arcAngle)
+    fx32 motionHeight;  // 0x1c  of the arc of motion types other than 1 and 4
+    u32 motionType;     // 0x20  0 for none, else the emitter moves from to to (BtlvEffvm_MoveEmitterArc)
+    fx32 motionFrames;  // 0x24
+    VecFx32 fromPos;    // 0x28
+    VecFx32 toPos;      // 0x34
+    u32 offsetMode;     // 0x40  1, 2: offset both positions, 3: the start only
+    fx32 radiusScale;   // 0x44  scales the emitter's radius and length, 0 to keep them
+    fx32 lifeTimeScale; // 0x48
+    fx32 scaleScale;    // 0x4c
+    fx32 cameraScale;   // 0x50  scales the camera position and the amplifiers
+    fx32 turns;         // 0x54  of motion types 5 and 6
+    BOOL flip;          // 0x58  mirrors the spin axis
+} BtlvEffvmEmitParam;
+
+// BtlvEffvm_InitEmitter's motion of an emitter from its start to its target, moved by BtlvEffvm_MoveEmitterArc, 0x60
+// bytes
+typedef struct {
+    MtxFx43 mtx;    // 0x00  turns the motion toward the target, from the start
+    fx32 radius;    // 0x30  half the distance
+    fx32 height;    // 0x34
+    s32 angle;      // 0x38
+    s32 angle2;     // 0x3c
+    s32 angleStep;  // 0x40
+    s32 angle2Step; // 0x44
+    int frames;     // 0x48
+    u32 type;       // 0x4c
+    int wait;       // 0x50  type 3 waits longer each step
+    fx32 waitAccum; // 0x54
+    fx32 waitStep;  // 0x58
+    u32 offsetMode; // 0x5c
+} BtlvEffvmEmitterMotionWork;
+
+// BtlvEffvm_PlaySEAt's delayed sound effect, 0x24 bytes
+typedef struct {
+    BtlvEffvm *wk; // 0x00
+    u32 se;        // 0x04
+    u32 player;    // 0x08
+    int pan;       // 0x0c
+    int wait;      // 0x10
+    int pitch;     // 0x14
+    int volume;    // 0x18
+    int modDepth;  // 0x1c
+    int modSpeed;  // 0x20
+} BtlvEffvmSeWork;
+
+// BtlvEffvm_SlideSE's move of a sound player's parameter, 0x38 bytes
+typedef struct {
+    BtlvEffvm *wk;     // 0x00
+    u32 player;        // 0x04
+    u32 type;          // 0x08  0: once, 1: back and forth
+    u32 param;         // 0x0c  0, 1 or 2: which parameter
+    int start;         // 0x10
+    int end;           // 0x14
+    fx32 value;        // 0x18
+    fx32 step;         // 0x1c
+    int delay;         // 0x20
+    int frames;        // 0x24
+    int framesReset;   // 0x28
+    int stepWait;      // 0x2c
+    int stepWaitReset; // 0x30
+    int count;         // 0x34
+} BtlvEffvmSeMoveWork;
+
+// BtlvEffvm_CmdParticleLoad's work for loading a particle resource in the V-blank, 0xc bytes
+typedef struct {
+    BtlvEffvm *wk;            // 0x0
+    ParticleSystem *particle; // 0x4
+    void *resource;           // 0x8
+} BtlvEffvmParticleVBlankWork;
+
+// BtlvEffvm_AddCircleEmitter's emitter that circles a point, moved by BtlvEffvm_MoveCircleEmitter, 0x40 bytes (line
+// 7544)
+typedef struct {
+    u32 type;        // 0x00  0, 1: around the attacker, 2, 3: the defender, 4, 5: the origin; bit 0: clockwise
+    VecFx32 center;  // 0x04
+    fx32 radiusX;    // 0x10
+    fx32 radiusZ;    // 0x14
+    u32 angle;       // 0x18
+    u32 angleStep;   // 0x1c
+    int frames;      // 0x20
+    int framesReset; // 0x24
+    int wait;        // 0x28
+    int waitReset;   // 0x2c
+    u32 scriptArg12; // 0x30  written only, never read by the callbacks (aletheia's scriptArg12)
+    int delay;       // 0x34
+    int delayReset;  // 0x38
+    BOOL ortho;      // 0x3c
+} BtlvEffvmEmitterCircleWork;
+
+// BtlvEffvm_CmdBgPalAnim's palette animation of BG 3 from archive 231, stepped by BtlvEffvm_PalAnimTask; 0x18c bytes,
+// allocated at line 3435
+typedef struct {
+    BtlvEffvm *wk;      // 0x000
+    u8 palettes[128];   // 0x004  the palette of each frame, from the file's list ended by 0xff
+    u16 durations[128]; // 0x084  frames each one shows, from the list at 0x80 ended by 0xff98
+    u8 count;           // 0x184
+    u8 fileId;          // 0x185  the NCLR's file
+    u8 timer;           // 0x186
+    u8 state;           // 0x187
+    u8 index;           // 0x188
+    u8 loops;           // 0x189
+} BtlvEffvmPalAnimWork;
+
+// BtlvEffect_QueueCommands' window work, stepped by BtlvEffvm_WindowTask; 0x28 bytes, allocated at line 3659
+typedef struct {
+    BtlvEffvm *wk;  // 0x00
+    u32 state;      // 0x04
+    u32 dir;        // 0x08
+    int winH;       // 0x0c
+    int winV;       // 0x10
+    int winInOut;   // 0x14
+    u32 count;      // 0x18
+    u32 wait;       // 0x1c
+    u32 waitReload; // 0x20
+    u32 keepWindow; // 0x24
+} BtlvEffvmWindowWork;
+
+// BtlvEffvm_CmdPlayCry's delayed cry, played by BtlvEffvm_CryDelayTask; 0x20 bytes, allocated at line 4551
+typedef struct {
+    BtlvEffvm *wk;    // 0x00
+    int pos;          // 0x04
+    int speed;        // 0x08  the five arguments of BtlvMcss_PlayCry
+    int volume;       // 0x0c
+    int chorusVolume; // 0x10
+    int chorusSpeed;  // 0x14
+    int reverse;      // 0x18
+    int delay;        // 0x1c
+} BtlvEffvmCryWork;
+
+// The work of BtlvEffvm_CryWaitTask, which waits for the cries; 4 bytes, allocated at lines 4540 and 8044
+typedef struct {
+    BtlvEffvm *wk; // 0x0
+} BtlvEffvmCryWaitWork;
+
+// BtlvEffvm_CmdWaitSide's work, stepped by BtlvEffvm_SideResetTask; 0xc bytes, allocated at line 4883
+typedef struct {
+    BtlvEffvm *wk; // 0x0
+    u32 side;      // 0x4
+    u32 doneMask;  // 0x8
+} BtlvEffvmSideWork;
+
+// BtlvEffvm_StartBgmFade's fade of the BGM's volume, stepped by BtlvEffvm_BgmFadeTask; 0x10 bytes, allocated at line
+// 7799
+typedef struct {
+    BtlvEffvm *wk; // 0x0
+    fx32 volume;   // 0x4
+    fx32 target;   // 0x8
+    fx32 step;     // 0xc
+} BtlvEffvmBgmFadeWork;
+
+// The window task initializes the masks once, then adjusts its bounds.
+enum {
+    EFFVM_WINDOW_INIT = 0,
+    EFFVM_WINDOW_MOVE = 1,
+};
+
+// Window bound and palette-animation format sentinels; these are unrelated to sprite positions.
+#define EFFVM_WINDOW_RIGHT_MAX 255
+#define EFFVM_PAL_ANIM_INITIAL_TIMER 255
+#define EFFVM_PAL_ANIM_PALETTES_END 255
+#define EFFVM_PAL_ANIM_DURATIONS_END 65432
+
+// The palette animation task primes its timer, then loads the timed palettes.
+enum {
+    EFFVM_PAL_ANIM_INIT = 0,
+    EFFVM_PAL_ANIM_PLAY = 1,
+};
+
+// Ball IDs returned by PML_ItemGetMonsBallID, matching item.c MONS_BALL_ITEMS.
+enum {
+    EFFVM_BALL_NONE = 0,
+    EFFVM_BALL_POKE = 4,
+    EFFVM_BALL_CHERISH = 16,
+    EFFVM_BALL_DREAM = 25,
+};
+
+// The Dream Ball uses sprite pair17 in the VM actor archive.
+enum {
+    EFFVM_DREAM_BALL_SPRITE = 17,
+};
+
+static BOOL BtlvEffvm_CmdCameraMovePreset(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdCameraMove(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdCameraRotate(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdCameraShake(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdMcssCameraMode(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdCameraSave(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdParticleLoad(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdEmitterAdd(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdEmitterAddAt(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdEmitterAddOrtho(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdEmitterAddAll(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdParticleDelete(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdEmitterMove(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdEmitterMoveFrom(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdEmitterMoveOrtho(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdEmitterMoveFromOrtho(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdOrbitEmitters(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdOrbitEmittersAlt(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdMcssMoveXY(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdMcssCircle(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdMcssShake(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdMcssScale(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdMcssRotate(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdMcssAlpha(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdMcssMosaic(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdMcssBlink(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdMcssSetVanish(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdMcssPalFade(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdMcssSetMode(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdMcssSetValue(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdMcssScaleTo(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdGaugeHide(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdSetTrainer(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdTrainerMove(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdMcssPlayAnim(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdDeleteMcss(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdLoadBg(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdBgMove(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdBgWave(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdBgPalAnim(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdBgSetPriority(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdSetAlphaBlend(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdPaletteFade(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdSetVanish(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdClactAdd(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdClactMove(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdClactScale(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdClactSetAnim(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdClactPalFade(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdClactDelete(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdGauge(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdPlaySE(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdStopSE(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdPanSE(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdMoveSE(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdWait(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdWaitFrames(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdSetYield(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdIfVarConst(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdIfVarVar(VM *vm, void *env);
+static void BtlvEffvm_JumpIf(VM *vm, int value, int target, int cond, int offset);
+static BOOL BtlvEffvm_CmdIfPokeExists(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdSetValue(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdLoadVar(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdSetVar(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdMcssEffect(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdMcssSwap(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdPlayCry(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdSetBallSource(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdBallAdd(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdCall(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdReturn(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdJump(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdWaitExternal(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdChangeScript(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdWaitSide(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdMcssReset(VM *vm, void *env);
+static BOOL BtlvEffvm_CmdEnd(VM *vm, void *env);
+static BOOL BtlvEffvm_WaitNative(VM *vm, void *env);
+static BOOL BtlvEffvm_WaitTimerNative(VM *vm, void *env);
+static BOOL BtlvEffvm_WaitResumeNative(VM *vm, void *env);
+static BOOL BtlvEffvm_WaitParticleLoadNative(VM *vm, void *env);
+static int BtlvEffvm_GetTargetPositions(BtlvEffvm *wk, int code, int *positions);
+static int BtlvEffvm_GetDefenderPositions(BtlvEffvm *wk, int unusedCode, int *positions);
+static int BtlvEffvm_GetTargetPosition(VM *vm, int code);
+static int BtlvEffvm_CheckPosition(BtlvEffvm *wk, int pos);
+static int BtlvEffvm_SwapSide(VM *vm, int pos);
+static int BtlvEffvm_GetDefenderForEmitter(VM *vm, int *pos);
+static BOOL BtlvEffvm_FindOrAddParticleId(BtlvEffvm *wk, u32 id, int *index);
+static void BtlvEffvm_SetEmitterCount(BtlvEffvm *wk, int index, void *resource);
+static int BtlvEffvm_FindParticleId(BtlvEffvm *wk, u32 id);
+static u32 BtlvEffvm_GetEmitterCount(BtlvEffvm *wk, int index);
+static void BtlvEffvm_InitEmitter(SPLEmitter *emitter);
+static void BtlvEffvm_MoveEmitterArc(SPLEmitter *emitter, u32 type);
+static void BtlvEffvm_InitCircleEmitter(SPLEmitter *emitter);
+static void BtlvEffvm_MoveCircleEmitter(SPLEmitter *emitter, u32 type);
+static void BtlvEffvm_DeleteParticle(ParticleSystem *particle);
+static void BtlvEffvm_ResetMcss(BtlvEffvm *wk);
+static void BtlvEffvm_PlaySENow(u32 se, u32 player, int pan, int pitch, int volume, int modDepth, int modSpeed);
+static u32 BtlvEffvm_GetVariable(BtlvEffvm *wk, int id);
+static void BtlvEffvm_AddEmitters(BtlvEffvm *wk, BtlvEffvmEmitParam *param, int index, int resourceId);
+static BOOL BtlvEffvm_AddCircleEmitter(VM *vm, BtlvEffvm *wk, BOOL ortho);
+static void BtlvEffvm_ProjectToScreen(VecFx32 *pos, const VecFx32 *offset);
+static void BtlvEffvm_MulVec44(const VecFx32 *src, const MtxFx44 *mtx, VecFx32 *dest, fx32 *w);
+static u32 BtlvEffvm_GetBallParticleId(BtlvEffvm *wk, u32 id);
+static void BtlvEffvm_StartBgmFade(BtlvEffvm *wk, fx32 start, fx32 end, int frames);
+static int BtlvEffvm_GetFreeVoiceSlot(BtlvEffvm *wk);
+static void BtlvEffvm_ResetMcssAll(BtlvEffvm *wk);
+static void BtlvEffvm_ClearMcssFlagAll(BtlvEffvm *wk);
+static void BtlvEffvm_SeWaitTask(TCB *tcb, void *data);
+static void BtlvEffvm_SeWaitTaskRemove(TCB *tcb);
+static void BtlvEffvm_SeMoveTask(TCB *tcb, void *data);
+static void BtlvEffvm_SeMoveTaskRemove(TCB *tcb);
+static void BtlvEffvm_CryDelayTask(TCB *tcb, void *data);
+static void BtlvEffvm_CryDelayTaskRemove(TCB *tcb);
+static void BtlvEffvm_BgmFadeTask(TCB *tcb, void *data);
+static void BtlvEffvm_WindowTask(TCB *tcb, void *data);
+static void BtlvEffvm_WindowTaskRemove(TCB *tcb);
+static void BtlvEffvm_CryWaitTask(TCB *tcb, void *data);
+static void BtlvEffvm_SideResetTask(TCB *tcb, void *data);
+static void BtlvEffvm_ParticleUploadTask(TCB *tcb, void *data);
+static void BtlvEffvm_PalAnimTask(TCB *tcb, void *data);
+static void BtlvEffvm_PalAnimTaskRemove(TCB *tcb);
+static void BtlvEffvm_ScaleAllMcss(fx32 scaleX, fx32 scaleY, int frames, int wait, s32 count);
+static BOOL BtlvEffvm_IsGaugeKeptEffect(u32 move);
+
+// The camera's positions and targets of CameraMovePreset (.data), by battle style, the particle commands' camera
+// vectors, the effects that keep the gauges, the script commands and the VM setup. The declaration order lays them out
+// as in the ROM
+static const VecFx32 EMITTER_ADD_ALL_UP = { 0, FX32_ONE, 0 };
+static const VecFx32 EMITTER_ADD_ALL_TARGET = { 0, 0, -FX32_ONE };
+static const VecFx32 CIRCLE_EMITTER_TARGET = { 0, 0, -FX32_ONE };
+static const VecFx32 EMITTER_MOVE_FROM_ORTHO_TARGET = { 0, 0, -FX32_ONE };
+static const VMCommand MOVE_SCRCMD[] = {
+    BtlvEffvm_CmdCameraMovePreset,
+    BtlvEffvm_CmdCameraMove,
+    BtlvEffvm_CmdCameraRotate,
+    BtlvEffvm_CmdCameraShake,
+    BtlvEffvm_CmdMcssCameraMode,
+    BtlvEffvm_CmdCameraSave,
+    BtlvEffvm_CmdParticleLoad,
+    BtlvEffvm_CmdEmitterAdd,
+    BtlvEffvm_CmdEmitterAddAt,
+    BtlvEffvm_CmdEmitterAddOrtho,
+    BtlvEffvm_CmdEmitterAddAll,
+    BtlvEffvm_CmdParticleDelete,
+    BtlvEffvm_CmdEmitterMove,
+    BtlvEffvm_CmdEmitterMoveFrom,
+    BtlvEffvm_CmdEmitterMoveOrtho,
+    BtlvEffvm_CmdEmitterMoveFromOrtho,
+    BtlvEffvm_CmdOrbitEmitters,
+    BtlvEffvm_CmdOrbitEmittersAlt,
+    BtlvEffvm_CmdMcssMoveXY,
+    BtlvEffvm_CmdMcssCircle,
+    BtlvEffvm_CmdMcssShake,
+    BtlvEffvm_CmdMcssScale,
+    BtlvEffvm_CmdMcssRotate,
+    BtlvEffvm_CmdMcssAlpha,
+    BtlvEffvm_CmdMcssMosaic,
+    BtlvEffvm_CmdMcssBlink,
+    BtlvEffvm_CmdMcssSetVanish,
+    BtlvEffvm_CmdMcssPalFade,
+    BtlvEffvm_CmdMcssSetMode,
+    BtlvEffvm_CmdMcssSetValue,
+    BtlvEffvm_CmdMcssScaleTo,
+    BtlvEffvm_CmdGaugeHide,
+    BtlvEffvm_CmdSetTrainer,
+    BtlvEffvm_CmdTrainerMove,
+    BtlvEffvm_CmdMcssPlayAnim,
+    BtlvEffvm_CmdDeleteMcss,
+    BtlvEffvm_CmdLoadBg,
+    BtlvEffvm_CmdBgMove,
+    BtlvEffvm_CmdBgWave,
+    BtlvEffvm_CmdBgPalAnim,
+    BtlvEffvm_CmdBgSetPriority,
+    BtlvEffvm_CmdSetAlphaBlend,
+    BtlvEffvm_CmdPaletteFade,
+    BtlvEffvm_CmdSetVanish,
+    BtlvEffect_QueueCommands,
+    BtlvEffvm_CmdClactAdd,
+    BtlvEffvm_CmdClactMove,
+    BtlvEffvm_CmdClactScale,
+    BtlvEffvm_CmdClactSetAnim,
+    BtlvEffvm_CmdClactPalFade,
+    BtlvEffvm_CmdClactDelete,
+    BtlvEffvm_CmdGauge,
+    BtlvEffvm_CmdPlaySE,
+    BtlvEffvm_CmdStopSE,
+    BtlvEffvm_CmdPanSE,
+    BtlvEffvm_CmdMoveSE,
+    BtlvEffvm_CmdWait,
+    BtlvEffvm_CmdWaitFrames,
+    BtlvEffvm_CmdSetYield,
+    BtlvEffvm_CmdIfVarConst,
+    BtlvEffvm_CmdIfVarVar,
+    BtlvEffvm_CmdIfPokeExists,
+    BtlvEffvm_CmdSetValue,
+    BtlvEffvm_CmdLoadVar,
+    BtlvEffvm_CmdSetVar,
+    BtlvEffvm_CmdMcssEffect,
+    BtlvEffvm_CmdMcssSwap,
+    BtlvEffvm_CmdPlayCry,
+    BtlvEffvm_CmdSetBallSource,
+    BtlvEffvm_CmdBallAdd,
+    BtlvEffvm_CmdCall,
+    BtlvEffvm_CmdReturn,
+    BtlvEffvm_CmdJump,
+    BtlvEffvm_CmdWaitExternal,
+    BtlvEffvm_CmdChangeScript,
+    BtlvEffvm_CmdWaitSide,
+    BtlvEffvm_CmdMcssReset,
+    BtlvEffvm_CmdEnd,
+};
+static const VecFx32 EMITTER_MOVE_ORTHO_UP = { 0, FX32_ONE, 0 };
+static const VecFx32 EMITTER_MOVE_ORTHO_TARGET = { 0, 0, -FX32_ONE };
+static const VecFx32 EMITTER_MOVE_FROM_ORTHO_UP = { 0, FX32_ONE, 0 };
+static VecFx32 sCamPosWide = { FX32_CONST(8.7), FX32_CONST(7.7), FX32_CONST(23.8) };
+static const VecFx32 EMITTER_ADD_ORTHO_TARGET = { 0, 0, -FX32_ONE };
+static VecFx32 sCamPosTriple3 = { FX32_CONST(9.7), FX32_CONST(6.7), FX32_CONST(17.3) };
+static const u32 GAUGE_KEPT_EFFECTS[] = { 0x235, 0x236, 0x24a, 0x24b, 0x24c, 0x24d, 0x24e, 0x24f, 0x250, 0x251, 0x252 };
+static const VMInitParam EFFVM_VM_INIT_PARAM = { 16, 8, MOVE_SCRCMD, NELEMS(MOVE_SCRCMD), NULL, 0, 0 };
+static const VecFx32 EMITTER_ADD_ORTHO_UP = { 0, FX32_ONE, 0 };
+static const VecFx32 CIRCLE_EMITTER_UP = { 0, FX32_ONE, 0 };
+static VecFx32 sCamTargetTriple3 = { FX32_CONST(3), FX32_CONST(2.6), 0 };
+static VecFx32 sCamTargetWide = { FX32_CONST(2), FX32_CONST(3.6), FX32_CONST(6.5) };
+static VecFx32 sCamPosRotation = { FX32_CONST(6.7), FX32_CONST(7.7), FX32_CONST(30.8) };
+static VecFx32 sCamPosSingle[2] = { { 0x5ca6, FX32_CONST(5.95), 0x13cc3 }, { 0x6994, FX32_CONST(6.95), 0x6e79 } };
+static VecFx32 sCamTargetRotation = { 0, FX32_CONST(3.6), FX32_CONST(13.5) };
+static VecFx32 sCamTargetSingle[2] = { { -0xe8d, FX32_CONST(1.85), 0x27f6 }, { -0x19f, FX32_CONST(2.85), -0xa654 } };
+static s32 sTripleFoeSideEmitterCodes[8] = { 0, 0, EFFVM_EMIT_DOUBLE_ENEMY_2, EFFVM_EMIT_DOUBLE_PLAYER_2,
+                                             0, 0, EFFVM_EMIT_DOUBLE_ENEMY_1, EFFVM_EMIT_DOUBLE_PLAYER_1 };
+static s32 sTripleDefaultDefenderPositions[8] = { 0, 0, BTLV_MCSS_POS_ENEMY_2, BTLV_MCSS_POS_PLAYER_2,
+                                                  0, 0, BTLV_MCSS_POS_ENEMY_1, BTLV_MCSS_POS_PLAYER_1 };
+static VecFx32 sCamPosDouble[4] = { { FX32_CONST(2.7), FX32_CONST(5.2), FX32_CONST(17.3) },
+                                    { 0x8994, FX32_CONST(6.95), 0x6e79 },
+                                    { FX32_CONST(6.7), FX32_CONST(5.2), FX32_CONST(17.3) },
+                                    { 0x4994, FX32_CONST(6.95), 0x6e79 } };
+static s32 sTripleDefaultDefenderEmitterCodes[8] = { 0, 0, EFFVM_EMIT_DOUBLE_ENEMY_2, EFFVM_EMIT_DOUBLE_PLAYER_2,
+                                                     0, 0, EFFVM_EMIT_DOUBLE_ENEMY_1, EFFVM_EMIT_DOUBLE_PLAYER_1 };
+static VecFx32 sCamTargetDouble[4] = { { FX32_CONST(-4), FX32_CONST(1.1), 0 },
+                                       { 0x219f, FX32_CONST(2.85), -0xa654 },
+                                       { 0, FX32_CONST(1.1), 0 },
+                                       { -0x219f, FX32_CONST(2.85), -0xa654 } };
+static VecFx32 sCamTargetTriple[6] = { { FX32_CONST(-5), FX32_CONST(2.1), FX32_CONST(3) },
+                                       { 0x519f, FX32_CONST(2.85), -0xa654 },
+                                       { -0xe8d, FX32_CONST(1.85), 0x27f6 },
+                                       { -0x19f, FX32_CONST(2.85), -0xa654 },
+                                       { FX32_CONST(5), FX32_CONST(2.1), FX32_CONST(3) },
+                                       { -0x419f, FX32_CONST(2.85), -0xa654 } };
+static VecFx32 sCamPosTriple[6] = { { FX32_CONST(1.7), FX32_CONST(6.2), FX32_CONST(20.3) },
+                                    { 0xb994, FX32_CONST(6.95), 0x6e79 },
+                                    { 0x5ca6, FX32_CONST(5.95), 0x13cc3 },
+                                    { 0x6994, FX32_CONST(6.95), 0x6e79 },
+                                    { FX32_CONST(6.7), FX32_CONST(6.2), FX32_CONST(20.3) },
+                                    { 0x2994, FX32_CONST(6.95), 0x6e79 } };
+
+VM *BtlvEffvm_Create(TCBManager *tcbManager, HeapID heapId) {
+    BtlvEffvm *wk = GFL_HeapAllocate(heapId, sizeof(BtlvEffvm), TRUE, "btlv_effvm.c", 718);
+    VM *vm;
+    int i;
+
+    wk->heapId = heapId;
+    wk->tcbManager = tcbManager;
+    wk->ret = TRUE;
+    wk->mcssCameraMode = EFFVM_MCSS_CAMERA_DEPTH;
+    for (i = 0; i < EFFVM_PARTICLE_CAPACITY; i++) {
+        wk->particleIds[i] = -1;
+    }
+    for (i = 0; i < 4; i++) {
+        wk->clactIndexes[i] = -1;
+    }
+    for (i = 0; i < EFFVM_VOICE_CAPACITY; i++) {
+        wk->voices[i] = -1;
+    }
+    vm = VM_Create(heapId, &EFFVM_VM_INIT_PARAM);
+    VM_ChangeEnv(vm, wk);
+    return vm;
+}
+
+BOOL BtlvEffvm_Main(VM *vm) {
+    BOOL running = VM_Run(vm);
+    BtlvEffvm *wk = VM_GetEnv(vm);
+
+    if (wk->paused) {
+        return FALSE;
+    }
+    if (!running && wk->script != NULL) {
+        BtlvEffect_SetGaugeDrawEnableBySide(1, BTLV_GAUGE_SIDE_BOTH);
+        if (!wk->isEffect) {
+            BtlvEffvm_StartBgmFade(wk, 0x6b000, 0x7f000, 20);
+        }
+        GFL_HeapFree(wk->script);
+        wk->script = NULL;
+    }
+    return running;
+}
+
+void BtlvEffvm_Delete(VM *vm) {
+    BtlvEffvm *wk = VM_GetEnv(vm);
+
+    BtlvEffvm_Stop(vm);
+    GFL_HeapFree(wk);
+    VM_Free(vm);
+}
+
+void BtlvEffvm_Start(VM *vm, u32 attacker, u32 defender, u16 move, BtlvEffvmParam *param) {
+    BtlvEffvm *wk = VM_GetEnv(vm);
+    u32 offset;
+    BOOL visible;
+    void *script;
+
+    wk->script = NULL;
+    BtlvEffect_EndTaskGroup(BTLV_EFFECT_TASK_SCRIPT);
+    if (param != NULL) {
+        wk->param = *param;
+    } else {
+        MIi_CpuClear16(0, &wk->param, sizeof(BtlvEffvmParam));
+    }
+    wk->attacker = attacker;
+    wk->defender = defender;
+    wk->mcssCameraMode = EFFVM_MCSS_CAMERA_DEPTH;
+    wk->move = move;
+    if (wk->move >= BTLV_EFFECT_FIRST && (wk->move == 0x261 || wk->move == 0x262) && wk->lastMove == wk->move &&
+        wk->lastAttacker == attacker) {
+        return;
+    }
+    wk->lastMove = wk->move;
+    wk->lastAttacker = attacker;
+    if (BtlvEffvm_IsGaugeKeptEffect(wk->move) == FALSE) {
+        BtlvEffect_SetPokemonReverse(0);
+    }
+    if (wk->move < BTLV_EFFECT_FIRST) {
+        wk->script = GFL_ArcSysReadHeapNew(ARCID_BTLV_EFFVM_MOVE_SCRIPTS, move, HEAPID_TAIL(wk->heapId));
+        if (wk->move != MOVE_TRANSFORM && wk->move != MOVE_MIRROR_MOVE && wk->move != MOVE_NATURE_POWER) {
+            BtlvEffect_SetGaugeDrawEnableBySide(0, BTLV_GAUGE_SIDE_BOTH);
+        }
+        GFL_BGSysSetBGEnabled(1, FALSE);
+        GFL_BGSysSetBGEnabled(2, FALSE);
+        GFL_BGSysSetBGEnabled(3, FALSE);
+        wk->isEffect = FALSE;
+        BtlvEffvm_StartBgmFade(wk, 0x7f000, 0x6b000, 20);
+    } else {
+        wk->script =
+            GFL_ArcSysReadHeapNew(ARCID_BTLV_EFFVM_EFFECT_SCRIPTS, move - BTLV_EFFECT_FIRST, HEAPID_TAIL(wk->heapId));
+        wk->isEffect = TRUE;
+        if (move >= 0x256 && !(reg_G2_BLDALPHA & 0x1f)) {
+            GFL_BGSysSetBGEnabled(1, FALSE);
+        }
+    }
+    offset = 4;
+    if (param != NULL) {
+        if (*(u8 *)wk->script <= param->variant) {
+            param->variant = 0;
+        }
+        offset += param->variant * 0x38;
+    }
+    visible = FALSE;
+    if (BtlvMcss_Exists(BtlvEffect_GetMcss(), wk->attacker)) {
+        if (((wk->move == MOVE_FUTURE_SIGHT || wk->move == MOVE_DOOM_DESIRE) && param->variant == 1) ||
+            wk->move == MOVE_TRANSFORM || wk->move == MOVE_MIRROR_MOVE || wk->move == MOVE_NATURE_POWER) {
+        } else {
+            visible = BtlvMcss_GetFlags(BtlvEffect_GetMcss(), wk->attacker) & BTLV_MCSS_FLAG_SUBSTITUTE_ACTIVE;
+        }
+    }
+    if (wk->move == 0x27e) {
+        wk->skipReverseRestore = TRUE;
+    }
+    if (wk->move == 0x291) {
+        wk->skipReverseRestore = FALSE;
+    }
+    if (wk->move == 0x27e && visible) {
+        wk->savedScript = wk->script;
+        wk->savedOffset = offset;
+        wk->script = GFL_ArcSysReadHeapNew(ARCID_BTLV_EFFVM_EFFECT_SCRIPTS, 51, HEAPID_TAIL(wk->heapId));
+        wk->isEffect = TRUE;
+        wk->substituteRestore = TRUE;
+        offset = 4;
+    } else if (!wk->isEffect && wk->move != MOVE_TRANSFORM && !wk->substituteRestore && visible) {
+        wk->savedScript = wk->script;
+        wk->savedOffset = offset;
+        wk->script = GFL_ArcSysReadHeapNew(ARCID_BTLV_EFFVM_EFFECT_SCRIPTS, 51, HEAPID_TAIL(wk->heapId));
+        wk->isEffect = TRUE;
+        offset = 4;
+    }
+    script = wk->script;
+    wk->value = 0;
+    wk->sePlayed = FALSE;
+    wk->ballSource = EFFVM_BALL_SOURCE_ITEM;
+    VM_LoadScript(vm, (u8 *)wk->script + *(u32 *)((u8 *)script + offset));
+}
+
+void BtlvEffvm_Stop(VM *vm) {
+    BtlvEffvm *wk = VM_GetEnv(vm);
+
+    if (wk->script != NULL) {
+        BtlvEffvm_CmdEnd(vm, VM_GetEnv(vm));
+        GFL_HeapFree(wk->script);
+        wk->script = NULL;
+    }
+}
+
+void BtlvEffvm_Resume(VM *vm) {
+    BtlvEffvm *wk = VM_GetEnv(vm);
+
+    wk->paused = FALSE;
+}
+
+s32 BtlvEffvm_GetScriptKind(VM *vm) {
+    BtlvEffvm *wk = VM_GetEnv(vm);
+    s32 ret = -1;
+
+    if (wk->script != NULL) {
+        ret = wk->isEffect;
+    }
+    return ret;
+}
+
+void BtlvEffvmParam_Clear(BtlvEffvmParam *param) {
+    param->target = 0;
+    param->variant = 0;
+    param->param2 = 0;
+    param->shakes = 0;
+    param->caught = 0;
+    param->critical = 0;
+    param->itemNo = 0;
+}
+
+void BtlvEffvm_PlaySEAt(VM *vm, u32 se, u32 player, u32 pan, int pitch, int volume, int modDepth, int modSpeed,
+                        int wait) {
+    BtlvEffvm *wk = VM_GetEnv(vm);
+    BtlvEffvmSeWork *work;
+
+    if (BtlvEffect_GetMuteSE() == TRUE) {
+        return;
+    }
+    wk->sePlayed = TRUE;
+    if (pan == EFFVM_PAN_CENTER) {
+        pan = 0;
+    } else if (pan <= EFFVM_PAN_RIGHT) {
+        pan = (pan & 1) ? 127 : -128;
+    } else {
+        pan = (BtlvEffvm_GetTargetPosition(vm, pan) & 1) ? 127 : -128;
+    }
+    if (modDepth > 255) {
+        modDepth = 255;
+    }
+    if (modSpeed > 255) {
+        modSpeed = 255;
+    }
+    if (wait == 0) {
+        BtlvEffvm_PlaySENow(se, player, pan, pitch, volume, modDepth, modSpeed);
+        return;
+    }
+    work = GFL_HeapAllocate(HEAPID_TAIL(wk->heapId), sizeof(BtlvEffvmSeWork), FALSE, "btlv_effvm.c", 1168);
+    work->wk = wk;
+    work->se = se;
+    work->player = player;
+    work->pan = pan;
+    work->wait = wait;
+    work->pitch = pitch;
+    work->volume = volume;
+    work->modDepth = modDepth;
+    work->modSpeed = modSpeed;
+    wk->seDelayed = TRUE;
+    BtlvEffect_AddTask(GFL_TCBMgrAddTask(wk->tcbManager, BtlvEffvm_SeWaitTask, work, 0), BtlvEffvm_SeWaitTaskRemove,
+                       BTLV_EFFECT_TASK_SCRIPT);
+}
+
+void BtlvEffvm_SlideSE(VM *vm, u32 player, u32 type, u32 param, int start, int end, int delay, int frames, int stepWait,
+                       int count) {
+    BtlvEffvm *wk = VM_GetEnv(vm);
+    BtlvEffvmSeMoveWork *work =
+        GFL_HeapAllocate(HEAPID_TAIL(wk->heapId), sizeof(BtlvEffvmSeMoveWork), FALSE, "btlv_effvm.c", 1204);
+
+    work->wk = wk;
+    work->player = player;
+    work->type = type;
+    work->param = param;
+    work->start = start;
+    work->end = end;
+    work->delay = delay;
+    work->frames = frames;
+    work->framesReset = frames;
+    work->stepWait = 0;
+    work->stepWaitReset = stepWait;
+    work->count = count * 2;
+    if (type == EFFVM_SE_MOVE_SWING && work->count == 0) {
+        work->count = 2;
+    }
+    work->value = FX32_CONST(work->start);
+    work->step = FX_Div(FX32_CONST(work->end - work->start), FX32_CONST(work->frames));
+    BtlvEffect_AddTask(GFL_TCBMgrAddTask(wk->tcbManager, BtlvEffvm_SeMoveTask, work, 0), BtlvEffvm_SeMoveTaskRemove,
+                       BTLV_EFFECT_TASK_SCRIPT);
+    wk->seSliding = TRUE;
+}
+
+void BtlvEffvm_ReleaseVoices(VM *vm) {
+    BtlvEffvm *wk = VM_GetEnv(vm);
+    int i;
+
+    for (i = 0; i < EFFVM_VOICE_CAPACITY; i++) {
+        if (wk->voices[i] != -1) {
+            PokeVoice_Release(wk->voices[i]);
+        }
+    }
+}
+
+void BtlvEffvm_ClearLastEffect(VM *vm) {
+    BtlvEffvm *wk = VM_GetEnv(vm);
+
+    wk->lastMove = 0;
+    wk->lastAttacker = 0;
+}
+
+static BOOL BtlvEffvm_CmdCameraMovePreset(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    VecFx32 pos;
+    VecFx32 target;
+    int moveType = VM_Read32(vm);
+    int posType = VM_Read32(vm);
+    int frames = VM_Read32(vm);
+    int wait = VM_Read32(vm);
+    int brakeFrames = VM_Read32(vm);
+    int rule;
+    int battler;
+
+    if (wk->cameraLocked) {
+        return wk->ret;
+    }
+    if (posType == EFFVM_CAMERA_SAVED && wk->camSaved == FALSE) {
+        posType = EFFVM_CAMERA_DEFAULT;
+    }
+    if (posType != EFFVM_CAMERA_DEFAULT && posType != EFFVM_CAMERA_ATTACKER_SLOT &&
+        posType != EFFVM_CAMERA_DEFENDER_SLOT && posType != EFFVM_CAMERA_WIDE && posType != EFFVM_CAMERA_DEFAULT_ALT) {
+        BtlvEffvm_ResetMcss(wk);
+    } else {
+        wk->cameraReset = TRUE;
+    }
+    switch (posType) {
+    case EFFVM_CAMERA_ATTACKER_SLOT:
+    case EFFVM_CAMERA_DEFENDER_SLOT:
+        rule = BtlvEffect_GetBattleStyle();
+        battler = posType == EFFVM_CAMERA_ATTACKER_SLOT ? wk->attacker : wk->defender;
+        switch (rule) {
+        case BTL_STYLE_SINGLE:
+            return wk->ret;
+        case BTL_STYLE_DOUBLE:
+        case BTL_STYLE_TRIPLE:
+            switch (battler) {
+            case BTLV_MCSS_POS_PLAYER_1:
+                posType = EFFVM_CAMERA_PLAYER_1;
+                break;
+            case BTLV_MCSS_POS_ENEMY_1:
+                posType = EFFVM_CAMERA_DEFAULT;
+                if (rule != BTL_STYLE_DOUBLE) {
+                    posType = EFFVM_CAMERA_TRIPLE_ENEMY_1;
+                }
+                break;
+            case BTLV_MCSS_POS_PLAYER_2:
+                posType = EFFVM_CAMERA_PLAYER_2;
+                if (rule != BTL_STYLE_DOUBLE) {
+                    posType = EFFVM_CAMERA_DEFAULT;
+                }
+                break;
+            case BTLV_MCSS_POS_ENEMY_2:
+                posType = EFFVM_CAMERA_DEFAULT;
+                break;
+            case BTLV_MCSS_POS_PLAYER_3:
+                posType = EFFVM_CAMERA_DEFAULT;
+                if (rule != BTL_STYLE_DOUBLE) {
+                    posType = EFFVM_CAMERA_PLAYER_3;
+                }
+                break;
+            case BTLV_MCSS_POS_SINGLE_PLAYER:
+            case BTLV_MCSS_POS_SINGLE_ENEMY:
+            case BTLV_MCSS_POS_ENEMY_3:
+            default:
+                return wk->ret;
+            }
+            break;
+        case BTL_STYLE_ROTATION:
+            if (battler == BTLV_MCSS_POS_PLAYER_2 || battler == BTLV_MCSS_POS_PLAYER_3) {
+                posType = EFFVM_CAMERA_ROTATION_BENCH;
+            }
+            break;
+        }
+        break;
+    case EFFVM_CAMERA_WIDE:
+        rule = BtlvEffect_GetBattleStyle();
+        if (rule == BTL_STYLE_SINGLE || rule == BTL_STYLE_ROTATION) {
+            return wk->ret;
+        }
+        break;
+    case EFFVM_CAMERA_WIDE_OR_FLAT:
+        rule = BtlvEffect_GetBattleStyle();
+        if (rule == BTL_STYLE_SINGLE || rule == BTL_STYLE_ROTATION) {
+            BtlvMcss_SetFlatAll(BtlvEffect_GetMcss());
+            return wk->ret;
+        } else {
+            posType = EFFVM_CAMERA_WIDE;
+        }
+        break;
+    case EFFVM_CAMERA_ATTACKER_SIDE:
+        rule = BtlvEffect_GetBattleStyle();
+        if (rule == BTL_STYLE_SINGLE || rule == BTL_STYLE_ROTATION) {
+            posType = wk->attacker;
+        } else if (wk->attacker & 1) {
+            posType = EFFVM_CAMERA_SINGLE_ENEMY;
+        } else {
+            posType = EFFVM_CAMERA_WIDE;
+        }
+        break;
+    case EFFVM_CAMERA_DEFAULT_ALT:
+        posType = EFFVM_CAMERA_DEFAULT;
+        break;
+    case EFFVM_CAMERA_ATTACKER:
+    case EFFVM_CAMERA_ATTACKER_ALT:
+        rule = BtlvEffect_GetBattleStyle();
+        posType = wk->attacker;
+        if (rule == BTL_STYLE_ROTATION && (posType == EFFVM_CAMERA_PLAYER_2 || posType == EFFVM_CAMERA_PLAYER_3)) {
+            posType = EFFVM_CAMERA_ROTATION_BENCH;
+        }
+        break;
+    case EFFVM_CAMERA_DEFENDER:
+    case EFFVM_CAMERA_DEFENDER_ALT:
+        switch (wk->param.target) {
+        case MOVE_TARGET_SELECTED:
+        case MOVE_TARGET_USER_OR_ALLY:
+        case MOVE_TARGET_ALLY:
+        case MOVE_TARGET_FOE:
+            posType = wk->defender;
+            if (posType == BTLV_MCSS_POS_NONE) {
+                posType = (wk->attacker & 1) ^ 1;
+            }
+            break;
+        case MOVE_TARGET_ADJACENT_FOES:
+        case MOVE_TARGET_USER:
+        case MOVE_TARGET_RANDOM_FOE:
+        case MOVE_TARGET_DEPENDS:
+            posType = wk->defender;
+            if (posType != BTLV_MCSS_POS_NONE) {
+                break;
+            }
+            // fallthrough
+        case MOVE_TARGET_FOE_SIDE:
+            posType = (wk->attacker & 1) ^ 1;
+            break;
+        case MOVE_TARGET_USER_PARTY:
+        case MOVE_TARGET_USER_SIDE:
+            posType = wk->attacker & 1;
+            break;
+        case MOVE_TARGET_ALL_ADJACENT:
+        case MOVE_TARGET_ALL:
+        case MOVE_TARGET_FIELD:
+            rule = BtlvEffect_GetBattleStyle();
+            if (rule == BTL_STYLE_SINGLE || rule == BTL_STYLE_ROTATION) {
+                posType = (wk->attacker & 1) ^ 1;
+            } else {
+                posType = EFFVM_CAMERA_WIDE;
+            }
+            break;
+        }
+        break;
+    }
+    switch (posType) {
+    case EFFVM_CAMERA_SINGLE_PLAYER:
+    case EFFVM_CAMERA_SINGLE_ENEMY:
+        pos.x = sCamPosSingle[posType].x;
+        pos.y = sCamPosSingle[posType].y;
+        pos.z = sCamPosSingle[posType].z;
+        target.x = sCamTargetSingle[posType].x;
+        target.y = sCamTargetSingle[posType].y;
+        target.z = sCamTargetSingle[posType].z;
+        break;
+    case EFFVM_CAMERA_PLAYER_1:
+    case EFFVM_CAMERA_ENEMY_1:
+    case EFFVM_CAMERA_PLAYER_2:
+    case EFFVM_CAMERA_ENEMY_2:
+        rule = BtlvEffect_GetBattleStyle();
+        if (rule == BTL_STYLE_ROTATION) {
+            pos.x = sCamPosSingle[posType - 2].x;
+            pos.y = sCamPosSingle[posType - 2].y;
+            pos.z = sCamPosSingle[posType - 2].z;
+            target.x = sCamTargetSingle[posType - 2].x;
+            target.y = sCamTargetSingle[posType - 2].y;
+            target.z = sCamTargetSingle[posType - 2].z;
+            break;
+        }
+        if (rule == BTL_STYLE_DOUBLE) {
+            pos.x = sCamPosDouble[posType - 2].x;
+            pos.y = sCamPosDouble[posType - 2].y;
+            pos.z = sCamPosDouble[posType - 2].z;
+            target.x = sCamTargetDouble[posType - 2].x;
+            target.y = sCamTargetDouble[posType - 2].y;
+            target.z = sCamTargetDouble[posType - 2].z;
+            break;
+        }
+        pos.x = sCamPosTriple[posType - 2].x;
+        pos.y = sCamPosTriple[posType - 2].y;
+        pos.z = sCamPosTriple[posType - 2].z;
+        target.x = sCamTargetTriple[posType - 2].x;
+        target.y = sCamTargetTriple[posType - 2].y;
+        target.z = sCamTargetTriple[posType - 2].z;
+        break;
+    case EFFVM_CAMERA_PLAYER_3:
+    case EFFVM_CAMERA_ENEMY_3:
+        pos.x = sCamPosTriple[posType - 2].x;
+        pos.y = sCamPosTriple[posType - 2].y;
+        pos.z = sCamPosTriple[posType - 2].z;
+        target.x = sCamTargetTriple[posType - 2].x;
+        target.y = sCamTargetTriple[posType - 2].y;
+        target.z = sCamTargetTriple[posType - 2].z;
+        break;
+    case EFFVM_CAMERA_SAVED:
+        pos.x = wk->camPos.x;
+        pos.y = wk->camPos.y;
+        pos.z = wk->camPos.z;
+        target.x = wk->camTarget.x;
+        target.y = wk->camTarget.y;
+        target.z = wk->camTarget.z;
+        break;
+    case EFFVM_CAMERA_WIDE:
+        pos.x = sCamPosWide.x;
+        pos.y = sCamPosWide.y;
+        pos.z = sCamPosWide.z;
+        target.x = sCamTargetWide.x;
+        target.y = sCamTargetWide.y;
+        target.z = sCamTargetWide.z;
+        if (wk->cameraReset) {
+            BtlvEffvm_ScaleAllMcss(0xa66, 0xb9a, frames, wait, 0);
+            wk->mcssScaled = TRUE;
+        }
+        break;
+    case EFFVM_CAMERA_ROTATION_BENCH:
+        pos.x = sCamPosRotation.x;
+        pos.y = sCamPosRotation.y;
+        pos.z = sCamPosRotation.z;
+        target.x = sCamTargetRotation.x;
+        target.y = sCamTargetRotation.y;
+        target.z = sCamTargetRotation.z;
+        if (wk->cameraReset) {
+            BtlvEffvm_ScaleAllMcss(0xa66, 0xb9a, frames, wait, 0);
+            wk->mcssScaled = TRUE;
+        }
+        break;
+    case EFFVM_CAMERA_TRIPLE_ENEMY_1:
+        pos.x = sCamPosTriple3.x;
+        pos.y = sCamPosTriple3.y;
+        pos.z = sCamPosTriple3.z;
+        target.x = sCamTargetTriple3.x;
+        target.y = sCamTargetTriple3.y;
+        target.z = sCamTargetTriple3.z;
+        break;
+    default:
+        BtlvCamera_GetDefaultPosTarget(&pos, &target);
+        if (wk->mcssScaled) {
+            BtlvEffvm_ScaleAllMcss(FX32_ONE, FX32_ONE, frames, wait, 0);
+            wk->mcssScaled = FALSE;
+        }
+        break;
+    }
+    switch (moveType) {
+    case EFFVM_CAMERA_MOVE_SET:
+        BtlvCamera_SetPosTarget(BtlvEffect_GetCamera(), &pos, &target);
+        break;
+    case EFFVM_CAMERA_MOVE_TO:
+        BtlvCamera_MoveTo(BtlvEffect_GetCamera(), &pos, &target, frames, wait, brakeFrames);
+        break;
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdCameraMove(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int moveType = VM_Read32(vm);
+    VecFx32 pos;
+    VecFx32 target;
+    VecFx32 curPos;
+    VecFx32 curTarget;
+    int frames;
+    int wait;
+    int brakeFrames;
+
+    pos.x = VM_Read32(vm);
+    pos.y = VM_Read32(vm);
+    pos.z = VM_Read32(vm);
+    target.x = VM_Read32(vm);
+    target.y = VM_Read32(vm);
+    target.z = VM_Read32(vm);
+    frames = VM_Read32(vm);
+    wait = VM_Read32(vm);
+    brakeFrames = VM_Read32(vm);
+    BtlvEffvm_ResetMcss(wk);
+    switch (moveType) {
+    case EFFVM_CAMERA_MOVE_SET:
+        BtlvCamera_SetPosTarget(BtlvEffect_GetCamera(), &pos, &target);
+        break;
+    case EFFVM_CAMERA_MOVE_TO:
+        BtlvCamera_MoveTo(BtlvEffect_GetCamera(), &pos, &target, frames, wait, brakeFrames);
+        break;
+    case EFFVM_CAMERA_MOVE_BY:
+        BtlvCamera_GetPosTarget(BtlvEffect_GetCamera(), &curPos, &curTarget);
+        VEC_Add(&curPos, &pos, &pos);
+        VEC_Add(&curTarget, &target, &target);
+        BtlvCamera_MoveTo(BtlvEffect_GetCamera(), &pos, &target, frames, wait, brakeFrames);
+        break;
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdCameraRotate(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int moveType = VM_Read32(vm);
+    s32 pitch = VM_Read32(vm);
+    s32 yaw = VM_Read32(vm);
+    int frames = VM_Read32(vm);
+    int wait = VM_Read32(vm);
+    int brakeFrames = VM_Read32(vm);
+    VecFx32 pos;
+    VecFx32 target;
+
+    BtlvEffvm_ResetMcss(wk);
+    switch (moveType) {
+    case EFFVM_CAMERA_MOVE_SET:
+        BtlvCamera_Rotate(BtlvEffect_GetCamera(), pitch, yaw);
+        break;
+    case EFFVM_CAMERA_MOVE_TO:
+        BtlvCamera_CalcRotatedPos(BtlvEffect_GetCamera(), pitch, yaw, &pos, &target);
+        BtlvCamera_MoveTo(BtlvEffect_GetCamera(), &pos, &target, frames, wait, brakeFrames);
+        break;
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdCameraShake(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int dir = VM_Read32(vm);
+    fx32 amplitude = VM_Read32(vm);
+    int unused = VM_Read32(vm);
+    int frames = VM_Read32(vm);
+    int wait = VM_Read32(vm);
+    int count = VM_Read32(vm);
+
+    BtlvCamera_Shake(BtlvEffect_GetCamera(), dir, amplitude, unused, frames, wait, count);
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdMcssCameraMode(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int type = VM_Read32(vm);
+    int count;
+    int i;
+    int positions[8];
+
+    if (VM_Read32(vm) == 0) {
+        wk->mcssCameraMode = type;
+        BtlvEffvm_ResetMcss(wk);
+    } else {
+        count = BtlvEffvm_GetTargetPositions(wk, EFFVM_ATTACKER, positions);
+        if (count != 0) {
+            for (i = 0; i < count; i++) {
+                if (type == EFFVM_MCSS_CAMERA_DEPTH) {
+                    BtlvMcss_ClearFlat(BtlvEffect_GetMcss(), positions[i]);
+                } else {
+                    BtlvMcss_SetFlat(BtlvEffect_GetMcss(), positions[i]);
+                }
+            }
+        }
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdCameraSave(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+
+    wk->camSaved = TRUE;
+    BtlvCamera_GetPosTarget(BtlvEffect_GetCamera(), &wk->camPos, &wk->camTarget);
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdParticleLoad(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    u32 fileId = BtlvEffvm_GetBallParticleId(wk, VM_Read32(vm));
+    int index;
+    void *work;
+    void *resource;
+    BtlvEffvmParticleVBlankWork *vblank;
+
+    if (BtlvEffvm_FindOrAddParticleId(wk, fileId, &index) == TRUE) {
+        work = GFL_HeapAllocate(HEAPID_TAIL(wk->heapId), 0x4800, FALSE, "btlv_effvm.c", 1912);
+        resource = Particle_ReadResource(ARCID_BTLV_EFFVM_PARTICLES, fileId, HEAPID_TAIL(wk->heapId));
+        if (work != NULL && resource != NULL) {
+            wk->particles[index] = Particle_CreateSystemEx(work, 0x4800, FALSE, 5, 6, 54, HEAPID_TAIL(wk->heapId));
+            if (wk->particles[index] != NULL) {
+                Particle_SetResourceNoUpload(wk->particles[index], resource);
+                vblank = GFL_HeapAllocate(HEAPID_TAIL(wk->heapId), sizeof(BtlvEffvmParticleVBlankWork), FALSE,
+                                          "btlv_effvm.c", 1922);
+                vblank->wk = wk;
+                vblank->particle = wk->particles[index];
+                vblank->resource = resource;
+                wk->particleLoading = TRUE;
+                BtlvEffect_AddTask(GFL_VBlankTCBAdd(BtlvEffvm_ParticleUploadTask, vblank, 0), NULL,
+                                   BTLV_EFFECT_TASK_SCRIPT);
+                VM_SetNativeCallback(vm, BtlvEffvm_WaitParticleLoadNative);
+                BtlvEffvm_SetEmitterCount(wk, index, resource);
+            }
+        }
+        if (wk->particles[index] == NULL) {
+            if (work != NULL) {
+                GFL_HeapFree(work);
+            }
+            if (resource != NULL) {
+                GFL_HeapFree(resource);
+            }
+            wk->particleIds[index] = -1;
+        }
+    }
+    return TRUE;
+}
+
+static BOOL BtlvEffvm_CmdEmitterAdd(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    BtlvEffvmEmitParam *param =
+        GFL_HeapAllocate(HEAPID_TAIL(wk->heapId), sizeof(BtlvEffvmEmitParam), TRUE, "btlv_effvm.c", 1965);
+    int index = BtlvEffvm_FindParticleId(wk, BtlvEffvm_GetBallParticleId(wk, VM_Read32(vm)));
+    int resourceId = VM_Read32(vm);
+
+    param->vm = vm;
+    param->from = VM_Read32(vm);
+    param->to = VM_Read32(vm);
+    param->offset.x = 0;
+    param->offset.y = VM_Read32(vm);
+    param->offset.z = 0;
+    param->arcAngle = VM_Read32(vm);
+    VM_Read32(vm);
+    param->radiusScale = VM_Read32(vm);
+    param->lifeTimeScale = VM_Read32(vm);
+    param->scaleScale = VM_Read32(vm);
+    param->cameraScale = VM_Read32(vm);
+    if (param->to == EFFVM_EMIT_EXPLICIT) {
+        param->to = param->from;
+    }
+    if (index != EFFVM_PARTICLE_CAPACITY) {
+        BtlvEffvm_AddEmitters(wk, param, index, resourceId);
+    }
+    GFL_HeapFree(param);
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdEmitterAddAt(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    BtlvEffvmEmitParam *param =
+        GFL_HeapAllocate(HEAPID_TAIL(wk->heapId), sizeof(BtlvEffvmEmitParam), TRUE, "btlv_effvm.c", 2016);
+    int index = BtlvEffvm_FindParticleId(wk, BtlvEffvm_GetBallParticleId(wk, VM_Read32(vm)));
+    int resourceId = VM_Read32(vm);
+
+    param->vm = vm;
+    param->from = EFFVM_EMIT_EXPLICIT;
+    param->to = EFFVM_EMIT_EXPLICIT;
+    param->fromPos.x = VM_Read32(vm);
+    param->fromPos.y = VM_Read32(vm);
+    param->fromPos.z = VM_Read32(vm);
+    param->toPos.x = VM_Read32(vm);
+    param->toPos.y = VM_Read32(vm);
+    param->toPos.z = VM_Read32(vm);
+    param->offset.x = 0;
+    param->offset.y = VM_Read32(vm);
+    param->offset.z = 0;
+    param->arcAngle = VM_Read32(vm);
+    VM_Read32(vm);
+    param->radiusScale = VM_Read32(vm);
+    param->lifeTimeScale = VM_Read32(vm);
+    param->scaleScale = VM_Read32(vm);
+    param->cameraScale = VM_Read32(vm);
+    if (index != EFFVM_PARTICLE_CAPACITY) {
+        if (Particle_CreateEmitterWithCallback(wk->particles[index], resourceId, BtlvEffvm_InitEmitter, param) ==
+            (SPLEmitter *)-1) {
+            GFL_HeapFree(param);
+        }
+    } else {
+        GFL_HeapFree(param);
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdEmitterAddOrtho(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    BtlvEffvmEmitParam *param =
+        GFL_HeapAllocate(HEAPID_TAIL(wk->heapId), sizeof(BtlvEffvmEmitParam), TRUE, "btlv_effvm.c", 2073);
+    int index = BtlvEffvm_FindParticleId(wk, BtlvEffvm_GetBallParticleId(wk, VM_Read32(vm)));
+    int resourceId = VM_Read32(vm);
+
+    param->vm = vm;
+    param->from = VM_Read32(vm);
+    param->to = VM_Read32(vm);
+    param->offset.x = VM_Read32(vm);
+    param->offset.y = VM_Read32(vm);
+    param->offset.z = VM_Read32(vm);
+    param->radiusScale = VM_Read32(vm);
+    param->lifeTimeScale = VM_Read32(vm);
+    param->scaleScale = VM_Read32(vm);
+    param->cameraScale = VM_Read32(vm);
+    param->offsetMode = EFFVM_EMITTER_PROJECT_MIRROR;
+    if (param->from == EFFVM_EMIT_SCREEN_ATTACKER) {
+        param->from = EFFVM_EMIT_ATTACKER;
+        param->offsetMode = EFFVM_EMITTER_PROJECT;
+    }
+    if (param->to == EFFVM_EMIT_EXPLICIT) {
+        param->to = param->from;
+    }
+    if (index != EFFVM_PARTICLE_CAPACITY) {
+        G3DCameraProjection projection;
+        VecFx32 pos = { 0, 0, 0 };
+        VecFx32 up = EMITTER_ADD_ORTHO_UP;
+        VecFx32 target = EMITTER_ADD_ORTHO_TARGET;
+
+        projection.type = G3DCAM_PROJECTION_ORTHO;
+        projection.param1 = FX32_CONST(3);
+        projection.param2 = FX32_CONST(-3);
+        projection.param3 = FX32_CONST(-4);
+        projection.param4 = FX32_CONST(4);
+        projection.near = FX32_ONE;
+        projection.far = FX32_CONST(512);
+        projection.ndcRangeOverride = FX32_ONE;
+
+        if (Particle_GetCamera(wk->particles[index]) == NULL) {
+            Particle_SetCamera(wk->particles[index], &projection, 0x2000, &pos, &up, &target, HEAPID_TAIL(wk->heapId));
+        }
+        BtlvEffvm_AddEmitters(wk, param, index, resourceId);
+    }
+    GFL_HeapFree(param);
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdEmitterAddAll(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    BtlvEffvmEmitParam *param =
+        GFL_HeapAllocate(HEAPID_TAIL(wk->heapId), sizeof(BtlvEffvmEmitParam), TRUE, "btlv_effvm.c", 2146);
+    int index = BtlvEffvm_FindParticleId(wk, BtlvEffvm_GetBallParticleId(wk, VM_Read32(vm)));
+    int count = BtlvEffvm_GetEmitterCount(wk, index);
+    BOOL ortho;
+    int i;
+
+    param->vm = vm;
+    param->from = VM_Read32(vm);
+    param->to = VM_Read32(vm);
+    param->offset.x = 0;
+    param->offset.y = VM_Read32(vm);
+    param->offset.z = 0;
+    param->arcAngle = VM_Read32(vm);
+    ortho = VM_Read32(vm);
+    param->radiusScale = VM_Read32(vm);
+    param->lifeTimeScale = VM_Read32(vm);
+    param->scaleScale = VM_Read32(vm);
+    param->cameraScale = VM_Read32(vm);
+    if (index != EFFVM_PARTICLE_CAPACITY) {
+        if (ortho) {
+            G3DCameraProjection projection;
+            VecFx32 pos = { 0, 0, 0 };
+            VecFx32 up = EMITTER_ADD_ALL_UP;
+            VecFx32 target = EMITTER_ADD_ALL_TARGET;
+
+            projection.type = G3DCAM_PROJECTION_ORTHO;
+            projection.param1 = FX32_CONST(3);
+            projection.param2 = FX32_CONST(-3);
+            projection.param3 = FX32_CONST(-4);
+            projection.param4 = FX32_CONST(4);
+            projection.near = FX32_ONE;
+            projection.far = FX32_CONST(512);
+            projection.ndcRangeOverride = FX32_ONE;
+
+            if (Particle_GetCamera(wk->particles[index]) == NULL) {
+                Particle_SetCamera(wk->particles[index], &projection, 0x2000, &pos, &up, &target,
+                                   HEAPID_TAIL(wk->heapId));
+            }
+            param->offsetMode = EFFVM_EMITTER_PROJECT;
+        }
+        if (param->to == EFFVM_EMIT_EXPLICIT) {
+            param->to = param->from;
+        }
+        for (i = 0; i < count; i++) {
+            BtlvEffvm_AddEmitters(wk, param, index, i);
+        }
+    }
+    GFL_HeapFree(param);
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdParticleDelete(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int index = BtlvEffvm_FindParticleId(wk, BtlvEffvm_GetBallParticleId(wk, VM_Read32(vm)));
+
+    if (index != EFFVM_PARTICLE_CAPACITY) {
+        BtlvEffvm_DeleteParticle(wk->particles[index]);
+        wk->particles[index] = NULL;
+        wk->particleIds[index] = -1;
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdEmitterMove(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    BtlvEffvmEmitParam *param =
+        GFL_HeapAllocate(HEAPID_TAIL(wk->heapId), sizeof(BtlvEffvmEmitParam), TRUE, "btlv_effvm.c", 2251);
+    int index = BtlvEffvm_FindParticleId(wk, BtlvEffvm_GetBallParticleId(wk, VM_Read32(vm)));
+    int resourceId = VM_Read32(vm);
+
+    param->vm = vm;
+    param->motionType = VM_Read32(vm);
+    param->from = VM_Read32(vm);
+    param->to = VM_Read32(vm);
+    param->offset.x = 0;
+    param->offset.y = VM_Read32(vm);
+    param->offset.z = 0;
+    param->motionFrames = VM_Read32(vm);
+    param->motionHeight = VM_Read32(vm);
+    param->radiusScale = FX32_ONE;
+    param->lifeTimeScale = VM_Read32(vm);
+    param->scaleScale = FX32_ONE;
+    param->cameraScale = VM_Read32(vm);
+    param->turns = VM_Read32(vm);
+    if (param->turns == 0) {
+        param->turns = 1;
+    }
+    if (index != EFFVM_PARTICLE_CAPACITY) {
+        if (Particle_CreateEmitterWithCallback(wk->particles[index], resourceId, BtlvEffvm_InitEmitter, param) ==
+            (SPLEmitter *)-1) {
+            GFL_HeapFree(param);
+        }
+    } else {
+        GFL_HeapFree(param);
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdEmitterMoveFrom(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    BtlvEffvmEmitParam *param =
+        GFL_HeapAllocate(HEAPID_TAIL(wk->heapId), sizeof(BtlvEffvmEmitParam), TRUE, "btlv_effvm.c", 2309);
+    int index = BtlvEffvm_FindParticleId(wk, BtlvEffvm_GetBallParticleId(wk, VM_Read32(vm)));
+    int resourceId = VM_Read32(vm);
+
+    param->vm = vm;
+    param->motionType = VM_Read32(vm);
+    param->from = EFFVM_EMIT_EXPLICIT;
+    param->fromPos.x = VM_Read32(vm);
+    param->fromPos.y = VM_Read32(vm);
+    param->fromPos.z = VM_Read32(vm);
+    param->to = VM_Read32(vm);
+    param->offset.x = 0;
+    param->offset.y = VM_Read32(vm);
+    param->offset.z = 0;
+    param->motionFrames = VM_Read32(vm);
+    param->motionHeight = VM_Read32(vm);
+    param->radiusScale = FX32_ONE;
+    param->lifeTimeScale = VM_Read32(vm);
+    param->scaleScale = FX32_ONE;
+    param->cameraScale = VM_Read32(vm);
+    param->turns = VM_Read32(vm);
+    if (param->turns == 0) {
+        param->turns = 1;
+    }
+    if (index != EFFVM_PARTICLE_CAPACITY) {
+        if (Particle_CreateEmitterWithCallback(wk->particles[index], resourceId, BtlvEffvm_InitEmitter, param) ==
+            (SPLEmitter *)-1) {
+            GFL_HeapFree(param);
+        }
+    } else {
+        GFL_HeapFree(param);
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdEmitterMoveOrtho(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    BtlvEffvmEmitParam *param =
+        GFL_HeapAllocate(HEAPID_TAIL(wk->heapId), sizeof(BtlvEffvmEmitParam), TRUE, "btlv_effvm.c", 2371);
+    int index = BtlvEffvm_FindParticleId(wk, BtlvEffvm_GetBallParticleId(wk, VM_Read32(vm)));
+    int resourceId = VM_Read32(vm);
+
+    param->vm = vm;
+    param->motionType = VM_Read32(vm);
+    param->from = VM_Read32(vm);
+    param->to = VM_Read32(vm);
+    param->offset.x = 0;
+    param->offset.y = VM_Read32(vm);
+    param->offset.z = 0;
+    param->motionFrames = VM_Read32(vm);
+    param->motionHeight = VM_Read32(vm);
+    param->radiusScale = FX32_CONST(0.75);
+    param->lifeTimeScale = VM_Read32(vm);
+    param->scaleScale = FX32_CONST(0.75);
+    param->cameraScale = VM_Read32(vm);
+    param->turns = VM_Read32(vm);
+    param->offsetMode = EFFVM_EMITTER_PROJECT_START;
+    if (param->turns == 0) {
+        param->turns = 1;
+    }
+    if (index != EFFVM_PARTICLE_CAPACITY) {
+        G3DCameraProjection projection;
+        VecFx32 pos = { 0, 0, 0 };
+        VecFx32 up = EMITTER_MOVE_ORTHO_UP;
+        VecFx32 target = EMITTER_MOVE_ORTHO_TARGET;
+
+        projection.type = G3DCAM_PROJECTION_ORTHO;
+        projection.param1 = FX32_CONST(3);
+        projection.param2 = FX32_CONST(-3);
+        projection.param3 = FX32_CONST(-4);
+        projection.param4 = FX32_CONST(4);
+        projection.near = FX32_ONE;
+        projection.far = FX32_CONST(512);
+        projection.ndcRangeOverride = FX32_ONE;
+
+        if (Particle_GetCamera(wk->particles[index]) == NULL) {
+            Particle_SetCamera(wk->particles[index], &projection, 0x2000, &pos, &up, &target, HEAPID_TAIL(wk->heapId));
+        }
+        if (Particle_CreateEmitterWithCallback(wk->particles[index], resourceId, BtlvEffvm_InitEmitter, param) ==
+            (SPLEmitter *)-1) {
+            GFL_HeapFree(param);
+        }
+    } else {
+        GFL_HeapFree(param);
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdEmitterMoveFromOrtho(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    BtlvEffvmEmitParam *param =
+        GFL_HeapAllocate(HEAPID_TAIL(wk->heapId), sizeof(BtlvEffvmEmitParam), TRUE, "btlv_effvm.c", 2448);
+    int index = BtlvEffvm_FindParticleId(wk, BtlvEffvm_GetBallParticleId(wk, VM_Read32(vm)));
+    int resourceId = VM_Read32(vm);
+
+    param->vm = vm;
+    param->motionType = VM_Read32(vm);
+    param->from = EFFVM_EMIT_EXPLICIT;
+    param->fromPos.x = VM_Read32(vm);
+    param->fromPos.y = VM_Read32(vm);
+    param->fromPos.z = VM_Read32(vm);
+    param->to = VM_Read32(vm);
+    param->offset.x = 0;
+    param->offset.y = VM_Read32(vm);
+    param->offset.z = 0;
+    param->motionFrames = VM_Read32(vm);
+    param->motionHeight = VM_Read32(vm);
+    param->radiusScale = FX32_ONE;
+    param->lifeTimeScale = VM_Read32(vm);
+    param->cameraScale = VM_Read32(vm);
+    param->scaleScale = VM_Read32(vm);
+    param->offsetMode = EFFVM_EMITTER_PROJECT_START;
+    if (index != EFFVM_PARTICLE_CAPACITY) {
+        G3DCameraProjection projection;
+        VecFx32 pos = { 0, 0, 0 };
+        VecFx32 up = EMITTER_MOVE_FROM_ORTHO_UP;
+        VecFx32 target = EMITTER_MOVE_FROM_ORTHO_TARGET;
+
+        projection.type = G3DCAM_PROJECTION_ORTHO;
+        projection.param1 = FX32_CONST(3);
+        projection.param2 = FX32_CONST(-3);
+        projection.param3 = FX32_CONST(-4);
+        projection.param4 = FX32_CONST(4);
+        projection.near = FX32_ONE;
+        projection.far = FX32_CONST(512);
+        projection.ndcRangeOverride = FX32_ONE;
+
+        if (Particle_GetCamera(wk->particles[index]) == NULL) {
+            Particle_SetCamera(wk->particles[index], &projection, 0x2000, &pos, &up, &target, HEAPID_TAIL(wk->heapId));
+        }
+        if (Particle_CreateEmitterWithCallback(wk->particles[index], resourceId, BtlvEffvm_InitEmitter, param) ==
+            (SPLEmitter *)-1) {
+            GFL_HeapFree(param);
+        }
+    } else {
+        GFL_HeapFree(param);
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdOrbitEmitters(VM *vm, void *env) {
+    return BtlvEffvm_AddCircleEmitter(vm, env, 0);
+}
+
+static BOOL BtlvEffvm_CmdOrbitEmittersAlt(VM *vm, void *env) {
+    return BtlvEffvm_AddCircleEmitter(vm, env, 1);
+}
+
+static BOOL BtlvEffvm_CmdMcssMoveXY(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int positions[8];
+    int count = BtlvEffvm_GetTargetPositions(wk, VM_Read32(vm), positions);
+    int type = VM_Read32(vm);
+    VecFx32 dest;
+    s32 frames;
+    s32 wait;
+    s32 times;
+    int i;
+
+    dest.x = VM_Read32(vm);
+    dest.y = VM_Read32(vm);
+    dest.z = 0;
+    frames = VM_Read32(vm);
+    wait = VM_Read32(vm);
+    times = VM_Read32(vm);
+    if (count != 0) {
+        for (i = 0; i < count; i++) {
+            BtlvMcss_MovePosition(BtlvEffect_GetMcss(), positions[i], type, &dest, frames, wait, times);
+        }
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdMcssCircle(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    BtlvMcssCircle circle;
+    int positions[8];
+    int count = BtlvEffvm_GetTargetPositions(wk, VM_Read32(vm), positions);
+    int i;
+
+    circle.mode = VM_Read32(vm);
+    circle.start = VM_Read32(vm);
+    circle.radius1 = VM_Read32(vm);
+    circle.radius2 = VM_Read32(vm);
+    circle.frames = (s32)VM_Read32(vm) >> FX32_SHIFT;
+    circle.wait = (s32)VM_Read32(vm) >> FX32_SHIFT;
+    circle.count = (s32)VM_Read32(vm) >> FX32_SHIFT;
+    circle.turnWait = VM_Read32(vm);
+    if (count != 0 && circle.count != 0) {
+        for (i = 0; i < count; i++) {
+            circle.pos = positions[i];
+            BtlvMcss_MoveCircle(BtlvEffect_GetMcss(), &circle);
+        }
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdMcssShake(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    BtlvMcssShake shake;
+    int positions[8];
+    int count = BtlvEffvm_GetTargetPositions(wk, VM_Read32(vm), positions);
+    s32 axis = VM_Read32(vm);
+    fx32 startAngle = VM_Read32(vm);
+    fx32 endAngle = VM_Read32(vm);
+    fx32 amplitude = VM_Read32(vm);
+    s32 frames = VM_Read32(vm);
+    int i;
+
+    shake.frames = frames;
+    shake.axis = axis;
+    shake.angle = startAngle;
+    shake.amplitude = amplitude;
+    shake.speed = FX_Div(endAngle - startAngle, frames << FX32_SHIFT);
+    if (count != 0) {
+        for (i = 0; i < count; i++) {
+            shake.pos = positions[i];
+            BtlvMcss_Shake(BtlvEffect_GetMcss(), &shake);
+        }
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdMcssScale(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    VecFx32 dest;
+    int positions[8];
+    int count = BtlvEffvm_GetTargetPositions(wk, VM_Read32(vm), positions);
+    int type = VM_Read32(vm);
+    s32 frames;
+    s32 wait;
+    s32 times;
+    int i;
+
+    dest.x = VM_Read32(vm);
+    dest.y = VM_Read32(vm);
+    dest.z = FX32_ONE;
+    frames = VM_Read32(vm);
+    wait = VM_Read32(vm);
+    times = VM_Read32(vm);
+    if (count != 0) {
+        for (i = 0; i < count; i++) {
+            BtlvMcss_MoveScaleOffset(BtlvEffect_GetMcss(), positions[i], type, &dest, frames, wait, times);
+        }
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdMcssRotate(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int positions[8];
+    int count = BtlvEffvm_GetTargetPositions(wk, VM_Read32(vm), positions);
+    int type = VM_Read32(vm);
+    VecFx32 dest;
+    s32 frames;
+    s32 wait;
+    s32 times;
+    int i;
+
+    dest.x = 0;
+    dest.y = 0;
+    dest.z = VM_Read32(vm);
+    frames = VM_Read32(vm);
+    wait = VM_Read32(vm);
+    times = VM_Read32(vm);
+    if (count != 0) {
+        for (i = 0; i < count; i++) {
+            BtlvMcss_MoveRotation(BtlvEffect_GetMcss(), positions[i], type, &dest, frames, wait, times);
+        }
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdMcssAlpha(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int positions[8];
+    int count = BtlvEffvm_GetTargetPositions(wk, VM_Read32(vm), positions);
+    int type = VM_Read32(vm);
+    int alpha = VM_Read32(vm);
+    s32 frames = VM_Read32(vm);
+    s32 wait = VM_Read32(vm);
+    s32 times = VM_Read32(vm);
+    int i;
+
+    if (count != 0) {
+        for (i = 0; i < count; i++) {
+            BtlvMcss_MoveAlpha(BtlvEffect_GetMcss(), positions[i], type, alpha, frames, wait, times);
+        }
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdMcssMosaic(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int positions[8];
+    int count = BtlvEffvm_GetTargetPositions(wk, VM_Read32(vm), positions);
+    int type = VM_Read32(vm);
+    int level = VM_Read32(vm);
+    s32 frames = VM_Read32(vm);
+    s32 wait = VM_Read32(vm);
+    s32 times = VM_Read32(vm);
+    int i;
+
+    if (count != 0) {
+        for (i = 0; i < count; i++) {
+            BtlvMcss_MoveLevel(BtlvEffect_GetMcss(), positions[i], type, level, frames, wait, times);
+        }
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdMcssBlink(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int positions[8];
+    int count = BtlvEffvm_GetTargetPositions(wk, VM_Read32(vm), positions);
+    int type = VM_Read32(vm);
+    s32 wait = VM_Read32(vm);
+    s32 times = VM_Read32(vm);
+    int i;
+
+    if (count != 0) {
+        if (times == 0) {
+            times = 1;
+        }
+        for (i = 0; i < count; i++) {
+            BtlvMcss_Blink(BtlvEffect_GetMcss(), positions[i], type, wait, times);
+        }
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdMcssSetVanish(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int positions[8];
+    int count = BtlvEffvm_GetTargetPositions(wk, VM_Read32(vm), positions);
+    int mode = VM_Read32(vm);
+    int i;
+
+    if (count != 0) {
+        for (i = 0; i < count; i++) {
+            BtlvMcss_SetAnimPause(BtlvEffect_GetMcss(), positions[i], mode);
+        }
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdMcssPalFade(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int positions[8];
+    int count = BtlvEffvm_GetTargetPositions(wk, VM_Read32(vm), positions);
+    int startEvy = VM_Read32(vm);
+    int endEvy = VM_Read32(vm);
+    int wait = VM_Read32(vm);
+    u32 color = VM_Read32(vm);
+    int i;
+
+    if (count != 0) {
+        for (i = 0; i < count; i++) {
+            BtlvMcss_StartPaletteFade(BtlvEffect_GetMcss(), positions[i], startEvy, endEvy, wait, color);
+        }
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdMcssSetMode(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int positions[8];
+    int count = BtlvEffvm_GetTargetPositions(wk, VM_Read32(vm), positions);
+    int mode = VM_Read32(vm);
+    int i;
+
+    if (mode == EFFVM_MCSS_VANISH_RESTORE_ALL) {
+        BtlvMcss_RestoreVanish(BtlvEffect_GetMcss());
+    } else if (count != 0) {
+        for (i = 0; i < count; i++) {
+            BtlvMcss_SetVanish(BtlvEffect_GetMcss(), positions[i], mode);
+        }
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdMcssSetValue(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int positions[8];
+    int count = BtlvEffvm_GetTargetPositions(wk, VM_Read32(vm), positions);
+    int value = VM_Read32(vm);
+    int i;
+
+    if (count != 0) {
+        for (i = 0; i < count; i++) {
+            BtlvMcss_SetShadowVanish(BtlvEffect_GetMcss(), positions[i], value);
+        }
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdMcssScaleTo(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    VecFx32 dest;
+    int positions[8];
+    int count = BtlvEffvm_GetTargetPositions(wk, VM_Read32(vm), positions);
+    int type = VM_Read32(vm);
+    s32 frames;
+    s32 wait;
+    s32 times;
+    int i;
+
+    dest.x = VM_Read32(vm);
+    dest.y = VM_Read32(vm);
+    dest.z = FX32_ONE;
+    frames = VM_Read32(vm);
+    wait = VM_Read32(vm);
+    times = VM_Read32(vm);
+    if (count != 0) {
+        for (i = 0; i < count; i++) {
+            BtlvMcss_MoveShadowScaleOffset(BtlvEffect_GetMcss(), positions[i], type, &dest, frames, wait, times);
+        }
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdGaugeHide(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int positions[8];
+    int count = BtlvEffvm_GetTargetPositions(wk, VM_Read32(vm), positions);
+    int i;
+
+    if (count != 0) {
+        for (i = 0; i < count; i++) {
+            BtlvEffect_DelPokemon(positions[i]);
+        }
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdSetTrainer(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    u32 trainerType = VM_Read32(vm);
+    u32 pos = BtlvEffvm_GetTargetPosition(vm, VM_Read32(vm));
+    u32 x = VM_Read32(vm);
+    u32 y = VM_Read32(vm);
+    u32 z = VM_Read32(vm);
+
+    if (trainerType == -1) {
+        trainerType = wk->value;
+    }
+    BtlvEffect_SetTrainer(trainerType, pos, x, y, z);
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdTrainerMove(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int pos = BtlvEffect_GetTrainerIndex(VM_Read32(vm));
+    int type = VM_Read32(vm);
+    VecFx32 dest;
+    s32 frames;
+    s32 wait;
+    s32 times;
+
+    dest.x = VM_Read32(vm);
+    dest.y = VM_Read32(vm);
+    dest.z = VM_Read32(vm);
+    frames = VM_Read32(vm);
+    wait = VM_Read32(vm);
+    times = VM_Read32(vm);
+    if (BtlvMcss_SetAnimation(BtlvEffect_GetMcss(), pos, 1) == TRUE) {
+        BtlvMcss_WatchAnimationEnd(BtlvEffect_GetMcss(), pos);
+    }
+    BtlvMcss_MovePosition(BtlvEffect_GetMcss(), pos, type, &dest, frames, wait, times);
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdMcssPlayAnim(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int pos = VM_Read32(vm);
+    int anim = VM_Read32(vm);
+
+    if (BtlvMcss_SetAnimation(BtlvEffect_GetMcss(), pos, anim) == TRUE) {
+        BtlvMcss_SetAnimSpeed(BtlvEffect_GetMcss(), pos, FX32_ONE);
+        BtlvMcss_WatchAnimationEnd(BtlvEffect_GetMcss(), pos);
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdDeleteMcss(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+
+    BtlvEffect_DelTrainer(VM_Read32(vm));
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdLoadBg(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    u32 fileId = VM_Read32(vm);
+
+    GFL_BGSysSetBGPriority(3, 1);
+    GFL_BGSysLoadNCGRStatic(ARCID_BTLV_EFFVM_BG, fileId + 1, 3, 0, 0, FALSE, HEAPID_TAIL(wk->heapId));
+    loadBGScrToVramByNarcNoReserveNegAlign(ARCID_BTLV_EFFVM_BG, fileId, 3, 0, 0, FALSE, HEAPID_TAIL(wk->heapId));
+    PaletteFade_LoadNCLREx(BtlvEffect_GetPaletteFade(), ARCID_BTLV_EFFVM_BG, fileId + 2, HEAPID_TAIL(wk->heapId),
+                           PALFADE_BUFFER_MAIN_BG, 0, 0x80, 0);
+    wk->bgX = GFL_BGSysGetBGOffsetX(3);
+    wk->bgY = GFL_BGSysGetBGOffsetY(3);
+    BtlvBg_SetOffsetReq(BtlvEffect_GetBg(), 0, 0);
+    wk->bgMoved = TRUE;
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdBgMove(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    u32 mode = VM_Read32(vm);
+    s32 x = VM_Read32(vm);
+    s32 y = VM_Read32(vm);
+    s32 frames = VM_Read32(vm);
+    s32 wait = VM_Read32(vm);
+    s32 count = VM_Read32(vm);
+    u32 pos = BtlvEffvm_GetTargetPosition(vm, EFFVM_ATTACKER);
+
+    BtlvBg_StartMove(BtlvEffect_GetBg(), pos, mode, x, y, frames, wait, count);
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdBgWave(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    u32 mode = VM_Read32(vm);
+    fx32 amplitude = VM_Read32(vm);
+    s32 step = VM_Read32(vm);
+    s32 frames = VM_Read32(vm);
+    u32 fadeMode = VM_Read32(vm);
+    s32 fadeFrames = VM_Read32(vm);
+
+    BtlvBg_StartWave(BtlvEffect_GetBg(), mode, amplitude, step, frames, fadeMode, fadeFrames);
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdBgPalAnim(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    BtlvEffvmPalAnimWork *work =
+        GFL_HeapAllocate(HEAPID_TAIL(wk->heapId), sizeof(BtlvEffvmPalAnimWork), TRUE, "btlv_effvm.c", 3435);
+    u32 fileId = VM_Read32(vm);
+    u32 loops = VM_Read32(vm);
+    u8 *data;
+    const u8 *palettes;
+    u16 *durations;
+    u16 i;
+
+    work->wk = wk;
+    work->loops = loops;
+    data = GFL_ArcSysReadHeapNewLZ(ARCID_BTLV_EFFVM_PAL_ANIM, fileId, FALSE, HEAPID_TAIL(wk->heapId));
+    work->fileId = fileId + 1;
+    palettes = data;
+    for (i = 0; *palettes != EFFVM_PAL_ANIM_PALETTES_END; i++) {
+        work->palettes[i] = *palettes;
+        palettes++;
+    }
+    work->count = i;
+    i = 0;
+    durations = (u16 *)(data + 0x80);
+    while (*durations != EFFVM_PAL_ANIM_DURATIONS_END) {
+        work->durations[i] = *durations;
+        durations++;
+        i++;
+    }
+    GFL_HeapFree(data);
+    wk->paletteAnim = TRUE;
+    BtlvEffect_AddTask(GFL_TCBMgrAddTask(wk->tcbManager, BtlvEffvm_PalAnimTask, work, 0), BtlvEffvm_PalAnimTaskRemove,
+                       BTLV_EFFECT_TASK_SCRIPT);
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdBgSetPriority(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+
+    GFL_BGSysSetBGPriority(3, (u8)VM_Read32(vm));
+    wk->bgMoved = TRUE;
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdSetAlphaBlend(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int alpha;
+
+    VM_Read32(vm);
+    VM_Read32(vm);
+    alpha = VM_Read32(vm);
+    VM_Read32(vm);
+    VM_Read32(vm);
+    VM_Read32(vm);
+    if (alpha == 31) {
+        G2x_SetBlendAlpha_(REG_BLDCNT_ADDR, GX_BLEND_PLANEMASK_BG1,
+                           GX_BLEND_PLANEMASK_BG0 | GX_BLEND_PLANEMASK_BG2 | GX_BLEND_PLANEMASK_BG3 |
+                               GX_BLEND_PLANEMASK_OBJ | GX_BLEND_PLANEMASK_BD,
+                           31, 7);
+    } else {
+        G2x_SetBlendAlpha_(REG_BLDCNT_ADDR, GX_BLEND_PLANEMASK_BG1 | GX_BLEND_PLANEMASK_BG3,
+                           GX_BLEND_PLANEMASK_BG0 | GX_BLEND_PLANEMASK_BG2 | GX_BLEND_PLANEMASK_OBJ |
+                               GX_BLEND_PLANEMASK_BD,
+                           31, alpha);
+    }
+    wk->alphaBlend = TRUE;
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdPaletteFade(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    u32 target = VM_Read32(vm);
+    u32 evy = VM_Read32(vm);
+    u32 targetEvy = VM_Read32(vm);
+    u32 wait = VM_Read32(vm);
+    u32 color = VM_Read32(vm);
+
+    BtlvEffect_StartPaletteFade(target, evy, targetEvy, wait, color);
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdSetVanish(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    u32 target = VM_Read32(vm);
+    u32 hide = VM_Read32(vm);
+
+    BtlvEffect_SetVanish(target, hide);
+    return wk->ret;
+}
+
+BOOL BtlvEffect_QueueCommands(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    BtlvEffvmWindowWork *work =
+        GFL_HeapAllocate(HEAPID_TAIL(wk->heapId), sizeof(BtlvEffvmWindowWork), TRUE, "btlv_effvm.c", 3659);
+
+    work->wk = wk;
+    work->dir = VM_Read32(vm);
+    work->winH = VM_Read32(vm);
+    work->winV = VM_Read32(vm);
+    work->winInOut = VM_Read32(vm);
+    work->count = VM_Read32(vm);
+    work->waitReload = VM_Read32(vm);
+    work->keepWindow = VM_Read32(vm);
+    GFL_BGSysSetBGEnabled(1, FALSE);
+    GFL_BGSysSetBGEnabled(2, FALSE);
+    BtlvEffect_AddTask(GFL_TCBMgrAddTask(wk->tcbManager, BtlvEffvm_WindowTask, work, 0), BtlvEffvm_WindowTaskRemove,
+                       BTLV_EFFECT_TASK_SCRIPT);
+    wk->windowTask = TRUE;
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdClactAdd(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int index = VM_Read32(vm);
+    u32 fileId = VM_Read32(vm);
+    int pos = BtlvEffvm_GetTargetPosition(vm, VM_Read32(vm));
+    fx32 offsetX = VM_Read32(vm);
+    fx32 offsetY = VM_Read32(vm);
+    fx32 scaleX = VM_Read32(vm);
+    fx32 scaleY = VM_Read32(vm);
+    VecFx32 world;
+    int x;
+    int y;
+
+    BtlvMcss_GetDefaultPos(BtlvEffect_GetMcss(), &world, pos);
+    world.x += offsetX;
+    world.y += offsetY;
+    NNS_G3dWorldPosToScrPos(&world, &x, &y);
+    wk->clactIndexes[index] =
+        BtlvClact_AddActor(BtlvEffect_GetClact(), ARCID_BTLV_EFFVM_BG, fileId, x, y, scaleX, scaleY);
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdClactMove(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int index = VM_Read32(vm);
+    int type = VM_Read32(vm);
+    ClActorPos pos;
+    int frames;
+    int wait;
+    int count;
+
+    pos.x = VM_Read32(vm);
+    pos.y = VM_Read32(vm);
+    frames = VM_Read32(vm);
+    wait = VM_Read32(vm);
+    count = VM_Read32(vm);
+    BtlvClact_StartMove(BtlvEffect_GetClact(), wk->clactIndexes[index], type, &pos, frames, wait, count);
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdClactScale(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int index = VM_Read32(vm);
+    int type = VM_Read32(vm);
+    VecFx32 scale;
+    int frames;
+    int wait;
+    int count;
+
+    scale.x = VM_Read32(vm);
+    scale.y = VM_Read32(vm);
+    scale.z = FX32_ONE;
+    frames = VM_Read32(vm);
+    wait = VM_Read32(vm);
+    count = VM_Read32(vm);
+    BtlvClact_StartScale(BtlvEffect_GetClact(), wk->clactIndexes[index], type, &scale, frames, wait, count);
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdClactSetAnim(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int index = VM_Read32(vm);
+    int sequence = VM_Read32(vm);
+
+    BtlvClact_SetAnimSeq(BtlvEffect_GetClact(), wk->clactIndexes[index], sequence);
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdClactPalFade(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int index = VM_Read32(vm);
+    int start = VM_Read32(vm);
+    int end = VM_Read32(vm);
+    int delay = VM_Read32(vm);
+    int color = VM_Read32(vm);
+
+    BtlvClact_StartPalFade(BtlvEffect_GetClact(), wk->clactIndexes[index], start, end, delay, color);
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdClactDelete(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int index = VM_Read32(vm);
+
+    BtlvClact_DeleteActor(BtlvEffect_GetClact(), wk->clactIndexes[index]);
+    wk->clactIndexes[index] = -1;
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdGauge(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    u32 mode = VM_Read32(vm);
+    int target = VM_Read32(vm);
+    int targets[8];
+    int positions[8];
+    int count;
+    int i;
+
+    if (mode <= EFFVM_GAUGE_SHOW) {
+        switch (target) {
+        case EFFVM_GAUGE_ATTACKER:
+            BtlvEffect_SetGaugeDrawEnable(mode, wk->attacker);
+            break;
+        case EFFVM_GAUGE_DEFENDER:
+            count = BtlvEffvm_GetTargetPositions(wk, EFFVM_DEFENDER, targets);
+            if (count != 0) {
+                for (i = 0; i < count; i++) {
+                    // BUG: every call passes the entry past the last target, which was never written
+#ifdef BUGFIX
+                    BtlvEffect_SetGaugeDrawEnable(mode, targets[i]);
+#else
+                    BtlvEffect_SetGaugeDrawEnable(mode, targets[count]);
+#endif
+                }
+            }
+            break;
+        default:
+            BtlvEffect_SetGaugeDrawEnableBySide(mode, target);
+            break;
+        }
+    } else {
+        count = 0;
+        switch (target) {
+        case EFFVM_GAUGE_PLAYER:
+            for (i = 0; i < 8; i += 2) {
+                if (BtlvEffect_CheckExist(i)) {
+                    positions[count] = i;
+                    count++;
+                }
+            }
+            break;
+        case EFFVM_GAUGE_ENEMY:
+            for (i = 1; i < 8; i += 2) {
+                if (BtlvEffect_CheckExist(i)) {
+                    positions[count] = i;
+                    count++;
+                }
+            }
+            break;
+        case EFFVM_GAUGE_BOTH:
+            for (i = 0; i < 8; i++) {
+                if (BtlvEffect_CheckExist(i)) {
+                    positions[count] = i;
+                    count++;
+                }
+            }
+            break;
+        case EFFVM_GAUGE_ATTACKER:
+            count = 1;
+            positions[0] = wk->attacker;
+            break;
+        case EFFVM_GAUGE_DEFENDER:
+            count = BtlvEffvm_GetTargetPositions(wk, EFFVM_DEFENDER, positions);
+            break;
+        }
+        if (count != 0) {
+            for (i = 0; i < count; i++) {
+                ClActorPos offset = { 0, 0 };
+                int *pos;
+
+                offset.x = mode == EFFVM_GAUGE_OFFSCREEN ? 128 : -16;
+                pos = &positions[i];
+                if (*pos & 1) {
+                    offset.x *= -1;
+                }
+                BtlvGauge_SetPos(BtlvEffect_GetGauge(), *pos, &offset);
+            }
+        }
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdPlaySE(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    u32 se = VM_Read32(vm);
+    u32 player = VM_Read32(vm);
+    int pan = VM_Read32(vm);
+    int wait = VM_Read32(vm);
+    int pitch = VM_Read32(vm);
+    int volume = VM_Read32(vm);
+    int modDepth = VM_Read32(vm);
+    int modSpeed = VM_Read32(vm);
+
+    VM_Read32(vm);
+    BtlvEffvm_PlaySEAt(vm, se, player, pan, pitch, volume, modDepth, modSpeed, wait);
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdStopSE(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    s32 player = VM_Read32(vm);
+
+    if (player == EFFVM_SE_STOP_ALL) {
+        GFL_SndStop();
+    } else {
+        GFL_SndPlayerStop(player);
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdPanSE(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    BtlvEffvmSeMoveWork *work =
+        GFL_HeapAllocate(HEAPID_TAIL(wk->heapId), sizeof(BtlvEffvmSeMoveWork), FALSE, "btlv_effvm.c", 4058);
+    int from;
+    int to;
+
+    work->wk = wk;
+    work->player = VM_Read32(vm);
+    work->type = VM_Read32(vm);
+    work->param = EFFVM_SE_PARAM_PAN;
+    from = BtlvEffvm_GetTargetPosition(vm, VM_Read32(vm));
+    to = BtlvEffvm_GetTargetPosition(vm, VM_Read32(vm));
+    work->start = (from & 1) ? 127 : -128;
+    work->end = (to & 1) ? 127 : -128;
+    work->delay = VM_Read32(vm);
+    work->framesReset = work->frames = VM_Read32(vm);
+    work->stepWait = 0;
+    work->stepWaitReset = VM_Read32(vm);
+    work->count = VM_Read32(vm) * 2;
+    if (work->type == EFFVM_SE_MOVE_SWING && work->count == 0) {
+        work->count = 2;
+    }
+    work->value = FX32_CONST(work->start);
+    work->step = FX_Div(FX32_CONST(work->end - work->start), FX32_CONST(work->frames));
+    BtlvEffect_AddTask(GFL_TCBMgrAddTask(wk->tcbManager, BtlvEffvm_SeMoveTask, work, 0), BtlvEffvm_SeMoveTaskRemove,
+                       BTLV_EFFECT_TASK_SCRIPT);
+    wk->seSliding = TRUE;
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdMoveSE(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    u32 player = VM_Read32(vm);
+    u32 type = VM_Read32(vm);
+    u32 param = VM_Read32(vm);
+    int start = VM_Read32(vm);
+    int end = VM_Read32(vm);
+    int delay = VM_Read32(vm);
+    int frames = VM_Read32(vm);
+    int stepWait = VM_Read32(vm);
+    int count = VM_Read32(vm);
+
+    BtlvEffvm_SlideSE(vm, player, type, param, start, end, delay, frames, stepWait, count);
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdWait(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+
+    wk->waitKind = VM_Read32(vm);
+    VM_SetNativeCallback(vm, BtlvEffvm_WaitNative);
+    wk->ret = TRUE;
+    return TRUE;
+}
+
+static BOOL BtlvEffvm_CmdWaitFrames(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+
+    wk->waitTimer = VM_Read32(vm);
+    VM_SetNativeCallback(vm, BtlvEffvm_WaitTimerNative);
+    wk->ret = TRUE;
+    return TRUE;
+}
+
+static BOOL BtlvEffvm_CmdSetYield(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+
+    wk->ret = VM_Read32(vm);
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdIfVarConst(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int value = BtlvEffvm_GetVariable(wk, VM_Read32(vm));
+    int cond = VM_Read32(vm);
+    int target = VM_Read32(vm);
+    int offset = VM_Read32(vm);
+
+    BtlvEffvm_JumpIf(vm, value, target, cond, offset);
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdIfVarVar(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int value = BtlvEffvm_GetVariable(wk, VM_Read32(vm));
+    int cond = VM_Read32(vm);
+    int target = BtlvEffvm_GetVariable(wk, VM_Read32(vm));
+    int offset = VM_Read32(vm);
+
+    BtlvEffvm_JumpIf(vm, value, target, cond, offset);
+    return wk->ret;
+}
+
+static void BtlvEffvm_JumpIf(VM *vm, int value, int target, int cond, int offset) {
+    BOOL jump = FALSE;
+
+    switch (cond) {
+    case EFFVM_CMP_EQ:
+        if (value == target) {
+            jump = TRUE;
+        }
+        break;
+    case EFFVM_CMP_NE:
+        if (value != target) {
+            jump = TRUE;
+        }
+        break;
+    case EFFVM_CMP_LT:
+        if (value < target) {
+            jump = TRUE;
+        }
+        break;
+    case EFFVM_CMP_GT:
+        if (value > target) {
+            jump = TRUE;
+        }
+        break;
+    case EFFVM_CMP_LE:
+        if (value <= target) {
+            jump = TRUE;
+        }
+        break;
+    case EFFVM_CMP_GE:
+        if (value >= target) {
+            jump = TRUE;
+        }
+        break;
+    }
+    if (jump == TRUE) {
+        VM_Jump(vm, vm->pc + offset);
+    }
+}
+
+static BOOL BtlvEffvm_CmdIfPokeExists(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int pos = VM_Read32(vm);
+    int value = VM_Read32(vm);
+    int offset = VM_Read32(vm);
+
+    if (value == BtlvEffect_CheckExist(pos)) {
+        VM_Jump(vm, vm->pc + offset);
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdSetValue(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+
+    wk->value = VM_Read32(vm);
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdLoadVar(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+
+    wk->value = BtlvEffvm_GetVariable(wk, VM_Read32(vm));
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdSetVar(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int id = VM_Read32(vm);
+    int value = VM_Read32(vm);
+
+    switch (id) {
+    case EFFVM_VAR_TARGET:
+        wk->param.target = value;
+        break;
+    case EFFVM_VAR_VARIANT:
+        wk->param.variant = value;
+        break;
+    case EFFVM_VAR_PARAM_2:
+        wk->param.param2 = value;
+        break;
+    case EFFVM_VAR_SHAKES:
+        wk->param.shakes = value;
+        break;
+    case EFFVM_VAR_CAUGHT:
+        wk->param.caught = value;
+        break;
+    case EFFVM_VAR_CRITICAL:
+        wk->param.critical = value;
+        break;
+    case EFFVM_VAR_ITEM:
+        wk->param.itemNo = value;
+        break;
+    case EFFVM_VAR_MCSS_SCALED:
+        wk->mcssScaled = value;
+        break;
+    case EFFVM_VAR_CAMERA_SAVED:
+        wk->camSaved = value;
+        break;
+    case EFFVM_VAR_MESSAGE_IDLE_RESTORE:
+        wk->messageIdleNeedsRestore = value;
+        break;
+    case EFFVM_VAR_CAMERA_LOCKED:
+        wk->cameraLocked = value;
+        break;
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdMcssEffect(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int type = VM_Read32(vm);
+    int positions[8];
+    int count = BtlvEffvm_GetTargetPositions(wk, VM_Read32(vm), positions);
+    int arg = VM_Read32(vm);
+    int i;
+
+    if (count != 0) {
+        for (i = 0; i < count; i++) {
+            BtlvMcss_SetSubstitute(BtlvEffect_GetMcss(), positions[i], type, arg);
+        }
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdMcssSwap(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+
+    BtlvMcss_Transform(BtlvEffect_GetMcss(), wk->defender, wk->attacker);
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdPlayCry(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int positions[8];
+    int count = BtlvEffvm_GetTargetPositions(wk, VM_Read32(vm), positions);
+    int speed = VM_Read32(vm);
+    int volume = VM_Read32(vm);
+    int chorusVolume = VM_Read32(vm);
+    int chorusSpeed = VM_Read32(vm);
+    int reverse = VM_Read32(vm);
+    int delay = VM_Read32(vm);
+    int i;
+
+    if (count != 0) {
+        if (delay == 0) {
+            for (i = 0; i < count; i++) {
+                int slot = BtlvEffvm_GetFreeVoiceSlot(wk);
+
+                wk->voices[slot] = BtlvMcss_PlayCry(BtlvEffect_GetMcss(), positions[i], speed, volume, chorusVolume,
+                                                    chorusSpeed, reverse);
+            }
+            BtlvEffvm_StartBgmFade(wk, 0x7f000, 0x6b000, 10);
+            if (!wk->bgmLowerRequested) {
+                BtlvEffvmCryWaitWork *work = GFL_HeapAllocate(HEAPID_TAIL(wk->heapId), sizeof(BtlvEffvmCryWaitWork),
+                                                              FALSE, "btlv_effvm.c", 4540);
+
+                work->wk = wk;
+                BtlvEffect_AddTask(GFL_TCBMgrAddTask(wk->tcbManager, BtlvEffvm_CryWaitTask, work, 0), NULL,
+                                   BTLV_EFFECT_TASK_PERSISTENT);
+            }
+        } else {
+            for (i = 0; i < count; i++) {
+                BtlvEffvmCryWork *work =
+                    GFL_HeapAllocate(HEAPID_TAIL(wk->heapId), sizeof(BtlvEffvmCryWork), FALSE, "btlv_effvm.c", 4551);
+
+                work->wk = wk;
+                work->pos = positions[i];
+                work->speed = speed;
+                work->volume = volume;
+                work->chorusVolume = chorusVolume;
+                work->chorusSpeed = chorusSpeed;
+                work->reverse = reverse;
+                work->delay = delay;
+                wk->cryDelayed = TRUE;
+                BtlvEffect_AddTask(GFL_TCBMgrAddTask(wk->tcbManager, BtlvEffvm_CryDelayTask, work, 0),
+                                   BtlvEffvm_CryDelayTaskRemove, BTLV_EFFECT_TASK_SCRIPT);
+            }
+        }
+    }
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdSetBallSource(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+
+    wk->ballSource = VM_Read32(vm);
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdBallAdd(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int index = VM_Read32(vm);
+    int pos = BtlvEffvm_GetTargetPosition(vm, VM_Read32(vm));
+    fx32 offsetX = VM_Read32(vm);
+    fx32 offsetY = VM_Read32(vm);
+    fx32 scaleX = VM_Read32(vm);
+    fx32 scaleY = VM_Read32(vm);
+    VecFx32 world;
+    int x;
+    int y;
+    int ball;
+
+    BtlvMcss_GetDefaultPos(BtlvEffect_GetMcss(), &world, pos);
+    world.x += offsetX;
+    world.y += offsetY;
+    NNS_G3dWorldPosToScrPos(&world, &x, &y);
+    ball = PML_ItemGetMonsBallID(wk->param.itemNo);
+    if (ball == EFFVM_BALL_NONE || ball > EFFVM_BALL_DREAM) {
+        ball = EFFVM_BALL_POKE;
+    }
+    if (ball == EFFVM_BALL_DREAM) {
+        ball = EFFVM_DREAM_BALL_SPRITE;
+    }
+    wk->clactIndexes[index] = BtlvClact_AddActorEx(BtlvEffect_GetClact(), ARCID_BTLV_EFFVM_BG, ball * 2 + 231,
+                                                   ball * 2 + 232, 231, 232, x, y, scaleX, scaleY);
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdCall(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    u32 effect = VM_Read32(vm);
+    u32 attacker = VM_Read32(vm);
+    u32 defender = VM_Read32(vm);
+
+    wk->callAttackers[wk->callDepth] = wk->attacker;
+    wk->callDefenders[wk->callDepth] = wk->defender;
+    wk->callScripts[wk->callDepth] = wk->script;
+    wk->callValues[wk->callDepth] = wk->value;
+    if (attacker != EFFVM_ATTACKER) {
+        wk->attacker = attacker;
+    }
+    if (defender != EFFVM_DEFENDER) {
+        wk->defender = defender;
+    }
+    wk->value = 0;
+    wk->script =
+        GFL_ArcSysReadHeapNew(ARCID_BTLV_EFFVM_EFFECT_SCRIPTS, effect - BTLV_EFFECT_FIRST, HEAPID_TAIL(wk->heapId));
+    VM_Call(vm, (u8 *)wk->script + ((u32 *)wk->script)[1]);
+    wk->callDepth++;
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdReturn(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+
+    wk->callDepth--;
+    GFL_HeapFree(wk->script);
+    wk->attacker = wk->callAttackers[wk->callDepth];
+    wk->defender = wk->callDefenders[wk->callDepth];
+    wk->script = wk->callScripts[wk->callDepth];
+    wk->value = wk->callValues[wk->callDepth];
+    VM_Return(vm);
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdJump(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int offset = VM_Read32(vm);
+
+    VM_Jump(vm, vm->pc + offset);
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdWaitExternal(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+
+    wk->paused = TRUE;
+    VM_SetNativeCallback(vm, BtlvEffvm_WaitResumeNative);
+    wk->ret = TRUE;
+    return TRUE;
+}
+
+static BOOL BtlvEffvm_CmdChangeScript(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int effect = VM_Read32(vm);
+    void *script;
+
+    GFL_HeapFree(wk->script);
+    if (effect < BTLV_EFFECT_FIRST) {
+        wk->script = GFL_ArcSysReadHeapNew(ARCID_BTLV_EFFVM_MOVE_SCRIPTS, effect, HEAPID_TAIL(wk->heapId));
+    } else {
+        wk->script =
+            GFL_ArcSysReadHeapNew(ARCID_BTLV_EFFVM_EFFECT_SCRIPTS, effect - BTLV_EFFECT_FIRST, HEAPID_TAIL(wk->heapId));
+    }
+    script = wk->script;
+    wk->value = 0;
+    VM_Jump(vm, (u8 *)script + ((u32 *)script)[1]);
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdWaitSide(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    u32 side = VM_Read32(vm);
+    BtlvEffvmSideWork *work =
+        GFL_HeapAllocate(HEAPID_TAIL(wk->heapId), sizeof(BtlvEffvmSideWork), FALSE, "btlv_effvm.c", 4883);
+
+    work->wk = wk;
+    work->side = side;
+    work->doneMask = 0;
+    BtlvEffect_AddTask(GFL_TCBMgrAddTask(wk->tcbManager, BtlvEffvm_SideResetTask, work, 0), NULL,
+                       BTLV_EFFECT_TASK_SCRIPT);
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdMcssReset(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+
+    BtlvEffect_SetPokemonReverse(VM_Read32(vm));
+    return wk->ret;
+}
+
+static BOOL BtlvEffvm_CmdEnd(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int i;
+    BOOL visible;
+
+    for (i = 0; i < EFFVM_PARTICLE_CAPACITY; i++) {
+        if (wk->particles[i] != NULL) {
+            BtlvEffvm_DeleteParticle(wk->particles[i]);
+            wk->particles[i] = NULL;
+        }
+        wk->particleIds[i] = -1;
+    }
+    for (i = 0; i < 4; i++) {
+        if (wk->clactIndexes[i] != -1) {
+            BtlvClact_DeleteActor(BtlvEffect_GetClact(), wk->clactIndexes[i]);
+            wk->clactIndexes[i] = -1;
+        }
+    }
+    for (i = 0; i < wk->allocCount; i++) {
+        GFL_HeapFree(wk->allocs[i]);
+    }
+    wk->allocCount = 0;
+    BtlvEffect_EndTaskGroup(BTLV_EFFECT_TASK_SCRIPT);
+    BtlvEffvm_ResetMcssAll(wk);
+    BtlvEffvm_ClearMcssFlagAll(wk);
+    if (!wk->skipReverseRestore) {
+        BtlvEffect_SetPokemonReverse(1);
+    }
+    VM_Halt(vm);
+    wk->ret = TRUE;
+    if (wk->bgMoved) {
+        BtlvScu *scu = BtlvEffect_GetScu();
+
+        if (scu != NULL) {
+            BtlvScu_RestoreBG3(scu);
+        }
+        GFL_BGSysSetBGPriority(3, 0);
+        wk->bgMoved = FALSE;
+        GFL_BGSysMoveBG(3, BG_MOVE_SET_X, wk->bgX);
+        GFL_BGSysMoveBG(3, BG_MOVE_SET_Y, wk->bgY);
+    }
+    if (wk->alphaBlend) {
+        G2x_SetBlendAlpha_(REG_BLDCNT_ADDR, GX_BLEND_PLANEMASK_BG1,
+                           GX_BLEND_PLANEMASK_BG0 | GX_BLEND_PLANEMASK_BG2 | GX_BLEND_PLANEMASK_BG3 |
+                               GX_BLEND_PLANEMASK_OBJ | GX_BLEND_PLANEMASK_BD,
+                           0x1f, 7);
+        wk->alphaBlend = FALSE;
+    }
+    if (wk->sePlayed) {
+        GFL_SndStop();
+    }
+    visible = FALSE;
+    if (BtlvMcss_Exists(BtlvEffect_GetMcss(), wk->attacker)) {
+        if (((wk->move == MOVE_FUTURE_SIGHT || wk->move == MOVE_DOOM_DESIRE) && wk->param.variant == 1) ||
+            wk->move == MOVE_TRANSFORM || wk->move == MOVE_MIRROR_MOVE || wk->move == MOVE_NATURE_POWER) {
+        } else {
+            visible = BtlvMcss_GetFlags(BtlvEffect_GetMcss(), wk->attacker) & BTLV_MCSS_FLAG_SUBSTITUTE_ACTIVE;
+        }
+    }
+    if (wk->savedScript != NULL) {
+        u32 offset;
+        void *script;
+
+        GFL_HeapFree(wk->script);
+        script = wk->savedScript;
+        wk->script = script;
+        wk->savedScript = NULL;
+        wk->isEffect = FALSE;
+        offset = wk->savedOffset;
+        GFL_BGSysSetBGEnabled(1, FALSE);
+        GFL_BGSysSetBGEnabled(2, FALSE);
+        GFL_BGSysSetBGEnabled(3, FALSE);
+        wk->value = 0;
+        VM_LoadScript(vm, (u8 *)wk->script + *(u32 *)((u8 *)script + offset));
+        return TRUE;
+    }
+    if (wk->substituteRestore == TRUE && wk->move == 0x291) {
+        GFL_HeapFree(wk->script);
+        wk->move = 52;
+        wk->script = GFL_ArcSysReadHeapNew(ARCID_BTLV_EFFVM_EFFECT_SCRIPTS, wk->move, HEAPID_TAIL(wk->heapId));
+        wk->isEffect = TRUE;
+        wk->value = 0;
+        wk->substituteRestore = FALSE;
+        VM_LoadScript(vm, (u8 *)wk->script + ((u32 *)wk->script)[1]);
+        return TRUE;
+    }
+    if ((wk->move == 0x286 || !wk->isEffect) && wk->move != MOVE_TRANSFORM && wk->move != MOVE_BATON_PASS &&
+        !wk->substituteRestore && visible) {
+        if (wk->move == MOVE_ALLY_SWITCH) {
+            BtlvMcss_SetVanish(BtlvEffect_GetMcss(), wk->attacker, BTLV_MCSS_VANISH_SHOW);
+        }
+        GFL_HeapFree(wk->script);
+        wk->move = 52;
+        wk->script = GFL_ArcSysReadHeapNew(ARCID_BTLV_EFFVM_EFFECT_SCRIPTS, wk->move, HEAPID_TAIL(wk->heapId));
+        wk->isEffect = TRUE;
+        wk->value = 0;
+        wk->substituteRestore = FALSE;
+        VM_LoadScript(vm, (u8 *)wk->script + ((u32 *)wk->script)[1]);
+        return TRUE;
+    }
+    if (wk->move != 0x27e) {
+        GFL_BGSysSetBGEnabled(1, TRUE);
+        GFL_BGSysSetBGEnabled(2, TRUE);
+        GFL_BGSysSetBGEnabled(3, TRUE);
+    }
+    return TRUE;
+}
+
+static BOOL BtlvEffvm_WaitNative(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+    int i;
+    BtlvMcssPos pos;
+
+    if (wk->waitKind <= EFFVM_WAIT_CAMERA) {
+        if (BtlvCamera_IsMoving(BtlvEffect_GetCamera()) == TRUE) {
+            return FALSE;
+        }
+        if (wk->cameraReset) {
+            wk->cameraReset = FALSE;
+            wk->mcssCameraMode = EFFVM_MCSS_CAMERA_DEPTH;
+            BtlvMcss_SetFlatAll(BtlvEffect_GetMcss());
+        }
+    }
+    if (wk->waitKind == EFFVM_WAIT_ALL || wk->waitKind == EFFVM_WAIT_MCSS) {
+        for (pos = 0; pos < 14; pos++) {
+            if (BtlvMcss_IsBusy(BtlvEffect_GetMcss(), pos) == TRUE) {
+                return FALSE;
+            }
+        }
+    }
+    if (wk->waitKind == EFFVM_WAIT_TRAINER_ANIM) {
+        for (pos = 8; pos < 14; pos++) {
+            if (BtlvMcss_Exists(BtlvEffect_GetMcss(), pos) &&
+                BtlvMcss_IsAnimationSet(BtlvEffect_GetMcss(), pos) == TRUE) {
+                return FALSE;
+            }
+        }
+    }
+    if (wk->waitKind == EFFVM_WAIT_ALL || wk->waitKind == EFFVM_WAIT_BG) {
+        if (BtlvBg_IsMoving(BtlvEffect_GetBg()) == TRUE) {
+            return FALSE;
+        }
+    }
+    if (wk->waitKind == EFFVM_WAIT_ALL || wk->waitKind == EFFVM_WAIT_PARTICLES) {
+        for (i = 0; i < EFFVM_PARTICLE_CAPACITY; i++) {
+            if (wk->particles[i] != NULL && Particle_GetEmitterCount(wk->particles[i])) {
+                return FALSE;
+            }
+        }
+    }
+    if (wk->waitKind == EFFVM_WAIT_ALL || wk->waitKind == EFFVM_WAIT_STAGE_FADE ||
+        wk->waitKind == EFFVM_WAIT_STAGE_FIELD_FADE) {
+        if (BtlvEffect_IsPaletteFading(BTLV_EFFECT_FADE_STAGE)) {
+            return FALSE;
+        }
+    }
+    if (wk->waitKind == EFFVM_WAIT_ALL || wk->waitKind == EFFVM_WAIT_FIELD_FADE ||
+        wk->waitKind == EFFVM_WAIT_STAGE_FIELD_FADE) {
+        if (BtlvEffect_IsPaletteFading(BTLV_EFFECT_FADE_FIELD)) {
+            return FALSE;
+        }
+    }
+    if (wk->waitKind == EFFVM_WAIT_ALL || wk->waitKind == EFFVM_WAIT_PALETTE_FADE) {
+        if (BtlvEffect_IsPaletteFading(BTLV_EFFECT_FADE_PALETTES)) {
+            return FALSE;
+        }
+    }
+    if (wk->waitKind == EFFVM_WAIT_SE) {
+        if (GFL_SndPlayerIsActiveAny() || wk->seDelayed || wk->seSliding) {
+            return FALSE;
+        }
+    }
+    if (wk->waitKind == EFFVM_WAIT_SE_PLAYER_1) {
+        if (GFL_SndPlayerIsActive(1) || wk->seDelayed || wk->seSliding) {
+            return FALSE;
+        }
+    }
+    if (wk->waitKind == EFFVM_WAIT_SE_PLAYER_2) {
+        if (GFL_SndPlayerIsActive(2) || wk->seDelayed || wk->seSliding) {
+            return FALSE;
+        }
+    }
+    if (wk->waitKind == EFFVM_WAIT_SE_PLAYER_4) {
+        if (GFL_SndPlayerIsActive(4) || wk->seDelayed || wk->seSliding) {
+            return FALSE;
+        }
+    }
+    if (wk->waitKind == EFFVM_WAIT_SE_PLAYER_3) {
+        if (GFL_SndPlayerIsActive(3) || wk->seDelayed || wk->seSliding) {
+            return FALSE;
+        }
+    }
+    if (wk->waitKind == EFFVM_WAIT_SE_PLAYER_0) {
+        if (GFL_SndPlayerIsActive(0) || wk->seDelayed || wk->seSliding) {
+            return FALSE;
+        }
+    }
+    if (wk->waitKind == EFFVM_WAIT_CRY) {
+        if (wk->cryDelayed) {
+            return FALSE;
+        }
+        for (i = 0; i < EFFVM_VOICE_CAPACITY; i++) {
+            if (wk->voices[i] != -1) {
+                if (PokeVoice_IsPlaying(wk->voices[i])) {
+                    return FALSE;
+                }
+                wk->voices[i] = -1;
+            }
+        }
+    }
+    if ((wk->waitKind == EFFVM_WAIT_ALL || wk->waitKind == EFFVM_WAIT_WINDOW) && wk->windowTask) {
+        return FALSE;
+    }
+    if ((wk->waitKind == EFFVM_WAIT_ALL || wk->waitKind == EFFVM_WAIT_PAL_ANIM) && wk->paletteAnim) {
+        return FALSE;
+    }
+    if (wk->waitKind == EFFVM_WAIT_ALL || wk->waitKind == EFFVM_WAIT_BG_WAVE) {
+        if (BtlvBg_IsWaving(BtlvEffect_GetBg()) == TRUE) {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+static BOOL BtlvEffvm_WaitTimerNative(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+
+    wk->waitTimer--;
+    return wk->waitTimer <= 0;
+}
+
+static BOOL BtlvEffvm_WaitResumeNative(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+
+    if (wk->paused) {
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static BOOL BtlvEffvm_WaitParticleLoadNative(VM *vm, void *env) {
+    BtlvEffvm *wk = env;
+
+    if (wk->particleLoading) {
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static int BtlvEffvm_GetTargetPositions(BtlvEffvm *wk, int code, int *positions) {
+    int count = 1;
+    int rule;
+    int i;
+    BtlvMcssPos pos;
+    int start;
+    int end;
+
+    switch (code) {
+    case BTLV_MCSS_POS_SINGLE_PLAYER:
+    case BTLV_MCSS_POS_SINGLE_ENEMY:
+    case BTLV_MCSS_POS_PLAYER_1:
+    case BTLV_MCSS_POS_ENEMY_1:
+    case BTLV_MCSS_POS_PLAYER_2:
+    case BTLV_MCSS_POS_ENEMY_2:
+    case BTLV_MCSS_POS_PLAYER_3:
+    case BTLV_MCSS_POS_ENEMY_3:
+    case BTLV_MCSS_POS_TRAINER_PLAYER_1:
+    case BTLV_MCSS_POS_TRAINER_ENEMY_1:
+    case BTLV_MCSS_POS_TRAINER_PLAYER_2:
+    case BTLV_MCSS_POS_TRAINER_ENEMY_2:
+    case BTLV_MCSS_POS_TRAINER_PLAYER_3:
+    case BTLV_MCSS_POS_TRAINER_ENEMY_3:
+        positions[0] = code;
+        break;
+    case EFFVM_ATTACKER:
+        positions[0] = wk->attacker;
+        if (positions[0] == BTLV_MCSS_POS_NONE) {
+            if (BtlvEffect_CheckExist(0) == TRUE) {
+                positions[0] = 0;
+            } else if (BtlvEffect_CheckExist(2) == TRUE) {
+                positions[0] = 2;
+            } else if (BtlvEffect_CheckExist(4) == TRUE) {
+                positions[0] = 4;
+                // BUG: tests position 4 again where position 6 is meant
+#ifdef BUGFIX
+            } else if (BtlvEffect_CheckExist(6) == TRUE) {
+#else
+            } else if (BtlvEffect_CheckExist(4) == TRUE) {
+#endif
+                positions[0] = 6;
+            }
+        }
+        break;
+    case EFFVM_ATTACKER_PARTNER:
+        if (wk->attacker > 1) {
+            positions[0] = wk->attacker ^ 2;
+        } else {
+            positions[0] = BTLV_MCSS_POS_NONE;
+        }
+        break;
+    case EFFVM_DEFENDER:
+        positions[0] = wk->defender;
+        if (positions[0] != BTLV_MCSS_POS_NONE) {
+            break;
+        }
+        rule = BtlvEffect_GetBattleStyle();
+        count = 0;
+        if (rule == BTL_STYLE_SINGLE || rule == BTL_STYLE_ROTATION) {
+            if (wk->param.target == MOVE_TARGET_ALL || wk->param.target == MOVE_TARGET_FIELD) {
+                count = 1;
+                positions[0] = wk->attacker;
+                if (BtlvEffect_CheckExist(wk->attacker ^ 1)) {
+                    positions[1] = wk->attacker ^ 1;
+                    count++;
+                }
+            } else {
+                count = 0;
+                if (BtlvEffect_CheckExist(wk->attacker ^ 1)) {
+                    positions[0] = wk->attacker ^ 1;
+                    count++;
+                }
+            }
+            break;
+        }
+        switch (wk->param.target) {
+        case MOVE_TARGET_SELECTED:
+        case MOVE_TARGET_USER_OR_ALLY:
+        case MOVE_TARGET_ALLY:
+        case MOVE_TARGET_FOE:
+            break;
+        case MOVE_TARGET_ALL_ADJACENT:
+            if (rule == BTL_STYLE_TRIPLE && wk->attacker != BTLV_MCSS_POS_PLAYER_2 &&
+                wk->attacker != BTLV_MCSS_POS_ENEMY_2) {
+                int targets[4][3] = {
+                    { 4, 5, 7 },
+                    { 4, 5, 6 },
+                    { 3, 4, 5 },
+                    { 2, 4, 5 },
+                };
+                int row = (wk->attacker & 1) + (wk->attacker > 3 ? 2 : 0);
+
+                for (i = 0; i < 3; i++) {
+                    if (BtlvEffect_CheckExist(targets[row][i])) {
+                        positions[count] = targets[row][i];
+                        count++;
+                    }
+                }
+            } else {
+                for (pos = 2; pos <= 7; pos++) {
+                    if (wk->attacker != pos && BtlvEffect_CheckExist(pos)) {
+                        positions[count] = pos;
+                        count++;
+                    }
+                }
+            }
+            break;
+        case MOVE_TARGET_ADJACENT_FOES:
+        case MOVE_TARGET_USER:
+        case MOVE_TARGET_RANDOM_FOE:
+        case MOVE_TARGET_DEPENDS:
+            start = (wk->attacker & 1) ? 2 : 3;
+            end = rule == BTL_STYLE_TRIPLE ? 7 : 5;
+            if (rule == BTL_STYLE_TRIPLE) {
+                if (wk->attacker <= 3) {
+                    start += 2;
+                }
+                if (wk->attacker >= 6) {
+                    end -= 2;
+                }
+            }
+            for (pos = start; pos <= end; pos += 2) {
+                if (BtlvEffect_CheckExist(pos)) {
+                    positions[count] = pos;
+                    count++;
+                }
+            }
+            break;
+        case MOVE_TARGET_FOE_SIDE:
+            for (pos = (wk->attacker & 1) ? 2 : 3; pos <= 7; pos += 2) {
+                if (BtlvEffect_CheckExist(pos)) {
+                    positions[count] = pos;
+                    count++;
+                }
+            }
+            break;
+        case MOVE_TARGET_USER_PARTY:
+        case MOVE_TARGET_USER_SIDE:
+            for (pos = (wk->attacker & 1) ? 3 : 2; pos <= 7; pos += 2) {
+                if (BtlvEffect_CheckExist(pos)) {
+                    positions[count] = pos;
+                    count++;
+                }
+            }
+            break;
+        case MOVE_TARGET_ALL:
+        case MOVE_TARGET_FIELD:
+            for (pos = 2; pos <= 7; pos++) {
+                if (BtlvEffect_CheckExist(pos)) {
+                    positions[count] = pos;
+                    count++;
+                }
+            }
+            break;
+        }
+        break;
+    case EFFVM_DEFENDER_PARTNER:
+        if (wk->defender > 1) {
+            positions[0] = wk->defender ^ 2;
+        } else {
+            positions[0] = BTLV_MCSS_POS_NONE;
+        }
+        break;
+    case EFFVM_ALL:
+        count = 0;
+        for (pos = 0; pos <= 7; pos++) {
+            if (BtlvEffect_CheckExist(pos)) {
+                positions[count] = pos;
+                count++;
+            }
+        }
+        break;
+    case EFFVM_PLAYER_SIDE:
+    case EFFVM_ENEMY_SIDE:
+        start = 0;
+        if (code != EFFVM_PLAYER_SIDE) {
+            start = 1;
+        }
+        count = 0;
+        for (pos = start; pos <= 7; pos += 2) {
+            if (BtlvEffect_CheckExist(pos)) {
+                positions[count] = pos;
+                count++;
+            }
+        }
+        break;
+    }
+    if (positions[0] != BTLV_MCSS_POS_NONE && positions[0] < 8) {
+        if (BtlvEffect_CheckExist(positions[0]) == TRUE) {
+            positions[0] = BtlvEffvm_CheckPosition(wk, positions[0]);
+        } else {
+            positions[0] = BTLV_MCSS_POS_NONE;
+            count = 0;
+        }
+    }
+    return count;
+}
+
+static int BtlvEffvm_GetDefenderPositions(BtlvEffvm *wk, int unusedCode, int *positions) {
+    int count = 1;
+    int rule;
+    int i;
+    BtlvMcssPos pos;
+
+    positions[0] = wk->defender;
+    if (positions[0] == BTLV_MCSS_POS_NONE) {
+        rule = BtlvEffect_GetBattleStyle();
+        count = 0;
+        if (rule == BTL_STYLE_SINGLE || rule == BTL_STYLE_ROTATION) {
+            if (wk->param.target == MOVE_TARGET_ALL || wk->param.target == MOVE_TARGET_FIELD) {
+                count = 1;
+                positions[0] = wk->attacker;
+                if (BtlvEffect_CheckExist(wk->attacker ^ 1)) {
+                    positions[1] = wk->attacker ^ 1;
+                    count++;
+                }
+            } else {
+                count = 0;
+                if (BtlvEffect_CheckExist(wk->attacker ^ 1)) {
+                    positions[0] = wk->attacker ^ 1;
+                    count++;
+                }
+            }
+        } else {
+            switch (wk->param.target) {
+            case MOVE_TARGET_SELECTED:
+            case MOVE_TARGET_USER_OR_ALLY:
+            case MOVE_TARGET_ALLY:
+            case MOVE_TARGET_FOE:
+                break;
+            case MOVE_TARGET_ALL_ADJACENT:
+                if (rule == BTL_STYLE_TRIPLE && wk->attacker != BTLV_MCSS_POS_PLAYER_2 &&
+                    wk->attacker != BTLV_MCSS_POS_ENEMY_2) {
+                    int targets[4][3] = {
+                        { 4, 5, 7 },
+                        { 4, 5, 6 },
+                        { 3, 4, 5 },
+                        { 2, 4, 5 },
+                    };
+                    int row = (wk->attacker & 1) + (wk->attacker > 3 ? 2 : 0);
+
+                    for (i = 0; i < 3; i++) {
+                        if (BtlvEffect_CheckExist(targets[row][i]) &&
+                            !BtlvMcss_GetVanish(BtlvEffect_GetMcss(), targets[row][i])) {
+                            positions[count] = targets[row][i];
+                            count++;
+                        }
+                    }
+                } else {
+                    for (pos = 2; pos <= 7; pos++) {
+                        if (wk->attacker != pos && BtlvEffect_CheckExist(pos) &&
+                            !BtlvMcss_GetVanish(BtlvEffect_GetMcss(), pos)) {
+                            positions[count] = pos;
+                            count++;
+                        }
+                    }
+                }
+                break;
+            case MOVE_TARGET_ADJACENT_FOES:
+            case MOVE_TARGET_USER:
+            case MOVE_TARGET_RANDOM_FOE:
+            case MOVE_TARGET_DEPENDS:
+                if (rule == BTL_STYLE_DOUBLE) {
+                    positions[0] = (wk->attacker & 1) ? BTLV_MCSS_POS_SINGLE_PLAYER : BTLV_MCSS_POS_SINGLE_ENEMY;
+                    count = 1;
+                } else if (wk->attacker != BTLV_MCSS_POS_PLAYER_2 && wk->attacker != BTLV_MCSS_POS_ENEMY_2) {
+                    positions[0] = sTripleDefaultDefenderEmitterCodes[wk->attacker];
+                    count = 1;
+                } else {
+                    count = 1;
+                    positions[0] = wk->attacker ^ 1;
+                }
+                break;
+            case MOVE_TARGET_FOE_SIDE:
+                if (rule == BTL_STYLE_DOUBLE) {
+                    positions[0] = (wk->attacker & 1) ? BTLV_MCSS_POS_SINGLE_PLAYER : BTLV_MCSS_POS_SINGLE_ENEMY;
+                    count = 1;
+                } else if (wk->attacker != BTLV_MCSS_POS_PLAYER_2 && wk->attacker != BTLV_MCSS_POS_ENEMY_2) {
+                    positions[0] = sTripleFoeSideEmitterCodes[wk->attacker];
+                    count = 1;
+                } else {
+                    count = 1;
+                    positions[0] = wk->attacker ^ 1;
+                }
+                break;
+            case MOVE_TARGET_USER_PARTY:
+            case MOVE_TARGET_USER_SIDE:
+                for (pos = (wk->attacker & 1) ? 3 : 2; pos <= 7; pos += 2) {
+                    if (BtlvEffect_CheckExist(pos) && !BtlvMcss_GetVanish(BtlvEffect_GetMcss(), pos)) {
+                        positions[count] = pos;
+                        count++;
+                    }
+                }
+                break;
+            case MOVE_TARGET_ALL:
+            case MOVE_TARGET_FIELD:
+                for (pos = 2; pos <= 7; pos++) {
+                    if (BtlvEffect_CheckExist(pos) && !BtlvMcss_GetVanish(BtlvEffect_GetMcss(), pos)) {
+                        positions[count] = pos;
+                        count++;
+                    }
+                }
+                break;
+            }
+        }
+    }
+    return count;
+}
+
+static int BtlvEffvm_GetTargetPosition(VM *vm, int code) {
+    BtlvEffvm *wk = VM_GetEnv(vm);
+    int pos;
+
+    switch (code) {
+    case BTLV_MCSS_POS_SINGLE_PLAYER:
+    case BTLV_MCSS_POS_SINGLE_ENEMY:
+    case BTLV_MCSS_POS_PLAYER_1:
+    case BTLV_MCSS_POS_ENEMY_1:
+    case BTLV_MCSS_POS_PLAYER_2:
+    case BTLV_MCSS_POS_ENEMY_2:
+    case BTLV_MCSS_POS_PLAYER_3:
+    case BTLV_MCSS_POS_ENEMY_3:
+    case BTLV_MCSS_POS_TRAINER_PLAYER_1:
+    case BTLV_MCSS_POS_TRAINER_ENEMY_1:
+    case BTLV_MCSS_POS_TRAINER_PLAYER_2:
+    case BTLV_MCSS_POS_TRAINER_ENEMY_2:
+    case BTLV_MCSS_POS_TRAINER_PLAYER_3:
+    case BTLV_MCSS_POS_TRAINER_ENEMY_3:
+        pos = code;
+        break;
+    case EFFVM_ATTACKER:
+        pos = wk->attacker;
+        if (pos == BTLV_MCSS_POS_NONE) {
+            if (BtlvEffect_CheckExist(2) == TRUE) {
+                return 2;
+            }
+            if (BtlvEffect_CheckExist(4) == TRUE) {
+                return 4;
+            }
+            if (BtlvEffect_CheckExist(6) == TRUE) {
+                return 6;
+            }
+            return 0;
+        }
+        break;
+    case EFFVM_ATTACKER_PARTNER:
+        if (wk->attacker > 1) {
+            pos = wk->attacker ^ 2;
+        } else {
+            pos = BTLV_MCSS_POS_NONE;
+        }
+        break;
+    case EFFVM_DEFENDER:
+        pos = wk->defender;
+        if (pos == BTLV_MCSS_POS_NONE) {
+            if (wk->attacker & 1) {
+                if (BtlvEffect_CheckExist(2) == TRUE) {
+                    return 2;
+                }
+                if (BtlvEffect_CheckExist(4) == TRUE) {
+                    return 4;
+                }
+                if (BtlvEffect_CheckExist(6) == TRUE) {
+                    return 6;
+                }
+                return 0;
+            }
+            if (BtlvEffect_CheckExist(3) == TRUE) {
+                return 3;
+            }
+            if (BtlvEffect_CheckExist(5) == TRUE) {
+                return 5;
+            }
+            if (BtlvEffect_CheckExist(7) == TRUE) {
+                return 7;
+            }
+            return 1;
+        }
+        break;
+    case EFFVM_DEFENDER_PARTNER:
+        if (wk->defender > 1) {
+            pos = wk->defender ^ 2;
+        } else {
+            pos = BTLV_MCSS_POS_NONE;
+        }
+        break;
+    }
+    return BtlvEffvm_SwapSide(vm, pos);
+}
+
+static int BtlvEffvm_CheckPosition(BtlvEffvm *wk, int pos) {
+    if (BtlvEffect_CheckExist(pos) == TRUE) {
+        if (wk->flipSides) {
+            pos ^= 1;
+        }
+    } else {
+        pos = BTLV_MCSS_POS_NONE;
+    }
+    return pos;
+}
+
+static int BtlvEffvm_SwapSide(VM *vm, int pos) {
+    BtlvEffvm *wk = VM_GetEnv(vm);
+
+    if (wk->flipSides) {
+        pos ^= 1;
+    }
+    return pos;
+}
+
+static int BtlvEffvm_GetDefenderForEmitter(VM *vm, int *pos) {
+    BtlvEffvm *wk = VM_GetEnv(vm);
+    int ret = BtlvEffect_GetBattleStyle();
+
+    *pos = wk->defender;
+    if (*pos == BTLV_MCSS_POS_NONE) {
+        if (ret == BTL_STYLE_SINGLE || ret == BTL_STYLE_ROTATION || wk->isEffect == TRUE) {
+            *pos = wk->attacker ^ 1;
+        } else {
+            switch (wk->param.target) {
+            case MOVE_TARGET_ALL_ADJACENT:
+            case MOVE_TARGET_ADJACENT_FOES:
+            case MOVE_TARGET_ALL:
+            case MOVE_TARGET_FIELD:
+                if (ret == BTL_STYLE_DOUBLE) {
+                    ret = 0;
+                    *pos = (wk->attacker & 1) ? ret : 1;
+                } else if (wk->attacker != BTLV_MCSS_POS_PLAYER_2 && wk->attacker != BTLV_MCSS_POS_ENEMY_2) {
+                    ret = 1;
+                    *pos = sTripleDefaultDefenderPositions[wk->attacker];
+                } else {
+                    *pos = wk->attacker ^ 1;
+                }
+                break;
+            case MOVE_TARGET_USER:
+            case MOVE_TARGET_RANDOM_FOE:
+            case MOVE_TARGET_DEPENDS:
+                *pos = wk->attacker ^ 1;
+                break;
+            case MOVE_TARGET_FOE_SIDE:
+                ret = 0;
+                *pos = (wk->attacker & 1) ? ret : 1;
+                break;
+            case MOVE_TARGET_USER_PARTY:
+            case MOVE_TARGET_USER_SIDE:
+                ret = 0;
+                *pos = (wk->attacker & 1) ? 1 : ret;
+                break;
+            }
+        }
+    }
+    return ret;
+}
+
+static BOOL BtlvEffvm_FindOrAddParticleId(BtlvEffvm *wk, u32 id, int *index) {
+    int i;
+    BOOL isNew = TRUE;
+
+    for (i = 0; i < EFFVM_PARTICLE_CAPACITY; i++) {
+        if (id == wk->particleIds[i]) {
+            isNew = FALSE;
+            break;
+        }
+    }
+    if (i == EFFVM_PARTICLE_CAPACITY) {
+        for (i = 0; i < EFFVM_PARTICLE_CAPACITY; i++) {
+            if (wk->particleIds[i] == -1) {
+                wk->particleIds[i] = id;
+                break;
+            }
+        }
+    }
+    *index = i;
+    return isNew;
+}
+
+static void BtlvEffvm_SetEmitterCount(BtlvEffvm *wk, int index, void *resource) {
+    wk->emitterCounts[index] = ((u16 *)resource)[4];
+}
+
+static int BtlvEffvm_FindParticleId(BtlvEffvm *wk, u32 id) {
+    int i;
+
+    for (i = 0; i < EFFVM_PARTICLE_CAPACITY; i++) {
+        if (id == wk->particleIds[i]) {
+            break;
+        }
+    }
+    return i;
+}
+
+static u32 BtlvEffvm_GetEmitterCount(BtlvEffvm *wk, int index) {
+    return wk->emitterCounts[index];
+}
+
+static void BtlvEffvm_InitEmitter(SPLEmitter *emitter) {
+    BtlvEffvmEmitParam *param = Particle_GetCallbackParam();
+    BOOL flip = param->flip;
+    VecFx32 from;
+    VecFx32 to;
+    VecFx32 start;
+    VecFx32 axis;
+    VecFx32 dir;
+    VecFx32 base;
+    MtxFx43 mtx;
+    VecFx32 vec;
+    VecFx32 flat;
+    VecFx32 rotAxis;
+    VecFx32 cameraPos;
+    u16 spinAxis;
+    VecFx16 emitterAxis;
+    u16 angle;
+    u32 rule;
+
+    switch (param->from) {
+    case BTLV_MCSS_POS_SINGLE_PLAYER:
+    case BTLV_MCSS_POS_SINGLE_ENEMY:
+    case BTLV_MCSS_POS_PLAYER_1:
+    case BTLV_MCSS_POS_ENEMY_1:
+    case BTLV_MCSS_POS_PLAYER_2:
+    case BTLV_MCSS_POS_ENEMY_2:
+    case BTLV_MCSS_POS_PLAYER_3:
+    case BTLV_MCSS_POS_ENEMY_3:
+        param->from = BtlvEffvm_SwapSide(param->vm, param->from);
+        break;
+    case EFFVM_EMIT_ATTACKER:
+    case EFFVM_EMIT_DEFENDER:
+        param->from = BtlvEffvm_GetTargetPosition(param->vm, param->from + 5);
+        break;
+    case EFFVM_EMIT_EXPLICIT:
+        from.x = param->fromPos.x;
+        from.y = param->fromPos.y;
+        from.z = param->fromPos.z;
+        break;
+    case EFFVM_EMIT_DOUBLE_PLAYER_1:
+    case EFFVM_EMIT_DOUBLE_ENEMY_1:
+    case EFFVM_EMIT_DOUBLE_PLAYER_2:
+    case EFFVM_EMIT_DOUBLE_ENEMY_2:
+        BtlvMcss_GetDefaultPosForStyle(BtlvEffect_GetMcss(), &from, param->from - 12, BTL_STYLE_DOUBLE);
+        param->from = -1;
+        break;
+    case EFFVM_EMIT_DOUBLE_PLAYER_1_OFFSET:
+    case EFFVM_EMIT_DOUBLE_ENEMY_1_OFFSET:
+    case EFFVM_EMIT_DOUBLE_PLAYER_2_OFFSET:
+    case EFFVM_EMIT_DOUBLE_ENEMY_2_OFFSET:
+        BtlvMcss_GetDefaultPosForStyle(BtlvEffect_GetMcss(), &from, param->from - 16, BTL_STYLE_DOUBLE);
+        switch (param->from) {
+        case EFFVM_EMIT_DOUBLE_PLAYER_1_OFFSET:
+            from.z += 0x1a00;
+            break;
+        case EFFVM_EMIT_DOUBLE_ENEMY_1_OFFSET:
+            from.z += 0x2600;
+            break;
+        case EFFVM_EMIT_DOUBLE_PLAYER_2_OFFSET:
+            from.z += 0x600;
+            break;
+        case EFFVM_EMIT_DOUBLE_ENEMY_2_OFFSET:
+            from.z += 0x3900;
+            break;
+        }
+        param->from = -1;
+        break;
+    }
+    if (param->from != -1 && param->from != EFFVM_EMIT_EXPLICIT) {
+        BtlvMcss_GetDefaultPos(BtlvEffect_GetMcss(), &from, param->from);
+    }
+    switch (param->to) {
+    case BTLV_MCSS_POS_SINGLE_PLAYER:
+    case BTLV_MCSS_POS_SINGLE_ENEMY:
+    case BTLV_MCSS_POS_PLAYER_1:
+    case BTLV_MCSS_POS_ENEMY_1:
+    case BTLV_MCSS_POS_PLAYER_2:
+    case BTLV_MCSS_POS_ENEMY_2:
+    case BTLV_MCSS_POS_PLAYER_3:
+    case BTLV_MCSS_POS_ENEMY_3:
+        param->to = BtlvEffvm_SwapSide(param->vm, param->to);
+        break;
+    case EFFVM_EMIT_ATTACKER:
+        param->to = BtlvEffvm_GetTargetPosition(param->vm, param->to + 5);
+        break;
+    case EFFVM_EMIT_ATTACKER_MIRRORED:
+        flip = TRUE;
+        param->to = BtlvEffvm_GetTargetPosition(param->vm, param->to + 4);
+        break;
+    case EFFVM_EMIT_DEFENDER_MIRRORED:
+        flip = TRUE;
+    case EFFVM_EMIT_DEFENDER:
+        rule = BtlvEffvm_GetDefenderForEmitter(param->vm, &param->to);
+        BtlvMcss_GetDefaultPosForStyle(BtlvEffect_GetMcss(), &to, param->to, rule);
+        param->to = -1;
+        break;
+    case EFFVM_EMIT_EXPLICIT:
+        to.x = param->toPos.x;
+        to.y = param->toPos.y;
+        to.z = param->toPos.z;
+        break;
+    case EFFVM_EMIT_DOUBLE_PLAYER_1:
+    case EFFVM_EMIT_DOUBLE_ENEMY_1:
+    case EFFVM_EMIT_DOUBLE_PLAYER_2:
+    case EFFVM_EMIT_DOUBLE_ENEMY_2:
+        BtlvMcss_GetDefaultPosForStyle(BtlvEffect_GetMcss(), &to, param->to - 12, BTL_STYLE_DOUBLE);
+        param->to = -1;
+        break;
+    case EFFVM_EMIT_DOUBLE_PLAYER_1_OFFSET:
+    case EFFVM_EMIT_DOUBLE_ENEMY_1_OFFSET:
+    case EFFVM_EMIT_DOUBLE_PLAYER_2_OFFSET:
+    case EFFVM_EMIT_DOUBLE_ENEMY_2_OFFSET:
+        BtlvMcss_GetDefaultPosForStyle(BtlvEffect_GetMcss(), &to, param->to - 16, BTL_STYLE_DOUBLE);
+        // The start's code, not the target's, picks the height, and the start's is no longer 18-21 by now
+        switch (param->from) {
+        case EFFVM_EMIT_DOUBLE_PLAYER_1_OFFSET:
+            to.z += 0x1a00;
+            break;
+        case EFFVM_EMIT_DOUBLE_ENEMY_1_OFFSET:
+            to.z += 0x2600;
+            break;
+        case EFFVM_EMIT_DOUBLE_PLAYER_2_OFFSET:
+            to.z += 0x600;
+            break;
+        case EFFVM_EMIT_DOUBLE_ENEMY_2_OFFSET:
+            to.z += 0x3900;
+            break;
+        }
+        param->to = -1;
+        break;
+    }
+    if (param->to != -1 && param->to != EFFVM_EMIT_EXPLICIT) {
+        BtlvMcss_GetDefaultPos(BtlvEffect_GetMcss(), &to, param->to);
+    }
+    BtlvEffect_GetBattleStyle();
+    from.z += 0x500;
+    to.z += 0x500;
+    if (param->offsetMode == EFFVM_EMITTER_PROJECT_MIRROR || param->offsetMode == EFFVM_EMITTER_PROJECT) {
+        BtlvEffvm_ProjectToScreen(&from, &param->offset);
+        BtlvEffvm_ProjectToScreen(&to, &param->offset);
+    } else if (param->offsetMode == EFFVM_EMITTER_PROJECT_START) {
+        start.x = from.x;
+        start.y = from.y;
+        start.z = from.z;
+        from.y += param->offset.y;
+        BtlvEffvm_ProjectToScreen(&start, &param->offset);
+    } else {
+        from.y += param->offset.y;
+    }
+    to.y += param->offset.y;
+    if (param->motionType != EFFVM_EMITTER_STILL) {
+        BtlvEffvm *wk = VM_GetEnv(param->vm);
+        BtlvEffvmEmitterMotionWork *work;
+
+        wk->allocs[wk->allocCount] =
+            GFL_HeapAllocate(HEAPID_TAIL(wk->heapId), sizeof(BtlvEffvmEmitterMotionWork), FALSE, "btlv_effvm.c", 6693);
+        work = wk->allocs[wk->allocCount];
+        ParticleEmitter_SetUserData(emitter, work);
+        ParticleEmitter_SetUpdateCallback(emitter, BtlvEffvm_MoveEmitterArc);
+        wk->allocCount++;
+        work->angle = 0;
+        work->wait = 0;
+        work->waitAccum = 0;
+        work->waitStep = 0;
+        work->type = param->motionType;
+        work->frames = param->motionFrames >> FX32_SHIFT;
+        work->offsetMode = param->offsetMode;
+        if (param->motionType == EFFVM_EMITTER_ARC_DELAYED) {
+            work->angleStep = FX_Div(0x6000 * FX32_ONE, param->motionFrames);
+        } else if (param->motionType == EFFVM_EMITTER_WAVE_Y || param->motionType == EFFVM_EMITTER_WAVE_Z) {
+            work->angleStep = FX_Div(0x8000 * FX32_ONE, param->motionFrames);
+            work->angle2Step = FX_Div(0x10000 * FX32_ONE, param->motionFrames);
+            work->angle2Step = FX_Mul(work->angle2Step, param->turns);
+        } else {
+            work->angleStep = FX_Div(0x8000 * FX32_ONE, param->motionFrames);
+        }
+        if (work->angleStep == 0) {
+            work->angleStep = 1;
+        }
+        work->radius = VEC_Distance(&from, &to) / 2;
+        if (param->motionType == EFFVM_EMITTER_FLAT || param->motionType == EFFVM_EMITTER_FLAT_FROM_TARGET) {
+            work->height = 0;
+        } else {
+            work->height = param->motionHeight;
+        }
+        if (param->motionType == EFFVM_EMITTER_FLAT_FROM_TARGET) {
+            fx32 x;
+            fx32 y;
+            fx32 z;
+
+            x = from.x;
+            from.x = to.x;
+            y = from.y;
+            from.y = to.y;
+            z = from.z;
+            from.z = to.z;
+            to.x = x + from.x;
+            to.y = y + from.y;
+            to.z = z + from.z;
+        }
+        dir.x = to.x - from.x;
+        dir.y = to.y - from.y;
+        dir.z = to.z - from.z;
+        VEC_Normalize(&dir, &dir);
+        base.x = FX32_ONE;
+        base.y = 0;
+        base.z = 0;
+        angle = FX_AcosIdx(VEC_DotProduct(&base, &dir));
+        VEC_CrossProduct(&base, &dir, &axis);
+        VEC_Normalize(&axis, &axis);
+        MTX_RotAxis43(&work->mtx, &axis, FX_SinIdx(angle), FX_CosIdx(angle));
+        work->mtx.rt.trans.x = from.x;
+        work->mtx.rt.trans.y = from.y;
+        work->mtx.rt.trans.z = from.z;
+    }
+    if (param->from != EFFVM_EMIT_EXPLICIT && param->to != EFFVM_EMIT_EXPLICIT && param->from != param->to) {
+        spinAxis = 2;
+        to.x -= from.x;
+        to.y -= from.y;
+        to.z -= from.z;
+        ParticleEmitter_SetMagnetTarget(emitter, &to);
+        ParticleEmitter_SetConvergenceTarget(emitter, &to);
+        flat.x = to.x;
+        flat.y = 0;
+        flat.z = to.z;
+        ParticleEmitter_GetAxis(emitter, &emitterAxis);
+        vec.x = emitterAxis.x;
+        vec.y = 0;
+        vec.z = emitterAxis.z;
+        VEC_Normalize(&vec, &vec);
+        VEC_Normalize(&flat, &flat);
+        angle = FX_AcosIdx(VEC_DotProduct(&vec, &flat));
+        VEC_CrossProduct(&vec, &flat, &rotAxis);
+        VEC_Normalize(&rotAxis, &rotAxis);
+        MTX_RotAxis43(&mtx, &rotAxis, FX_SinIdx(angle), FX_CosIdx(angle));
+        vec.x = emitterAxis.x;
+        vec.y = emitterAxis.y;
+        vec.z = emitterAxis.z;
+        MTX_MultVec43(&vec, &mtx, &vec);
+        VEC_Normalize(&vec, &vec);
+        if (flip == TRUE) {
+            vec.x *= -1;
+            vec.z *= -1;
+        }
+        emitterAxis.x = vec.x;
+        emitterAxis.y = vec.y;
+        emitterAxis.z = vec.z;
+        if (angle < 0x2000 || (angle > 0x6000 && angle < 0xa000) || angle > 0xe000) {
+            spinAxis = 0;
+        }
+        ParticleEmitter_SetSpinAxis(emitter, &spinAxis);
+        ParticleEmitter_SetAxis(emitter, &emitterAxis);
+    }
+    if ((param->offsetMode != EFFVM_EMITTER_WORLD && (param->from & 1)) || param->offsetMode == EFFVM_EMITTER_WORLD ||
+        param->offsetMode == EFFVM_EMITTER_PROJECT || param->offsetMode == EFFVM_EMITTER_PROJECT_START) {
+        fx32 radius = ParticleEmitter_GetRadius(emitter);
+        fx32 lifeTime = ParticleEmitter_GetParticleLifeTime(emitter) << FX32_SHIFT;
+        fx16 scale = ParticleEmitter_GetBaseScale(emitter);
+        fx32 length = ParticleEmitter_GetLength(emitter);
+        fx16 amplifier;
+
+        if (param->radiusScale != 0) {
+            ParticleEmitter_SetRadius(emitter, FX_Mul(radius, param->radiusScale));
+            ParticleEmitter_SetLength(emitter, FX_Mul(length, param->radiusScale));
+        }
+        if (param->lifeTimeScale != 0) {
+            ParticleEmitter_SetParticleLifeTime(emitter, FX_Mul(lifeTime, param->lifeTimeScale) >> FX32_SHIFT);
+        }
+        if (param->scaleScale != 0) {
+            ParticleEmitter_SetBaseScale(emitter, (fx16)FX_Mul(scale, param->scaleScale));
+        }
+        if (param->cameraScale != 0) {
+            // Particle_GetCameraPos and Particle_SetCameraPos take the emitter here, though gfl/particle.h types them
+            // for a system
+            Particle_GetCameraPos((ParticleSystem *)emitter, &cameraPos);
+            cameraPos.x = FX_MUL(cameraPos.x, param->cameraScale);
+            cameraPos.y = FX_MUL(cameraPos.y, param->cameraScale);
+            cameraPos.z = FX_MUL(cameraPos.z, param->cameraScale);
+            Particle_SetCameraPos((ParticleSystem *)emitter, &cameraPos);
+            amplifier = ParticleEmitter_GetInitVelPositionAmplifier(emitter);
+            ParticleEmitter_SetInitVelPositionAmplifier(emitter, (fx16)FX_MUL(amplifier, param->cameraScale));
+            amplifier = ParticleEmitter_GetInitVelAxisAmplifier(emitter);
+            ParticleEmitter_SetInitVelAxisAmplifier(emitter, (fx16)FX_MUL(amplifier, param->cameraScale));
+        }
+    }
+    if (param->offsetMode == EFFVM_EMITTER_PROJECT_START) {
+        ParticleEmitter_SetPosition(emitter, &start);
+    } else {
+        ParticleEmitter_SetPosition(emitter, &from);
+    }
+    GFL_HeapFree(param);
+}
+
+static void BtlvEffvm_MoveEmitterArc(SPLEmitter *emitter, u32 type) {
+    BtlvEffvmEmitterMotionWork *work = ParticleEmitter_GetUserData(emitter);
+    VecFx32 pos;
+    u16 angle;
+    u16 angle2;
+
+    if (work->frames != 0 && type != 0) {
+        if (work->type == EFFVM_EMITTER_ARC_DELAYED) {
+            if (work->wait != 0) {
+                work->wait--;
+                return;
+            }
+            work->waitStep += 12;
+            work->waitAccum += work->waitStep;
+            work->wait = work->waitAccum >> FX32_SHIFT;
+        }
+        work->frames--;
+        work->angle += work->angleStep;
+        work->angle2 += work->angle2Step;
+        angle = (work->angle >> FX32_SHIFT) + 0xc000;
+        angle2 = (work->angle2 >> FX32_SHIFT) + 0xc000;
+        pos.x = FX_SinIdx(angle);
+        pos.x = FX_Mul(pos.x, work->radius);
+        pos.x += work->radius;
+        if (work->type == EFFVM_EMITTER_WAVE_Z) {
+            pos.z = FX_CosIdx(angle2);
+            pos.z = FX_Mul(pos.z, work->height);
+            pos.y = 0;
+        } else if (work->type == EFFVM_EMITTER_WAVE_Y) {
+            pos.y = FX_CosIdx(angle2);
+            pos.y = FX_Mul(pos.y, work->height);
+            pos.z = 0;
+        } else {
+            pos.y = FX_CosIdx(angle);
+            pos.y = FX_Mul(pos.y, work->height);
+            pos.z = 0;
+        }
+        MTX_MultVec43(&pos, &work->mtx, &pos);
+        if (work->offsetMode != EFFVM_EMITTER_WORLD) {
+            BtlvEffvm_ProjectToScreen(&pos, NULL);
+        }
+        ParticleEmitter_SetPosition(emitter, &pos);
+    }
+}
+
+static void BtlvEffvm_InitCircleEmitter(SPLEmitter *emitter) {
+    BtlvEffvmEmitterCircleWork *work = Particle_GetCallbackParam();
+
+    if (work->ortho && work->center.z < 0) {
+        ParticleEmitter_SetBaseScale(emitter, FX32_HALF);
+    }
+    ParticleEmitter_SetUserData(emitter, work);
+    ParticleEmitter_SetUpdateCallback(emitter, BtlvEffvm_MoveCircleEmitter);
+}
+
+static void BtlvEffvm_MoveCircleEmitter(SPLEmitter *emitter, u32 type) {
+    BtlvEffvmEmitterCircleWork *work = ParticleEmitter_GetUserData(emitter);
+    VecFx32 pos;
+
+    if (type != 0) {
+        if (work->delay == 0) {
+            if (work->wait == 0) {
+                work->wait = work->waitReset;
+                if (work->type & 1) {
+                    work->angle = work->angle - work->angleStep;
+                } else {
+                    work->angle = work->angle + work->angleStep;
+                }
+                work->angle = (u16)work->angle;
+                pos.x = FX_SinIdx(work->angle);
+                pos.x = FX_Mul(pos.x, work->radiusX);
+                pos.x += work->center.x;
+                pos.y = work->center.y;
+                pos.z = FX_CosIdx(work->angle);
+                pos.z = FX_Mul(pos.z, work->radiusZ);
+                pos.z += work->center.z;
+                if (work->ortho) {
+                    BtlvEffvm_ProjectToScreen(&pos, NULL);
+                }
+                ParticleEmitter_SetPosition(emitter, &pos);
+                if (work->frames != 0) {
+                    work->frames--;
+                } else {
+                    work->frames = work->framesReset;
+                    work->delay = work->delayReset;
+                }
+            } else {
+                work->wait--;
+            }
+        } else {
+            work->delay--;
+        }
+    }
+}
+
+static void BtlvEffvm_DeleteParticle(ParticleSystem *particle) {
+    void *work = Particle_GetWork(particle);
+
+    Particle_DeleteSystem(particle);
+    GFL_HeapFree(work);
+}
+
+static void BtlvEffvm_ResetMcss(BtlvEffvm *wk) {
+    if (wk->mcssCameraMode == EFFVM_MCSS_CAMERA_DEPTH) {
+        BtlvMcss_ClearFlatAll(BtlvEffect_GetMcss());
+    } else {
+        BtlvMcss_SetFlatAll(BtlvEffect_GetMcss());
+    }
+}
+
+static void BtlvEffvm_PlaySENow(u32 se, u32 player, int pan, int pitch, int volume, int modDepth, int modSpeed) {
+    if (player == EFFVM_SE_PLAYER_AUTO) {
+        GFL_SndSEPlay(se);
+        player = GFL_SndSeqGetPlayerIndex(se);
+    } else {
+        GFL_SEPlayKeepVol(se, player);
+    }
+    NNS_SndPlayerSetVolume(GFL_SndPlayerGetHandle(player), volume);
+    GFL_SndPlayerSetParams(player, -1, -1, pan);
+    GFL_SndPlayerSetParams(player, -1, pitch, -1);
+    if (modDepth != 0) {
+        NNS_SndPlayerSetTrackModDepth(GFL_SndPlayerGetHandle(player), 0xffff, modDepth);
+        NNS_SndPlayerSetTrackModSpeed(GFL_SndPlayerGetHandle(player), 0xffff, modSpeed);
+    }
+}
+
+// A script variable; an unknown id returns whatever r0 holds, as the original does
+static u32 BtlvEffvm_GetVariable(BtlvEffvm *wk, int id) {
+    switch (id) {
+    case EFFVM_VAR_WEIGHT:
+    case EFFVM_VAR_WEIGHT + 1:
+    case EFFVM_VAR_WEIGHT + 2:
+    case EFFVM_VAR_WEIGHT + 3:
+    case EFFVM_VAR_WEIGHT + 4:
+    case EFFVM_VAR_WEIGHT + 5:
+    case EFFVM_VAR_WEIGHT + 6:
+    case EFFVM_VAR_WEIGHT + 7:
+        return BtlvMcss_GetWeight(BtlvEffect_GetMcss(), id);
+    case EFFVM_VAR_ATTACKER_WEIGHT:
+        return BtlvMcss_GetWeight(BtlvEffect_GetMcss(), wk->attacker);
+    case EFFVM_VAR_TARGET:
+        return wk->param.target;
+    case EFFVM_VAR_VARIANT:
+        return wk->param.variant;
+    case EFFVM_VAR_PARAM_2:
+        return wk->param.param2;
+    case EFFVM_VAR_SHAKES:
+        return wk->param.shakes;
+    case EFFVM_VAR_CAUGHT:
+        return wk->param.caught;
+    case EFFVM_VAR_CRITICAL:
+        return wk->param.critical;
+    case EFFVM_VAR_ITEM:
+        return wk->param.itemNo;
+    case EFFVM_VAR_VALUE:
+        return wk->value;
+    case EFFVM_VAR_ATTACKER:
+        return wk->attacker;
+    case EFFVM_VAR_ATTACKER_VANISH:
+        return BtlvMcss_GetVanish(BtlvEffect_GetMcss(), wk->attacker);
+    case EFFVM_VAR_ATTACKER_SIDE:
+        return wk->attacker & 1;
+    case EFFVM_VAR_RARE:
+    case EFFVM_VAR_RARE + 1:
+    case EFFVM_VAR_RARE + 2:
+    case EFFVM_VAR_RARE + 3:
+    case EFFVM_VAR_RARE + 4:
+    case EFFVM_VAR_RARE + 5:
+    case EFFVM_VAR_RARE + 6:
+    case EFFVM_VAR_RARE + 7:
+        if (BtlvMcss_GetFlags(BtlvEffect_GetMcss(), id - EFFVM_VAR_RARE) & BTLV_MCSS_FLAG_RARE) {
+            return TRUE;
+        }
+        return FALSE;
+    case EFFVM_VAR_ATTACKER_RARE:
+        if (BtlvMcss_GetFlags(BtlvEffect_GetMcss(), wk->attacker) & BTLV_MCSS_FLAG_RARE) {
+            return TRUE;
+        }
+        return FALSE;
+    case EFFVM_VAR_NO_BOUNCE:
+    case EFFVM_VAR_NO_BOUNCE + 1:
+    case EFFVM_VAR_NO_BOUNCE + 2:
+    case EFFVM_VAR_NO_BOUNCE + 3:
+    case EFFVM_VAR_NO_BOUNCE + 4:
+    case EFFVM_VAR_NO_BOUNCE + 5:
+    case EFFVM_VAR_NO_BOUNCE + 6:
+    case EFFVM_VAR_NO_BOUNCE + 7:
+        return BtlvMcss_IsNoBounce(BtlvEffect_GetMcss(), id - EFFVM_VAR_NO_BOUNCE);
+    case EFFVM_VAR_ATTACKER_NO_BOUNCE:
+        return BtlvMcss_IsNoBounce(BtlvEffect_GetMcss(), wk->attacker);
+    case EFFVM_VAR_IS_MULTI:
+        return BtlvEffect_IsMulti();
+    case EFFVM_VAR_BATTLE_STYLE:
+        return BtlvEffect_GetBattleStyle();
+    case EFFVM_VAR_TRAINER_TYPE:
+    case EFFVM_VAR_TRAINER_TYPE + 1:
+    case EFFVM_VAR_TRAINER_TYPE + 2:
+    case EFFVM_VAR_TRAINER_TYPE + 3:
+        return BtlvEffect_GetTrainerType(id - EFFVM_VAR_TRAINER_TYPE);
+    case EFFVM_VAR_STOP_CELL_FLAGS:
+    case EFFVM_VAR_STOP_CELL_FLAGS + 1:
+    case EFFVM_VAR_STOP_CELL_FLAGS + 2:
+    case EFFVM_VAR_STOP_CELL_FLAGS + 3:
+    case EFFVM_VAR_STOP_CELL_FLAGS + 4:
+    case EFFVM_VAR_STOP_CELL_FLAGS + 5:
+    case EFFVM_VAR_STOP_CELL_FLAGS + 6:
+    case EFFVM_VAR_STOP_CELL_FLAGS + 7:
+        return BtlvMcss_GetStopCellFlags(BtlvEffect_GetMcss(), id - EFFVM_VAR_STOP_CELL_FLAGS);
+    case EFFVM_VAR_ATTACKER_STOP_CELL_FLAGS:
+        return BtlvMcss_GetStopCellFlags(BtlvEffect_GetMcss(), wk->attacker);
+    case EFFVM_VAR_MCSS_SCALED:
+        return wk->mcssScaled;
+    case EFFVM_VAR_CAMERA_SAVED:
+        return wk->camSaved;
+    case EFFVM_VAR_MESSAGE_IDLE_RESTORE:
+        return wk->messageIdleNeedsRestore;
+    case EFFVM_VAR_CAMERA_LOCKED:
+        return wk->cameraLocked;
+    case EFFVM_VAR_DEFENDER:
+        return wk->defender;
+    case EFFVM_VAR_N_POKEMON:
+    case EFFVM_VAR_N_POKEMON + 1:
+    case EFFVM_VAR_N_POKEMON + 2:
+    case EFFVM_VAR_N_POKEMON + 3:
+    case EFFVM_VAR_N_POKEMON + 4:
+    case EFFVM_VAR_N_POKEMON + 5:
+    case EFFVM_VAR_N_POKEMON + 6:
+    case EFFVM_VAR_N_POKEMON + 7:
+        if (BtlvMcss_GetFlags(BtlvEffect_GetMcss(), id - EFFVM_VAR_N_POKEMON) & BTLV_MCSS_FLAG_N_POKEMON) {
+            return TRUE;
+        }
+        return FALSE;
+    case EFFVM_VAR_ATTACKER_N_POKEMON:
+        if (BtlvMcss_GetFlags(BtlvEffect_GetMcss(), wk->attacker) & BTLV_MCSS_FLAG_N_POKEMON) {
+            return TRUE;
+        }
+        return FALSE;
+    case EFFVM_VAR_FAMOUS:
+    case EFFVM_VAR_FAMOUS + 1:
+    case EFFVM_VAR_FAMOUS + 2:
+    case EFFVM_VAR_FAMOUS + 3:
+    case EFFVM_VAR_FAMOUS + 4:
+    case EFFVM_VAR_FAMOUS + 5:
+    case EFFVM_VAR_FAMOUS + 6:
+    case EFFVM_VAR_FAMOUS + 7:
+        if (BtlvMcss_GetFlags(BtlvEffect_GetMcss(), id - EFFVM_VAR_FAMOUS) & BTLV_MCSS_FLAG_FAMOUS) {
+            return TRUE;
+        }
+        return FALSE;
+    case EFFVM_VAR_ATTACKER_FAMOUS:
+        if (BtlvMcss_GetFlags(BtlvEffect_GetMcss(), wk->attacker) & BTLV_MCSS_FLAG_FAMOUS) {
+            return TRUE;
+        }
+        return FALSE;
+    }
+}
+
+static void BtlvEffvm_AddEmitters(BtlvEffvm *wk, BtlvEffvmEmitParam *param, int index, int resourceId) {
+    int i;
+    BtlvEffvmEmitParam *emit;
+
+    if (param->to == param->from && (param->to == EFFVM_EMIT_DEFENDER || param->to == EFFVM_EMIT_DEFENDER_MIRRORED)) {
+        int positions[8];
+        int count;
+
+        if (param->to == EFFVM_EMIT_DEFENDER_MIRRORED) {
+            param->flip = TRUE;
+        }
+        count = BtlvEffvm_GetDefenderPositions(wk, EFFVM_DEFENDER, positions);
+        if (count != 0) {
+            for (i = 0; i < count; i++) {
+                emit =
+                    GFL_HeapAllocate(HEAPID_TAIL(wk->heapId), sizeof(BtlvEffvmEmitParam), TRUE, "btlv_effvm.c", 7435);
+                *emit = *param;
+                emit->from = positions[i];
+                emit->to = positions[i];
+                if (Particle_CreateEmitterWithCallback(wk->particles[index], resourceId, BtlvEffvm_InitEmitter, emit) ==
+                    (SPLEmitter *)-1) {
+                    GFL_HeapFree(emit);
+                }
+            }
+        }
+    } else if (param->to == param->from && wk->param.target == MOVE_TARGET_USER_SIDE && !wk->isEffect &&
+               wk->move != MOVE_TAILWIND &&
+               (param->to == EFFVM_EMIT_ATTACKER || param->to == EFFVM_EMIT_ATTACKER_MIRRORED)) {
+        int targets[8];
+        int count;
+
+        if (param->to == EFFVM_EMIT_ATTACKER_MIRRORED) {
+            param->flip = TRUE;
+        }
+        switch (BtlvEffect_GetBattleStyle()) {
+        case BTL_STYLE_SINGLE:
+        case BTL_STYLE_ROTATION:
+        default:
+            targets[0] = wk->attacker;
+            count = 1;
+            break;
+        case BTL_STYLE_DOUBLE:
+            targets[0] = (wk->attacker & 1) ? 1 : 0;
+            count = 1;
+            break;
+        case BTL_STYLE_TRIPLE:
+            targets[0] = (wk->attacker & 1) ? 19 : 18;
+            targets[1] = (wk->attacker & 1) ? 21 : 20;
+            count = 2;
+            break;
+        }
+        if (count != 0) {
+            for (i = 0; i < count; i++) {
+                emit =
+                    GFL_HeapAllocate(HEAPID_TAIL(wk->heapId), sizeof(BtlvEffvmEmitParam), TRUE, "btlv_effvm.c", 7490);
+                *emit = *param;
+                emit->from = targets[i];
+                emit->to = targets[i];
+                if (Particle_CreateEmitterWithCallback(wk->particles[index], resourceId, BtlvEffvm_InitEmitter, emit) ==
+                    (SPLEmitter *)-1) {
+                    GFL_HeapFree(emit);
+                }
+            }
+        }
+    } else {
+        emit = GFL_HeapAllocate(HEAPID_TAIL(wk->heapId), sizeof(BtlvEffvmEmitParam), TRUE, "btlv_effvm.c", 7509);
+        *emit = *param;
+        if (Particle_CreateEmitterWithCallback(wk->particles[index], resourceId, BtlvEffvm_InitEmitter, emit) ==
+            (SPLEmitter *)-1) {
+            GFL_HeapFree(emit);
+        }
+    }
+}
+
+static BOOL BtlvEffvm_AddCircleEmitter(VM *vm, BtlvEffvm *wk, BOOL ortho) {
+    int index = BtlvEffvm_FindParticleId(wk, BtlvEffvm_GetBallParticleId(wk, VM_Read32(vm)));
+    int resourceId = VM_Read32(vm);
+    int pos = 0;
+    BtlvEffvmEmitterCircleWork *work;
+    fx32 offsetY;
+
+    wk->allocs[wk->allocCount] =
+        GFL_HeapAllocate(HEAPID_TAIL(wk->heapId), sizeof(BtlvEffvmEmitterCircleWork), FALSE, "btlv_effvm.c", 7544);
+    work = wk->allocs[wk->allocCount];
+    wk->allocCount++;
+    work->type = VM_Read32(vm);
+    work->radiusX = VM_Read32(vm);
+    work->radiusZ = VM_Read32(vm);
+    offsetY = VM_Read32(vm);
+    work->angle = 0;
+    work->frames = VM_Read32(vm);
+    work->framesReset = work->frames;
+    work->wait = 0;
+    work->waitReset = VM_Read32(vm);
+    work->scriptArg12 = VM_Read32(vm);
+    work->delay = 0;
+    work->delayReset = VM_Read32(vm);
+    work->angleStep = 0x10000 / work->frames;
+    work->ortho = ortho;
+    if (index != EFFVM_PARTICLE_CAPACITY) {
+        if (ortho == TRUE && Particle_GetCamera(wk->particles[index]) == NULL) {
+            G3DCameraProjection projection;
+            VecFx32 camPos = { 0, 0, 0 };
+            VecFx32 up = CIRCLE_EMITTER_UP;
+            VecFx32 target = CIRCLE_EMITTER_TARGET;
+
+            projection.type = G3DCAM_PROJECTION_ORTHO;
+            projection.param1 = FX32_CONST(3);
+            projection.param2 = FX32_CONST(-3);
+            projection.param3 = FX32_CONST(-4);
+            projection.param4 = FX32_CONST(4);
+            projection.near = FX32_ONE;
+            projection.far = FX32_CONST(512);
+            projection.ndcRangeOverride = FX32_ONE;
+            Particle_SetCamera(wk->particles[index], &projection, 0x2000, &camPos, &up, &target,
+                               HEAPID_TAIL(wk->heapId));
+        }
+        switch (work->type) {
+        case EFFVM_ORBIT_ATTACKER_FORWARD:
+        case EFFVM_ORBIT_ATTACKER_REVERSE:
+            pos = BtlvEffvm_GetTargetPosition(vm, EFFVM_ATTACKER);
+            BtlvMcss_GetDefaultPos(BtlvEffect_GetMcss(), &work->center, pos);
+            break;
+        case EFFVM_ORBIT_DEFENDER_FORWARD:
+        case EFFVM_ORBIT_DEFENDER_REVERSE:
+            pos = BtlvEffvm_GetTargetPosition(vm, EFFVM_DEFENDER);
+            BtlvMcss_GetDefaultPos(BtlvEffect_GetMcss(), &work->center, pos);
+            break;
+        case EFFVM_ORBIT_ORIGIN_FORWARD:
+        case EFFVM_ORBIT_ORIGIN_REVERSE:
+            work->center.x = 0;
+            work->center.y = 0;
+            work->center.z = 0;
+            break;
+        }
+        if (pos & 1) {
+            work->angle = 0x8000;
+        }
+        work->center.y += offsetY;
+        if (Particle_CreateEmitterWithCallback(wk->particles[index], resourceId, BtlvEffvm_InitCircleEmitter, work) ==
+            (SPLEmitter *)-1) {
+            GFL_HeapFree(work);
+        }
+    }
+    return wk->ret;
+}
+
+static void BtlvEffvm_ProjectToScreen(VecFx32 *pos, const VecFx32 *offset) {
+    MtxFx44 mtx;
+    fx32 w;
+
+    MTX_Copy43To44_(&NNS_G3dGlb.cameraMtx, &mtx);
+    MTX_Concat44(&mtx, &NNS_G3dGlb.projMtx, &mtx);
+    if (offset != NULL) {
+        pos->x += offset->x;
+        pos->y += offset->y;
+        pos->z += offset->z;
+    }
+    BtlvEffvm_MulVec44(pos, &mtx, pos, &w);
+    pos->x = FX_Mul(FX_Div(pos->x, w), FX32_CONST(4));
+    pos->y = FX_Mul(FX_Div(pos->y, w), FX32_CONST(3));
+    pos->z = -pos->z;
+}
+
+static void BtlvEffvm_MulVec44(const VecFx32 *src, const MtxFx44 *mtx, VecFx32 *dest, fx32 *w) {
+    fx32 x = src->x;
+    fx32 y = src->y;
+    fx32 z = src->z;
+    fx64 sum;
+
+    sum = ((fx64)x * mtx->m[0][0] + (fx64)y * mtx->m[1][0] + (fx64)z * mtx->m[2][0]);
+    dest->x = (fx32)(sum >> FX32_SHIFT) + mtx->m[3][0];
+    sum = ((fx64)x * mtx->m[0][1] + (fx64)y * mtx->m[1][1] + (fx64)z * mtx->m[2][1]);
+    dest->y = (fx32)(sum >> FX32_SHIFT) + mtx->m[3][1];
+    sum = ((fx64)x * mtx->m[0][2] + (fx64)y * mtx->m[1][2] + (fx64)z * mtx->m[2][2]);
+    dest->z = (fx32)(sum >> FX32_SHIFT) + mtx->m[3][2];
+    sum = ((fx64)x * mtx->m[0][3] + (fx64)y * mtx->m[1][3] + (fx64)z * mtx->m[2][3]);
+    *w = (fx32)(sum >> FX32_SHIFT) + mtx->m[3][3];
+}
+
+static u32 BtlvEffvm_GetBallParticleId(BtlvEffvm *wk, u32 id) {
+    u32 ball;
+    u32 source = wk->ballSource;
+
+    if (source == EFFVM_BALL_SOURCE_ATTACKER) {
+        ball = BtlvMcss_GetBall(BtlvEffect_GetMcss(), wk->attacker);
+    } else if (source != EFFVM_BALL_SOURCE_ITEM) {
+        ball = BtlvMcss_GetBall(BtlvEffect_GetMcss(), source);
+    } else {
+        ball = PML_ItemGetMonsBallID(wk->param.itemNo);
+    }
+    if (ball == EFFVM_BALL_NONE || ball > EFFVM_BALL_DREAM) {
+        ball = EFFVM_BALL_POKE;
+    }
+    ball--;
+    switch (id) {
+    case 3:
+        id += ball;
+        break;
+    case 29:
+        if (ball + 1 == EFFVM_BALL_DREAM) {
+            ball = 16;
+        } else if (ball + 1 >= EFFVM_BALL_CHERISH) {
+            ball = 3;
+        }
+        id += ball;
+        break;
+    case 46:
+    case 47:
+    case 48:
+    case 49:
+        id += ball * 4;
+        break;
+    }
+    return id;
+}
+
+static void BtlvEffvm_StartBgmFade(BtlvEffvm *wk, fx32 start, fx32 end, int frames) {
+    BtlvEffvmBgmFadeWork *work;
+
+    if (start > end) {
+        if (wk->bgmLowered) {
+            wk->bgmLowerRequested = TRUE;
+            return;
+        }
+        wk->bgmLowered = TRUE;
+    } else {
+        wk->bgmLowered = FALSE;
+    }
+    work = GFL_HeapAllocate(HEAPID_TAIL(wk->heapId), sizeof(BtlvEffvmBgmFadeWork), FALSE, "btlv_effvm.c", 7799);
+    work->volume = start;
+    work->target = end;
+    work->wk = wk;
+    BtlvEffTool_CalcStep(work->volume, work->target, &work->step, FX32_CONST(frames));
+    BtlvEffect_AddTask(GFL_TCBMgrAddTask(wk->tcbManager, BtlvEffvm_BgmFadeTask, work, 0), NULL,
+                       BTLV_EFFECT_TASK_SCRIPT);
+}
+
+static int BtlvEffvm_GetFreeVoiceSlot(BtlvEffvm *wk) {
+    int i;
+
+    for (i = 0; i < EFFVM_VOICE_CAPACITY; i++) {
+        if (wk->voices[i] == -1) {
+            break;
+        }
+    }
+    if (i == EFFVM_VOICE_CAPACITY) {
+        i = 0;
+    }
+    return i;
+}
+
+static void BtlvEffvm_ResetMcssAll(BtlvEffvm *wk) {
+    BtlvMcssPos i;
+
+    for (i = BTLV_MCSS_POS_FIRST; i < BTLV_MCSS_POS_TRAINER; i++) {
+        if (BtlvMcss_Exists(BtlvEffect_GetMcss(), i) == TRUE) {
+            BtlvMcss_ResetPosition(BtlvEffect_GetMcss(), i);
+        }
+    }
+}
+
+static void BtlvEffvm_ClearMcssFlagAll(BtlvEffvm *wk) {
+    BtlvMcssPos i;
+
+    for (i = BTLV_MCSS_POS_FIRST; i < BTLV_MCSS_POS_TRAINER; i++) {
+        if (BtlvMcss_Exists(BtlvEffect_GetMcss(), i) == TRUE) {
+            BtlvMcss_SetShadowVanish(BtlvEffect_GetMcss(), i, 0);
+        }
+    }
+}
+
+static void BtlvEffvm_SeWaitTask(TCB *tcb, void *data) {
+    BtlvEffvmSeWork *work = data;
+
+    if (--work->wait == 0) {
+        BtlvEffvm_PlaySENow(work->se, work->player, work->pan, work->pitch, work->volume, work->modDepth,
+                            work->modSpeed);
+        BtlvEffect_EndTask(tcb);
+    }
+}
+
+static void BtlvEffvm_SeWaitTaskRemove(TCB *tcb) {
+    BtlvEffvmSeWork *work = GFL_TCBGetData(tcb);
+
+    work->wk->seDelayed = FALSE;
+}
+
+static void BtlvEffvm_SeMoveTask(TCB *tcb, void *data) {
+    BtlvEffvmSeMoveWork *work = data;
+    BOOL done = FALSE;
+    int value;
+
+    if (work->delay != 0) {
+        work->delay--;
+        return;
+    }
+    if (work->stepWait == 0) {
+        work->stepWait = work->stepWaitReset;
+        work->value += work->step;
+        value = work->value >> FX32_SHIFT;
+        if (work->count & 1) {
+            if (work->step < 0) {
+                if (value < work->start) {
+                    value = work->start;
+                }
+            } else if (value > work->start) {
+                value = work->start;
+            }
+        } else {
+            if (work->step < 0) {
+                if (value < work->end) {
+                    value = work->end;
+                }
+            } else if (value > work->end) {
+                value = work->end;
+            }
+        }
+        work->value = FX32_CONST(value);
+        switch (work->param) {
+        case EFFVM_SE_PARAM_PITCH:
+            GFL_SndPlayerSetParams(work->player, -1, value, -1);
+            break;
+        case EFFVM_SE_PARAM_VOLUME:
+            NNS_SndPlayerSetVolume(GFL_SndPlayerGetHandle(work->player), value);
+            break;
+        case EFFVM_SE_PARAM_PAN:
+            GFL_SndPlayerSetParams(work->player, -1, -1, value);
+            break;
+        }
+        if (work->frames == 0) {
+            work->frames = work->framesReset;
+            switch (work->type) {
+            case EFFVM_SE_MOVE_ONCE:
+                done = TRUE;
+                break;
+            case EFFVM_SE_MOVE_SWING:
+                if (--work->count != 0) {
+                    work->step *= -1;
+                } else {
+                    done = TRUE;
+                }
+                break;
+            }
+        } else {
+            work->frames--;
+        }
+    } else {
+        work->stepWait--;
+    }
+    if (done == TRUE) {
+        BtlvEffect_EndTask(tcb);
+    }
+}
+
+static void BtlvEffvm_SeMoveTaskRemove(TCB *tcb) {
+    BtlvEffvmSeMoveWork *work = GFL_TCBGetData(tcb);
+
+    work->wk->seSliding = FALSE;
+}
+
+static void BtlvEffvm_CryDelayTask(TCB *tcb, void *data) {
+    BtlvEffvmCryWork *work = data;
+    int slot;
+    BtlvEffvmCryWaitWork *wait;
+
+    if (--work->delay == 0) {
+        slot = BtlvEffvm_GetFreeVoiceSlot(work->wk);
+        work->wk->voices[slot] = BtlvMcss_PlayCry(BtlvEffect_GetMcss(), work->pos, work->speed, work->volume,
+                                                  work->chorusVolume, work->chorusSpeed, work->reverse);
+        BtlvEffvm_StartBgmFade(work->wk, 0x7f000, 0x6b000, 10);
+        if (!work->wk->bgmLowerRequested) {
+            wait = GFL_HeapAllocate(HEAPID_TAIL(work->wk->heapId), sizeof(BtlvEffvmCryWaitWork), FALSE, "btlv_effvm.c",
+                                    8044);
+            wait->wk = work->wk;
+            BtlvEffect_AddTask(GFL_TCBMgrAddTask(work->wk->tcbManager, BtlvEffvm_CryWaitTask, wait, 0), NULL,
+                               BTLV_EFFECT_TASK_PERSISTENT);
+        }
+        BtlvEffect_EndTask(tcb);
+    }
+}
+
+static void BtlvEffvm_CryDelayTaskRemove(TCB *tcb) {
+    BtlvEffvmCryWork *work = GFL_TCBGetData(tcb);
+
+    work->wk->cryDelayed = FALSE;
+}
+
+static void BtlvEffvm_BgmFadeTask(TCB *tcb, void *data) {
+    BtlvEffvmBgmFadeWork *work = data;
+    BOOL done = TRUE;
+
+    BtlvEffTool_Step(&work->volume, &work->step, &work->target, &done);
+    NetBgmVolume_Set(0xffff, work->volume >> FX32_SHIFT);
+    if (done) {
+        BtlvEffect_EndTask(tcb);
+    }
+}
+
+static void BtlvEffvm_WindowTask(TCB *tcb, void *data) {
+    BtlvEffvmWindowWork *work = data;
+
+    switch (work->state) {
+    case EFFVM_WINDOW_INIT:
+        G2_SetWnd0InsidePlane((u8)work->winInOut, FALSE);
+        G2_SetWnd1InsidePlane(work->winInOut & 0xff, FALSE);
+        G2_SetWndOutsidePlane((work->winInOut & 0xff00) >> 8, FALSE);
+        GX_SetVisibleWnd(GX_WNDMASK_W0 | GX_WNDMASK_W1);
+        G2_SetWnd1Position(0, 0, 0, 0);
+        work->state++;
+    case EFFVM_WINDOW_MOVE:
+        if (work->wait == 0) {
+            work->wait = work->waitReload;
+            switch (work->dir) {
+            case EFFVM_WINDOW_EXPAND_Y:
+                work->winV -= 0x100;
+                work->winV++;
+                break;
+            case EFFVM_WINDOW_CONTRACT_Y:
+                work->winV += 0x100;
+                work->winV--;
+                break;
+            case EFFVM_WINDOW_EXPAND_X:
+                work->winH -= 0x100;
+                work->winH++;
+                break;
+            case EFFVM_WINDOW_CONTRACT_X:
+                work->winH += 0x100;
+                work->winH--;
+                break;
+            }
+            G2_SetWnd0Position(work->winH >> 8, work->winV >> 8, work->winH & 0xff, work->winV & 0xff);
+            if ((u8)work->winH == EFFVM_WINDOW_RIGHT_MAX) {
+                G2_SetWnd1Position(1, work->winV >> 8, 256, work->winV & 0xff);
+            } else {
+                G2_SetWnd1Position(0, 0, 0, 0);
+            }
+            if (--work->count == 0) {
+                BtlvEffect_EndTask(tcb);
+            }
+        } else {
+            work->wait--;
+        }
+        break;
+    }
+}
+
+static void BtlvEffvm_WindowTaskRemove(TCB *tcb) {
+    BtlvEffvmWindowWork *work = GFL_TCBGetData(tcb);
+
+    if (!work->keepWindow) {
+        GX_SetVisibleWnd(GX_WNDMASK_NONE);
+    }
+    work->wk->windowTask = FALSE;
+}
+
+static void BtlvEffvm_CryWaitTask(TCB *tcb, void *data) {
+    BtlvEffvmCryWaitWork *work = data;
+    int i;
+
+    for (i = 0; i < EFFVM_VOICE_CAPACITY; i++) {
+        if (work->wk->voices[i] != -1) {
+            if (PokeVoice_IsPlaying(work->wk->voices[i])) {
+                return;
+            }
+            work->wk->voices[i] = -1;
+        }
+    }
+    BtlvEffvm_StartBgmFade(work->wk, 0x6b000, 0x7f000, 10);
+    work->wk->bgmLowerRequested = FALSE;
+    BtlvEffect_EndTask(tcb);
+}
+
+static void BtlvEffvm_SideResetTask(TCB *tcb, void *data) {
+    BtlvEffvmSideWork *work = data;
+    int pos = work->side != 0 ? 1 : 0;
+    u32 allMask = work->side != 0 ? 0xaa : 0x55;
+
+    for (; pos <= 7; pos += 2) {
+        if (BtlvEffect_CheckExist(pos)) {
+            if (BtlvMcss_IsBusy(BtlvEffect_GetMcss(), pos)) {
+                continue;
+            }
+            if (BtlvEffect_PosBit(pos) & work->doneMask) {
+                continue;
+            }
+            BtlvMcss_SetAnimPause(BtlvEffect_GetMcss(), pos, BTLV_MCSS_PAUSE_RESUME);
+            BtlvMcss_SetShadowVanish(BtlvEffect_GetMcss(), pos, 0);
+            work->doneMask |= BtlvEffect_PosBit(pos);
+        } else {
+            work->doneMask |= BtlvEffect_PosBit(pos);
+        }
+    }
+    if (allMask == work->doneMask) {
+        BtlvEffect_EndTask(tcb);
+    }
+}
+
+static void BtlvEffvm_ParticleUploadTask(TCB *tcb, void *data) {
+    BtlvEffvmParticleVBlankWork *work = data;
+    u16 vcount = reg_GX_VCOUNT;
+
+    if (vcount >= 192 && vcount <= 200) {
+        Particle_UploadResource(work->particle);
+        work->wk->particleLoading = FALSE;
+        BtlvEffect_EndTask(tcb);
+    }
+}
+
+static void BtlvEffvm_PalAnimTask(TCB *tcb, void *data) {
+    BtlvEffvmPalAnimWork *work = data;
+    NNSG2dPaletteData *palette;
+    void *file;
+    u16 offset;
+
+    switch (work->state) {
+    case EFFVM_PAL_ANIM_INIT:
+        work->timer = EFFVM_PAL_ANIM_INITIAL_TIMER;
+        work->state++;
+    case EFFVM_PAL_ANIM_PLAY:
+        if (work->timer < work->durations[work->index] - 2) {
+            work->timer++;
+            return;
+        }
+        offset = (work->palettes[work->index] - 8) * 16;
+        file = GFL_G2DIOReadNCLR(ARCID_BTLV_EFFVM_PAL_ANIM, work->fileId, &palette, HEAPID_TAIL(work->wk->heapId));
+        MIi_CpuCopy16((u16 *)palette->pRawData + offset,
+                      PaletteFade_GetUnfadedBuffer(BtlvEffect_GetPaletteFade(), PALFADE_BUFFER_MAIN_BG) + 0x80, 0x20);
+        PaletteFade_ApplyPalette(BtlvEffect_GetPaletteFade(), 8, PALFADE_BUFFER_MAIN_BG);
+        GFL_HeapFree(file);
+        work->timer = 0;
+        if (work->index >= work->count - 1) {
+            work->index = 0;
+            if (work->loops-- <= 1) {
+                BtlvEffect_EndTask(tcb);
+            }
+        } else {
+            work->index++;
+        }
+        break;
+    }
+}
+
+static void BtlvEffvm_PalAnimTaskRemove(TCB *tcb) {
+    BtlvEffvmPalAnimWork *work = GFL_TCBGetData(tcb);
+
+    work->wk->paletteAnim = FALSE;
+    GFL_HeapFree(work);
+}
+
+static void BtlvEffvm_ScaleAllMcss(fx32 scaleX, fx32 scaleY, int frames, int wait, s32 count) {
+    BtlvMcssPos i;
+    fx32 scale;
+    VecFx32 dest;
+
+    BtlvMcss_SetSideScale(BtlvEffect_GetMcss(), scaleX, scaleY);
+    for (i = BTLV_MCSS_POS_FIRST; i < BTLV_MCSS_POS_TRAINER; i++) {
+        if (BtlvMcss_Exists(BtlvEffect_GetMcss(), i)) {
+            scale = BtlvMcss_GetDefaultScale(BtlvEffect_GetMcss(), i, 1);
+            if (i & 1) {
+                scale = FX_Mul(scale, scaleY);
+            } else {
+                scale = FX_Mul(scale, scaleX);
+            }
+            dest.x = scale;
+            dest.y = scale;
+            dest.z = FX32_ONE;
+            BtlvMcss_MoveScale(BtlvEffect_GetMcss(), i, BTLV_EFFTOOL_MOVE_STEP, &dest, frames, wait, count);
+        }
+    }
+}
+
+static BOOL BtlvEffvm_IsGaugeKeptEffect(u32 move) {
+    int i;
+
+    for (i = 0; i < NELEMS(GAUGE_KEPT_EFFECTS); i++) {
+        if (move == GAUGE_KEPT_EFFECTS[i]) {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}

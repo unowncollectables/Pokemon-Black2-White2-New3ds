@@ -1,0 +1,10 @@
+{
+    "movie": {
+        "size": [
+            256,
+            256
+        ],
+        "frames": 626,
+        "compressed": "lz11"
+    }
+}

@@ -1,0 +1,412 @@
+#include "dwc/dwc_encsession.h"
+#include "enc_internal.h"
+
+// DWC's encrypted session, the client of the game statistics server, see dwc_encsession.h. The file and its functions
+// have the names that Black 1's decompilation (aletheia) gives the same functions, in the same order, of
+// libdwcenc.TWL.HYB.a's dwc_encsession.o, including b64size, my_randinit and my_rand in lower case. A call is a small
+// state machine that the game runs every frame with DWCi_EncSessionProcess: 3 once the key is set, 4 to send the first
+// request, 5 while it is in flight, 6 to send the second one, 7 while it is in flight, 8 when the answer is kept, and 1
+// when anything failed.
+
+// The state of the client
+typedef struct GamestatsClient {
+    int state;
+    BOOL active;
+    int request;
+    BOOL configured;
+    char gameName[0x20];
+    char secret[0x14];
+    // The scrambling of the payload: a generator of numbers with a multiplier, an increment and a modulus, and the key
+    // that the checksum of the payload is xored with
+    u32 multiplier;
+    u32 increment;
+    u32 modulus;
+    u32 hashKey;
+    // The text of the URL being sent, where its hash and its end are, and the answer to the first request
+    char *url;
+    char *hashField;
+    char *urlEnd;
+    const char *answer;
+    int answerSize;
+    // The answer to the second request, once checked, without the hash that ends it
+    const char *body;
+    int bodySize;
+    GamestatsCheckFunc check;
+    // The hash that the second request carries
+    char hash[0x29];
+    u8 unk9D[3];
+} GamestatsClient;
+
+static u32 b64size(u32 size);
+static void my_randinit(u32 seed);
+static u8 my_rand(void);
+static BOOL DWCi_EncValidateKey(const char *gameName, const char *secret, u32 multiplier, u32 increment, u32 modulus,
+                                u32 hashKey);
+static BOOL DWCi_EncSessionValidateResponse(const char *data, int size);
+static void DWCi_EncSessionProgressCallback(DWCGHTTPState state, const char *buffer, int length, int received,
+                                            int total, void *arg);
+static void DWCi_EncSessionCompleteCallback(const char *data, int size, DWCGHTTPResult status, void *arg);
+static int DWCi_EncSessionEncrypt(char *dest, const u8 *header, int headerSize, const u8 *payload, u32 payloadSize);
+static void DWCi_EncSetError(void);
+static int DWCi_EncSessionGetPrivateAsync(const char *page, int pid, const void *payload, int size,
+                                          GamestatsCheckFunc check, BOOL useHash);
+
+static int sRandomState;
+static const char *sBaseUrl = NULL;
+static GamestatsClient sClient = { 2 };
+
+// The size of size bytes in base64
+static u32 b64size(u32 size) {
+    return (size / 3 + (size % 3 != 0 ? 1 : 0)) * 4;
+}
+
+static void my_randinit(u32 seed) {
+    sRandomState = (seed << 16) | seed;
+}
+
+// The next byte of the generator
+static u8 my_rand(void) {
+    sRandomState = (sClient.multiplier * sRandomState + sClient.increment) % sClient.modulus;
+    return sRandomState >> 16;
+}
+
+// Takes the game's name and secret and the generator's numbers, which have to be the ones of a full cycle: the
+// multiplier is 5 more than a multiple of 8, the increment odd and the modulus a power of two
+static BOOL DWCi_EncValidateKey(const char *gameName, const char *secret, u32 multiplier, u32 increment, u32 modulus,
+                                u32 hashKey) {
+    int bits = 0;
+    int i;
+
+    sClient.configured = FALSE;
+    if (strlen(gameName) >= 0x20) {
+        return FALSE;
+    }
+    if (strlen(secret) != 0x14) {
+        return FALSE;
+    }
+    if (((multiplier - 5) & 7) != 0) {
+        return FALSE;
+    }
+    if ((increment & 1) == 0) {
+        return FALSE;
+    }
+    for (i = 0; i < 32; i++) {
+        if (((modulus >> i) & 1) == 1) {
+            bits++;
+        }
+    }
+    if (bits != 1) {
+        return FALSE;
+    }
+    strncpy(sClient.gameName, gameName, 0x20);
+    memcpy(sClient.secret, secret, sizeof(sClient.secret));
+    sClient.multiplier = multiplier;
+    sClient.increment = increment;
+    sClient.modulus = modulus;
+    sClient.hashKey = hashKey;
+    sClient.configured = TRUE;
+    return TRUE;
+}
+
+// Checks that the answer ends with the hash of the secret, the answer in base64 and the secret, and keeps it
+static BOOL DWCi_EncSessionValidateResponse(const char *data, int size) {
+    char hash[0x29];
+    u8 digest[0x14];
+    char digits[17] = "0123456789abcdef";
+    char *buffer;
+    int bodySize;
+    int i;
+
+    if (size <= 0x28) {
+        return FALSE;
+    }
+    bodySize = size - 0x28;
+    buffer = DWC_Alloc(8, b64size(bodySize) + 0x29);
+    if (buffer == NULL) {
+        return FALSE;
+    }
+    memcpy(buffer, sClient.secret, sizeof(sClient.secret));
+    B64Encode(data, buffer + 0x14, bodySize, 2);
+    memcpy(buffer + 0x14 + b64size(bodySize), sClient.secret, sizeof(sClient.secret));
+    MATH_CalcSHA1(digest, buffer, b64size(bodySize) + 0x28);
+    DWC_Free(8, buffer, 0);
+    for (i = 0; i < 0x14; i++) {
+        hash[i * 2] = digits[digest[i] >> 4];
+        hash[i * 2 + 1] = digits[digest[i] & 0xf];
+    }
+    hash[0x28] = '\0';
+    size -= 0x28;
+    if (strncmp(data + size, hash, 0x28) != 0) {
+        return FALSE;
+    }
+    sClient.body = data;
+    sClient.bodySize = bodySize;
+    return TRUE;
+}
+
+static void DWCi_EncSessionProgressCallback(DWCGHTTPState state, const char *buffer, int length, int received,
+                                            int total, void *arg) {
+}
+
+// The HTTP client's answer to either request. The first one answers with a challenge of 32 characters, from which the
+// hash of the second request is made; the second answers with the data, or with a text that starts with "error:"
+static void DWCi_EncSessionCompleteCallback(const char *data, int size, DWCGHTTPResult status, void *arg) {
+    sClient.request = -1;
+    if (sClient.state == 1) {
+        return;
+    }
+    if (status == 0) {
+        switch (sClient.state) {
+        case 5:
+            if (size == 0x20) {
+                u8 *digest = (u8 *)sClient.hashField + 0x14;
+                u8 block[0x34];
+                char digits[17] = "0123456789abcdef";
+                int i;
+
+                memcpy(block, sClient.secret, sizeof(sClient.secret));
+                memcpy(block + 0x14, data, 0x20);
+                MATH_CalcSHA1(digest, block, 0x34);
+                for (i = 0; i < 0x14; i++) {
+                    sClient.hashField[i * 2] = digits[digest[i] >> 4];
+                    sClient.hashField[i * 2 + 1] = digits[digest[i] & 0xf];
+                }
+                *(sClient.hashField - strlen("&hash=")) = '&';
+                strncpy(sClient.hash, sClient.hashField, 0x29);
+                sClient.state = 6;
+            } else {
+                DWCi_EncSetError();
+            }
+            DWCi_GsFree(data);
+            break;
+        case 7:
+            if (strncmp(data, "error:", strlen("error:")) == 0) {
+                DWCi_GsFree(data);
+                DWCi_EncSetError();
+                return;
+            }
+            if (sClient.answer != NULL) {
+                DWCi_GsFree(sClient.answer);
+                sClient.answer = NULL;
+            }
+            if (!DWCi_EncSessionValidateResponse(data, size)) {
+                DWCi_GsFree(data);
+                DWCi_EncSetError();
+                return;
+            }
+            if (sClient.check != NULL && !sClient.check(data, size)) {
+                DWCi_GsFree(data);
+                DWCi_EncSetError();
+                return;
+            }
+            sClient.answer = data;
+            sClient.answerSize = size;
+            sClient.state = 8;
+            break;
+        }
+    } else {
+        DWCi_EncSetError();
+    }
+}
+
+// Scrambles the header and the payload into dest, in base64: a checksum xored with the key, and the bytes xored with
+// the generator that the checksum seeds
+static int DWCi_EncSessionEncrypt(char *dest, const u8 *header, int headerSize, const u8 *payload, u32 payloadSize) {
+    int total = payloadSize + headerSize;
+    u8 *buffer;
+    u32 sum = 0;
+    int i;
+
+    buffer = DWC_Alloc(8, total + 4);
+    if (buffer == NULL) {
+        return 2;
+    }
+    for (i = 0; i < headerSize; i++) {
+        buffer[i + 4] = header[i];
+    }
+    for (i = 0; i < (int)payloadSize; i++) {
+        buffer[headerSize + i + 4] = payload[i];
+    }
+    for (i = 0; i < total; i++) {
+        sum += buffer[i + 4];
+    }
+    my_randinit(sum);
+    for (i = 0; i < total; i++) {
+        buffer[i + 4] ^= my_rand();
+    }
+    sum ^= sClient.hashKey;
+    buffer[0] = sum >> 24;
+    buffer[1] = sum >> 16;
+    buffer[2] = sum >> 8;
+    buffer[3] = sum;
+    B64Encode(buffer, dest, total + 4, 2);
+    DWC_Free(8, buffer, 0);
+    dest[b64size(total + 4)] = '\0';
+    return 0;
+}
+
+void DWCi_EncSessionInitialize(int server, const char *key) {
+    char secret[0x15];
+    char digits[9] = { 0 };
+    u32 multiplier;
+    u32 increment;
+    u32 modulus;
+    u32 hashKey;
+
+    sClient.request = -1;
+    sClient.url = NULL;
+    sClient.hashField = NULL;
+    sClient.urlEnd = NULL;
+    sClient.answer = NULL;
+    sClient.answerSize = 0;
+    switch (server) {
+    case GAMESTATS_SERVER_LIVE:
+        sBaseUrl = "http://gamestats2.gs.nintendowifi.net/";
+        break;
+    case GAMESTATS_SERVER_DEVELOPMENT:
+        sBaseUrl = "http://sdkdev.gamespy.com/games/";
+        break;
+    case GAMESTATS_SERVER_TEST:
+        sBaseUrl = "http://ishikawa.servebeer.com/games/";
+        break;
+    }
+    strncpy(secret, key, 0x14);
+    secret[0x14] = '\0';
+    multiplier = strtoul(strncpy(digits, key + 0x14, 8), NULL, 16);
+    increment = strtoul(strncpy(digits, key + 0x1c, 8), NULL, 16);
+    modulus = strtoul(strncpy(digits, key + 0x24, 8), NULL, 16);
+    hashKey = strtoul(strncpy(digits, key + 0x2c, 8), NULL, 16);
+    DWCi_EncValidateKey(key + 0x34, secret, multiplier, increment, modulus, hashKey);
+    DWC_InitGHTTP(NULL);
+    sClient.state = 3;
+    sClient.active = TRUE;
+}
+
+// Fails the call, and tells the Wi-Fi library unless it has an error
+static void DWCi_EncSetError(void) {
+    if (!DWCi_IsError()) {
+        DWCi_SetError(6, -90040);
+    }
+    sClient.state = 1;
+}
+
+int DWCi_EncSessionProcess(void) {
+    switch (sClient.state) {
+    case 0:
+    case 2:
+    case 3:
+    case 8:
+        break;
+    case 1:
+        DWCi_EncSetError();
+        break;
+    case 4:
+        sClient.request = DWC_GetGHTTPDataEx(sClient.url, 0, 0, DWCi_EncSessionProgressCallback,
+                                             DWCi_EncSessionCompleteCallback, NULL);
+        if (sClient.request >= 0) {
+            sClient.state = 5;
+        } else {
+            DWCi_EncSetError();
+        }
+        break;
+    case 5:
+        if (!DWC_ProcessGHTTP()) {
+            DWCi_EncSetError();
+        }
+        break;
+    case 6:
+        sClient.request = DWC_GetGHTTPDataEx(sClient.url, 0, 0, DWCi_EncSessionProgressCallback,
+                                             DWCi_EncSessionCompleteCallback, NULL);
+        if (sClient.request >= 0) {
+            sClient.state = 7;
+        } else {
+            DWCi_EncSetError();
+        }
+        break;
+    case 7:
+        if (!DWC_ProcessGHTTP()) {
+            DWCi_EncSetError();
+        }
+        break;
+    }
+    return sClient.state;
+}
+
+void DWCi_EncSessionCancel(void) {
+    if (sClient.request >= 0) {
+        DWC_CancelGHTTPRequest(sClient.request);
+    }
+    sClient.state = 0;
+}
+
+void DWCi_EncSessionShutdown(void) {
+    if (sClient.active) {
+        if (sClient.url != NULL) {
+            DWC_Free(8, sClient.url, 0);
+            sClient.url = NULL;
+        }
+        if (sClient.answer != NULL) {
+            DWCi_GsFree(sClient.answer);
+            sClient.answerSize = 0;
+            sClient.answer = NULL;
+        }
+        DWC_ShutdownGHTTP();
+        sClient.state = 2;
+        sClient.active = FALSE;
+    }
+}
+
+void *DWCi_EncSessionGetResponse(int *size) {
+    *size = sClient.bodySize;
+    return sClient.body;
+}
+
+// Builds the URL of a request: the server, the game, the page and the player's ID, the hash that is still a placeholder
+// and the payload. The first request is cut before its hash, and the second keeps the one made from the first's answer
+static int DWCi_EncSessionGetPrivateAsync(const char *page, int pid, const void *payload, int size,
+                                          GamestatsCheckFunc check, BOOL useHash) {
+    char pidText[0x10];
+    int header[2];
+    int result;
+    char *url;
+
+    if (sClient.configured != TRUE) {
+        return 3;
+    }
+    if (sClient.url != NULL) {
+        DWC_Free(8, sClient.url, 0);
+        sClient.url = NULL;
+    }
+    sClient.url = DWC_Alloc(8, strlen(sBaseUrl) + strlen(sClient.gameName) + strlen(page) + strlen("?pid=") +
+                                   OS_SNPrintf(pidText, 0x10, "%d", pid) + strlen("&hash=") + 0x28 + strlen("&data=") +
+                                   b64size(size + 0xc) + 1);
+    if (sClient.url == NULL) {
+        return 2;
+    }
+    OS_SPrintf(sClient.url, "%s%s%s?pid=%d&hash=%s&data=", sBaseUrl, sClient.gameName, page, pid,
+               "0000000000000000000000000000000000000000", "");
+    url = sClient.url;
+    sClient.urlEnd = url + strlen(url);
+    sClient.hashField = sClient.urlEnd - strlen("&data=") - 0x28;
+    header[0] = pid;
+    header[1] = size;
+    result = DWCi_EncSessionEncrypt(sClient.urlEnd, (u8 *)header, 8, payload, size);
+    if (result == 2) {
+        DWC_Free(8, sClient.url, 0);
+        sClient.url = NULL;
+        return 2;
+    }
+    if (useHash) {
+        memcpy(sClient.hashField, sClient.hash, 0x28);
+        sClient.state = 6;
+    } else {
+        *(sClient.hashField - strlen("&hash=")) = '\0';
+        sClient.state = 4;
+    }
+    sClient.check = check;
+    return 0;
+}
+
+int DWCi_EncSessionGetAsync(const char *page, int pid, const void *payload, int size, GamestatsCheckFunc check) {
+    return DWCi_EncSessionGetPrivateAsync(page, pid, payload, size, check, FALSE);
+}

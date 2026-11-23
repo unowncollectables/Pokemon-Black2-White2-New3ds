@@ -1,0 +1,659 @@
+#!/usr/bin/env python3
+"""Fix relocations and symbols that dsd's analysis gets wrong, in every version, and keep the fixes across config
+regeneration.
+
+Each fix is recorded in config/fixes.txt by module and address in the primary version. version_addresses.py places the
+address in the other versions: through the function containing it, which must be paired in the version map, or else
+from the paired functions and section edges around it when they agree on its place. regenerate_configs.py runs `apply`
+after importing names from swan.
+
+    config_fixes.py reloc-module overlays/ov035 'overlay(12)' 0x0217c9e8    # an ambiguous destination module
+    config_fixes.py overlay-id overlays/ov035 279 0x0217cbe4                 # a literal that is an overlay ID
+    config_fixes.py link-time-const . SDK_AUTOLOAD_LIST 0x02004fb0          # a word of a linker script's symbol
+    config_fixes.py remove-reloc overlays/ov035 0x0217f540                   # a relocation that is not one
+    config_fixes.py remove-orphan-reloc overlays/ov011 --source-module . 0x020050c4  # filed in the wrong module
+    config_fixes.py reloc-addend overlays/ov036 2 0x021841e8                 # a relocation to inside an object
+    config_fixes.py remove-symbol overlays/ov005 0x0214f5fd                  # a symbol that is not one
+    config_fixes.py add-label . _ll_mul 0x0208d60c                           # a second name for a function
+    config_fixes.py remove-label . _dadd 0x0208c224                          # a second name the function now has
+    config_fixes.py add-data overlays/ov307 EGG_DEMO_VIEW_UNK_FX32 0x021df70c  # an object that nothing references
+    config_fixes.py bss-size dtcm 8 0x02fe00a0                            # a typed queue before alignment fill
+    config_fixes.py add-function . ampOffFreeBlocks thumb 0x20 0x02006dec     # a function that dsd took for a label
+    config_fixes.py add-reloc overlays/ov036 load 'overlay(259)' 0x021a039c 0x021ae188  # a pointer dsd missed
+    config_fixes.py section-end overlays/ov310 src/ov310/research_list.c .rodata 0x021a7028  # move a file's boundary
+    config_fixes.py section-start overlays/ov310 src/ov310/research_common.c .rodata 0x021a773c
+    config_fixes.py add-section . lib/nnsys/src/g2d/g2di_Mtx32.c .bss 0x408 0x021435d8  # give a file a section
+    config_fixes.py add-section . lib/nitro/src/spi/pm.c .ltdmain 0x30c 0x027693dc  # a section dsd migrates to LTD
+    config_fixes.py remove-file ltd_autoload_0 lib/twl/src/spi/pm_twl.c 0x027693dc  # an entry another file holds
+    config_fixes.py split-section-prefix . .rodata .exceptix 0x30 0x0208ee28  # recover a compiler section
+    config_fixes.py apply
+
+`--only VERSION`, before the command, fixes one version alone at that version's own address: a symbol or relocation
+that dsd made in that version only, with no counterpart in the primary version to map from. It is recorded as
+ACTION@VERSION with that version's address, and replayed in that version only:
+
+    config_fixes.py --only w2_us remove-symbol overlays/ov194 0x021c724d     # White 2's own invented symbol
+"""
+import argparse
+import re
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from tools.decomp.dsd_config import (  # noqa: E402
+    LTD_MODULE, MIGRATED_SECTIONS, ROOT, config_lock, load_modules, parse_sections, reloc_module_names, section_module)
+from tools.decomp.version_addresses import (  # noqa: E402
+    OTHERS, PRIMARY, ModulePlacer, Unplaced, function_ends, load_pairs)
+
+FIXES = ROOT / "config" / "fixes.txt"
+MAP = ROOT / "build" / "version_map.tsv"
+HEADER = (
+    "# Fixes to dsd's analysis, applied by tools/decomp/config_fixes.py\n"
+    "# module address(b2_us) action [argument]; an action@version is that version's alone, at its own address\n"
+)
+RELOC_RE = re.compile(r"^from:(0x[0-9a-f]+) ")
+SECTION_ACTIONS = ("section_start", "section_end", "remove_section", "add_section")
+SYMBOL_ADDR_RE = re.compile(r" addr:(0x[0-9a-f]+)")
+
+
+class AddressMapper:
+    """Maps an address in the primary version to the other versions, through version_addresses.py."""
+
+    def __init__(self):
+        self.pairs = {other: load_pairs(MAP, other) for other in OTHERS}
+        self.functions = {name: module.functions() for name, module in load_modules(PRIMARY).items()}
+        self.other_functions: dict[tuple[str, str], dict[int, int]] = {}
+
+    def map(self, module: str, addr: int, other: str, section: str | None = None) -> int:
+        """Exits with the reason when the version map cannot place the address. A boundary at a section's end names the
+        section, which tells it from the next section's start."""
+        if (module, other) not in self.other_functions:
+            self.other_functions[module, other] = function_ends(config_dir(other, module))
+        # The sections are read on each call, since a fix replayed before this one may have changed them
+        placer = ModulePlacer(
+            module,
+            parse_sections(config_dir(PRIMARY, module) / "delinks.txt"),
+            parse_sections(config_dir(other, module) / "delinks.txt"),
+            {f.addr: f.addr + (f.size or 0) for f in self.functions.get(module, [])},
+            self.other_functions[module, other],
+            self.pairs[other].get(module, {}),
+        )
+        try:
+            return placer.place(addr, section)
+        except Unplaced as error:
+            sys.exit(str(error))
+
+
+def config_dir(version: str, module: str) -> Path:
+    return ROOT / "config" / version / "arm9" / module
+
+
+def address_module(module: str, action: str, argument: str) -> str:
+    """The module whose addresses a fix uses: a migrated main source section has its target module's addresses."""
+    return section_module(module, argument.split(":")[1]) if action in SECTION_ACTIONS else module
+
+
+def load_fixes() -> list[tuple[str, int, str, str]]:
+    fixes = []
+    if FIXES.exists():
+        for line in FIXES.read_text().splitlines():
+            if line.strip() and not line.startswith("#"):
+                module, addr, action, *argument = line.split()
+                fixes.append((module, int(addr, 16), action, argument[0] if argument else ""))
+    return fixes
+
+
+def save_fixes(fixes: list[tuple[str, int, str, str]]):
+    def key(fix):
+        module, addr, _, _ = fix
+        # Main first, then the modules in numeric order
+        number = re.search(r"(\d+)$", module)
+        return (module != ".", int(number.group(1)) if number else 0, module, addr)
+
+    # Keep the recorded replay order of different actions at the same address while removing exact duplicates.
+    lines = [f"{m} {a:#010x} {act} {arg}".rstrip() for m, a, act, arg in sorted(dict.fromkeys(fixes), key=key)]
+    FIXES.write_text(HEADER + "\n".join(lines) + "\n")
+
+
+def plan_fix(version: str, module: str, addr: int, action: str, argument: str):
+    """Validate one version's fix and return its file and new text, or None when already applied."""
+    if action == "remove_symbol":
+        path = config_dir(version, module) / "symbols.txt"
+        lines = path.read_text().splitlines()
+        kept = [line for line in lines if not (m := SYMBOL_ADDR_RE.search(line)) or int(m.group(1), 16) != addr]
+        return path, "\n".join(kept) + "\n"
+    if action == "remove_label":
+        # A label that its function no longer needs, such as the runtime's name once the function has it: two symbols
+        # of one name would clash. Only the label of that name at the address goes
+        path = config_dir(version, module) / "symbols.txt"
+        lines = path.read_text().splitlines()
+        kept = [line for line in lines if not (line.split()[0] == argument and "kind:label" in line
+                                               and (m := SYMBOL_ADDR_RE.search(line)) and int(m.group(1), 16) == addr)]
+        if len(kept) == len(lines):
+            return
+        return path, "\n".join(kept) + "\n"
+    if action == "add_data":
+        # A data object that dsd found no reference to, such as a global constant that the compiler folds into code but
+        # still emits. Without a symbol, the object before it seems to run on over it
+        path = config_dir(version, module) / "symbols.txt"
+        lines = path.read_text().splitlines()
+        # An object in .bss has no contents, so dsd gives it the bss kind
+        sections = parse_sections(config_dir(version, module) / "delinks.txt")
+        in_bss = any(start <= addr < end for name, (start, end) in sections.items() if name.endswith("bss"))
+        kind = "kind:bss" if in_bss else "kind:data"
+        # Already there under any name: rename_symbol.py may have renamed it since the fix was recorded
+        if any(kind in line and (m := SYMBOL_ADDR_RE.search(line)) and int(m.group(1), 16) == addr for line in lines):
+            return
+        data = [i for i, line in enumerate(lines) if kind in line and (m := SYMBOL_ADDR_RE.search(line))
+                and int(m.group(1), 16) < addr]
+        symbol = f"{argument} kind:bss addr:{addr:#010x}" if in_bss else f"{argument} kind:data(any) addr:{addr:#010x}"
+        lines.insert(data[-1] + 1 if data else len(lines), symbol)
+        return path, "\n".join(lines) + "\n"
+    if action == "bss_size":
+        # A recovered type can end before the module's alignment tail, which is not part of the object.
+        size = int(argument, 0)
+        if size <= 0:
+            sys.exit("BSS object size must be positive")
+        path = config_dir(version, module) / "symbols.txt"
+        lines = path.read_text().splitlines()
+        at = [i for i, line in enumerate(lines) if (m := SYMBOL_ADDR_RE.search(line))
+              and int(m.group(1), 16) == addr and re.search(r"\bkind:bss(?:\(| )", line)]
+        if len(at) != 1:
+            sys.exit(f"{version} {module}: expected one BSS symbol at {addr:#010x}")
+        sections = parse_sections(config_dir(version, module) / "delinks.txt")
+        if not any(name.endswith("bss") and start <= addr < addr + size <= end
+                   for name, (start, end) in sections.items()):
+            sys.exit(f"{version} {module}: BSS object {addr:#010x}-{addr + size:#010x} leaves its module section")
+        lines[at[0]] = re.sub(r"kind:bss(?:\([^)]*\))?", f"kind:bss(size={size:#x})", lines[at[0]])
+        return path, "\n".join(lines) + "\n"
+    if action == "add_function":
+        # A function that dsd's analysis missed, such as one after a literal pool that it took for code. Replaces the
+        # symbols at the address
+        name, mode, size = argument.split(":")
+        path = config_dir(version, module) / "symbols.txt"
+        lines = path.read_text().splitlines()
+        line = f"{name} kind:function({mode},size={size}) addr:{addr:#010x}"
+        # Already there under any name: rename_symbol.py may have renamed it since the fix was recorded. Under the name
+        # dsd generates, dsd found it itself, so it takes the fix's name
+        existing = next((i for i, l in enumerate(lines)
+                         if l.endswith(f" kind:function({mode},size={size}) addr:{addr:#010x}")), None)
+        if existing is not None:
+            if re.fullmatch(r"func_(?:ov\d{3}_)?[0-9a-f]{8}", lines[existing].split()[0]):
+                lines[existing] = line
+                return path, "\n".join(lines) + "\n"
+            return
+        lines = [l for l in lines if not (m := SYMBOL_ADDR_RE.search(l)) or int(m.group(1), 16) != addr]
+        before = [i for i, l in enumerate(lines) if "kind:function" in l and (m := SYMBOL_ADDR_RE.search(l))
+                  and int(m.group(1), 16) < addr]
+        lines.insert(before[-1] + 1 if before else 0, line)
+        return path, "\n".join(lines) + "\n"
+    if action == "add_label":
+        # A label with the instruction mode of the function at the address, for code that the compiler calls by
+        # two names, such as the runtime's _ll_mul and _ull_mul, or of the label dsd found there, for a second entry
+        # point inside a function, such as _ll_sdiv inside _ll_mod
+        path = config_dir(version, module) / "symbols.txt"
+        lines = path.read_text().splitlines()
+        at = [i for i, line in enumerate(lines) if (m := SYMBOL_ADDR_RE.search(line)) and int(m.group(1), 16) == addr]
+        if any(lines[i].split()[0] == argument for i in at):
+            # Added before local labels were replaced: drop the local label left beside it
+            kept = [line for i, line in enumerate(lines)
+                    if not (i in at and line.startswith(".L_") and "kind:label" in line)]
+            if len(kept) != len(lines):
+                return path, "\n".join(kept) + "\n"
+            return
+        mode = next((m.group(1) for i in at
+                     if (m := re.search(r"kind:(?:function|label)\((arm|thumb)", lines[i]))), None)
+        if mode is None:
+            sys.exit(f"{version}: no function or label at {module} {addr:#010x}")
+        # A local label dsd made there takes the name: dsd dis refuses a .L_ label that shares its address
+        local = next((i for i in at if lines[i].startswith(".L_") and "kind:label" in lines[i]), None)
+        if local is not None:
+            lines[local] = f"{argument} kind:label({mode}) addr:{addr:#010x}"
+        else:
+            lines.insert(at[-1] + 1, f"{argument} kind:label({mode}) addr:{addr:#010x}")
+        return path, "\n".join(lines) + "\n"
+
+    if action == "split_section_prefix":
+        # The compiler may emit a distinct section that analysis folded into the next ROM section.
+        # Split only a nonempty prefix, preserving kind/alignment and rejecting an owner crossing the boundary.
+        source, target, size_text = argument.split(":")
+        size = int(size_text, 0)
+        if not re.fullmatch(r"\.[A-Za-z0-9_.]+", target) or target == source or size <= 0:
+            sys.exit("invalid section prefix name or size")
+        path = config_dir(version, module) / "delinks.txt"
+        lines = path.read_text().splitlines()
+        header_end = next((i for i, line in enumerate(lines) if not line.startswith(" ")), len(lines))
+        headers = {}
+        pattern = re.compile(r"^(\s*)(\S+)\s+start:(0x[0-9a-f]+) end:(0x[0-9a-f]+)(.*)$")
+        for i, line in enumerate(lines[:header_end]):
+            match = pattern.fullmatch(line)
+            if match:
+                headers[match[2]] = (i, match)
+        if source not in headers:
+            sys.exit(f"{version} {module}: missing module section {source}")
+        index, match = headers[source]
+        start, end = int(match[3], 16), int(match[4], 16)
+        boundary = addr + size
+        alignment = re.search(r" align:(\d+)", match[5])
+        if alignment and boundary % int(alignment[1]):
+            sys.exit(f"{version} {module}: split boundary violates section alignment")
+        if target in headers:
+            _, previous = headers[target]
+            attributes = dict(re.findall(r"\b(kind|align):(\S+)", match[5]))
+            previous_attributes = dict(re.findall(r"\b(kind|align):(\S+)", previous[5]))
+            if ((int(previous[3], 16), int(previous[4], 16), start) != (addr, boundary, boundary)
+                    or previous_attributes != attributes):
+                sys.exit(f"{version} {module}: conflicting module section {target}")
+        elif start != addr or not start < boundary < end:
+            sys.exit(f"{version} {module}: split must be a proper prefix of {source}")
+        changes = []
+        for i in range(header_end, len(lines)):
+            owned = pattern.fullmatch(lines[i])
+            if not owned or owned[2] != source:
+                continue
+            owned_start, owned_end = int(owned[3], 16), int(owned[4], 16)
+            if owned_start < boundary and owned_end > addr:
+                if not addr <= owned_start < owned_end <= boundary:
+                    sys.exit(f"{version} {module}: an owned range crosses the section prefix")
+                changes.append((i, lines[i].replace(source, target, 1)))
+        for i, line in changes:
+            lines[i] = line
+        if target not in headers:
+            lines[index] = f"{match[1]}{source:<11} start:{boundary:#010x} end:{end:#010x}{match[5]}"
+            lines.insert(index, f"{match[1]}{target:<11} start:{addr:#010x} end:{boundary:#010x}{match[5]}")
+        return path, "\n".join(lines) + "\n"
+
+    if action in ("section_start", "section_end"):
+        # A registered source file's section range, moved after add_source_file.py, such as when an object at a boundary
+        # turns out to belong to the neighbouring file. The argument is source:section
+        path = config_dir(version, module) / "delinks.txt"
+        lines = path.read_text().splitlines()
+        source, section = argument.rsplit(":", 1)
+        try:
+            start = lines.index(f"{source}:")
+        except ValueError:
+            sys.exit(f"{version} {module}: {source} is not registered")
+        bound = "start" if action == "section_start" else "end"
+        for i in range(start + 1, len(lines)):
+            if not lines[i].startswith(" "):
+                break
+            if lines[i].split()[0] == section:
+                lines[i] = re.sub(rf"{bound}:0x[0-9a-f]+", f"{bound}:{addr:#010x}", lines[i])
+                break
+        else:
+            sys.exit(f"{version} {module}: {source} has no {section}")
+        return path, "\n".join(lines) + "\n"
+
+    if action == "remove_section":
+        path = config_dir(version, module) / "delinks.txt"
+        lines = path.read_text().splitlines()
+        source, section = argument.rsplit(":", 1)
+        try:
+            start = lines.index(f"{source}:")
+        except ValueError:
+            sys.exit(f"{version} {module}: {source} is not registered")
+        for i in range(start + 1, len(lines)):
+            if not lines[i].startswith(" "):
+                break
+            if lines[i].split()[0] == section:
+                match = re.search(r"start:(0x[0-9a-f]+)", lines[i])
+                if match is None or int(match.group(1), 16) != addr:
+                    sys.exit(f"{version} {module}: {source} {section} does not start at {addr:#010x}")
+                del lines[i]
+                return path, "\n".join(lines) + "\n"
+        return
+
+    if action == "add_section":
+        # A section that a registered source file turns out to have, such as an object it defines that its neighbour
+        # reaches through a symbol. The argument is source:section:size, and the address is the section's start
+        path = config_dir(version, module) / "delinks.txt"
+        lines = path.read_text().splitlines()
+        source, section, size = argument.rsplit(":", 2)
+        try:
+            start = lines.index(f"{source}:")
+        except ValueError:
+            sys.exit(f"{version} {module}: {source} is not registered")
+        end = addr + int(size, 0)
+        if address_module(module, action, argument) != module:
+            # A migrated section must lie in the target module's section that dsd places it in
+            target_module = address_module(module, action, argument)
+            held = parse_sections(config_dir(version, target_module) / "delinks.txt").get(MIGRATED_SECTIONS[section])
+            if held is None or not held[0] <= addr < end <= held[1]:
+                sys.exit(f"{version} {module}: {section} {addr:#010x}-{end:#010x} is outside {target_module}'s "
+                         f"{MIGRATED_SECTIONS[section]}")
+        order = [".text", ".init", ".rodata", ".ctor", ".data", ".bss", ".dtcm.data", ".dtcm.bss",
+                 ".ltdmain", ".ltdmain.bss"]
+        at = start + 1
+        while at < len(lines) and lines[at].startswith(" "):
+            name = lines[at].split()[0]
+            if name == section:
+                return
+            if name in order and section in order and order.index(name) > order.index(section):
+                break
+            at += 1
+        lines.insert(at, f"    {section:<11} start:{addr:#010x} end:{end:#010x}")
+        return path, "\n".join(lines) + "\n"
+
+    if action == "remove_file":
+        # A file's entry that another entry now holds, such as a DSi part of a NitroSDK file, whose sections move to
+        # the whole's entry in ARM9 main as migrated sections. The address is the start of one of its sections, and
+        # an entry already gone is left so
+        path = config_dir(version, module) / "delinks.txt"
+        lines = path.read_text().splitlines()
+        try:
+            start = lines.index(f"{argument}:")
+        except ValueError:
+            return
+        end = start + 1
+        while end < len(lines) and lines[end].startswith(" "):
+            end += 1
+        starts = {int(m.group(1), 16) for line in lines[start + 1:end] if (m := re.search(r"start:(0x[0-9a-f]+)", line))}
+        if addr not in starts:
+            sys.exit(f"{version} {module}: {argument} has no section at {addr:#010x}")
+        # The entry's blank line goes with it
+        if end < len(lines) and not lines[end].strip():
+            end += 1
+        elif start and not lines[start - 1].strip():
+            start -= 1
+        del lines[start:end]
+        return path, "\n".join(lines) + "\n"
+
+    path = config_dir(version, module) / "relocs.txt"
+    lines = path.read_text().splitlines()
+    index = next((i for i, line in enumerate(lines) if int(RELOC_RE.match(line).group(1), 16) == addr), None)
+    if action == "reloc_module":
+        if index is None:
+            sys.exit(f"{version}: no relocation at {module} {addr:#010x}")
+        lines[index] = re.sub(r"module:\S+", f"module:{argument}", lines[index])
+    elif action == "overlay_id":
+        line = f"from:{addr:#010x} kind:overlay_id to:{argument}"
+        if index is not None:
+            if lines[index] != line:
+                sys.exit(f"{version}: {module} {addr:#010x} already has another relocation: {lines[index]}")
+        else:
+            position = next((i for i, l in enumerate(lines) if int(RELOC_RE.match(l).group(1), 16) > addr), len(lines))
+            lines.insert(position, line)
+    elif action == "link_time_const":
+        # A word that holds a symbol that dsd's linker script defines, such as crt0's module parameters, which NitroSDK's
+        # linker script gives: dsd took it for a pointer to whatever is at the address, or for a plain word
+        line = f"from:{addr:#010x} kind:link_time_const({argument})"
+        if index is not None:
+            if lines[index] == line:
+                return
+            lines[index] = line
+        else:
+            position = next((i for i, l in enumerate(lines) if int(RELOC_RE.match(l).group(1), 16) > addr), len(lines))
+            lines.insert(position, line)
+    elif action == "add_reloc":
+        # A pointer that dsd left as a plain word, such as one into an overlay that is not loaded with this module, or a
+        # code address with no symbol. Unrelocated, it keeps its address when the code before its target grows
+        kind, destination, target, *addend = argument.split(",")
+        line = f"from:{addr:#010x} kind:{kind} to:{int(target, 16):#010x}"
+        line += f" add:{int(addend[0], 16):#x}" if addend else ""
+        line += f" module:{destination}"
+        if index is not None:
+            if lines[index] != line:
+                sys.exit(f"{version}: {module} {addr:#010x} already has another relocation: {lines[index]}")
+        else:
+            position = next((i for i, l in enumerate(lines) if int(RELOC_RE.match(l).group(1), 16) > addr), len(lines))
+            lines.insert(position, line)
+    elif action == "remove_reloc":
+        if index is not None:
+            del lines[index]
+    elif action == "reloc_addend":
+        # A relocation to an address inside an object, such as a field of a struct in a table, which dsd gave a symbol
+        # of its own: point it at the object, with the offset as the addend
+        if index is None:
+            sys.exit(f"{version}: no relocation at {module} {addr:#010x}")
+        addend = int(argument, 0)
+        if f" add:{addend:#x} " in lines[index]:
+            return
+        target = re.search(r"to:(0x[0-9a-f]+)", lines[index])
+        if target is None:
+            # A later fix at the same address, such as link_time_const, can replace the relocation with a word that
+            # has no target address for the addend to move: the fix is then already moot, so a replay skips it.
+            return
+        to = int(target.group(1), 16)
+        lines[index] = re.sub(r"to:0x[0-9a-f]+", f"to:{to - addend:#010x} add:{addend:#x}", lines[index])
+    else:
+        sys.exit(f"unknown action {action!r}")
+    return path, "\n".join(lines) + "\n"
+
+
+def apply_fix(version: str, module: str, addr: int, action: str, argument: str):
+    """Apply a fix to one version's config. Applying a fix again changes nothing."""
+    change = plan_fix(version, module, addr, action, argument)
+    if change is not None:
+        path, text = change
+        path.write_text(text)
+
+
+def orphan_reloc_plan(mapper: AddressMapper, module: str, addr: int, source_module: str):
+    """Validate every version before removing a relocation filed outside its source module.
+
+    Map the source through its actual owner: the recorded module cannot contain it. An absent entry is valid on
+    replay and in versions where dsd did not produce the orphan; multiple entries at a source are ambiguous.
+    """
+    if not source_module or Path(source_module) == Path(module):
+        sys.exit(f"{module} {addr:#010x}: source module must differ from the recorded module")
+
+    plan = []
+    for version in [PRIMARY, *OTHERS]:
+        mapped = addr if version == PRIMARY else mapper.map(source_module, addr, version)
+        owner_sections = parse_sections(config_dir(version, source_module) / "delinks.txt")
+        recorded_sections = parse_sections(config_dir(version, module) / "delinks.txt")
+        if not owner_sections or not recorded_sections:
+            sys.exit(f"{version}: cannot validate sections for {source_module} and {module}")
+        if not any(start <= mapped < end for start, end in owner_sections.values()):
+            sys.exit(f"{version}: {mapped:#010x} is outside source module {source_module}")
+        if any(start <= mapped < end for start, end in recorded_sections.values()):
+            sys.exit(f"{version}: {mapped:#010x} is inside recorded module {module}")
+
+        path = config_dir(version, module) / "relocs.txt"
+        matches = [RELOC_RE.match(line) for line in path.read_text().splitlines()]
+        count = sum(1 for match in matches if match and int(match.group(1), 16) == mapped)
+        if count > 1:
+            sys.exit(f"{version}: multiple relocations at {module} {mapped:#010x}")
+        # apply_fix expects every relocation line to have a source. Catch a malformed later file before a prior
+        # version is written; an absent source needs no rewrite, so even an empty file stays untouched.
+        if count and any(match is None for match in matches):
+            sys.exit(f"{version}: malformed relocation file {path}")
+        plan.append((version, mapped, count != 0))
+    return plan
+
+
+def apply_everywhere(mapper: AddressMapper, module: str, addr: int, action: str, argument: str):
+    if "@" in action:
+        # A fix of one version alone, recorded at that version's address: nothing to map
+        action, version = action.split("@")
+        change = plan_fix(version, module, addr, action, argument)
+        if change is not None:
+            path, text = change
+            path.write_text(text)
+        return
+    if action == "remove_orphan_reloc":
+        plan = orphan_reloc_plan(mapper, module, addr, argument)
+        changes = [plan_fix(version, module, mapped, "remove_reloc", "")
+                   for version, mapped, present in plan if present]
+        for change in changes:
+            if change is not None:
+                path, text = change
+                path.write_text(text)
+        return
+    # Resolve one fix completely before applying it: a missing version-map pair must not leave only the primary
+    # version changed. Keep replay ordering, since later fixes can depend on earlier section edits.
+    plan = [(PRIMARY, addr, argument)]
+    for other in OTHERS:
+        other_argument = argument
+        if action == "add_reloc":
+            # The target moves between versions too: map it through its own module
+            kind, destination, target, *addend = argument.split(",")
+            target = int(target, 16)
+            mapped = mapper.map(reloc_module_names(destination)[0], target & ~1, other) | (target & 1)
+            other_argument = ",".join([kind, destination, f"{mapped:#010x}", *addend])
+        # A moved boundary names its section, so that one at the section's end is placed as that
+        section = argument.rsplit(":", 1)[1] if action in ("section_start", "section_end") else None
+        placed = address_module(module, action, argument)
+        if placed != module and section is not None:
+            section = MIGRATED_SECTIONS[section]
+        plan.append((other, mapper.map(placed, addr, other, section=section), other_argument))
+    changes = [plan_fix(version, module, mapped, action, mapped_argument)
+               for version, mapped, mapped_argument in plan]
+    for change in changes:
+        if change is not None:
+            path, text = change
+            path.write_text(text)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--only", choices=[PRIMARY, *OTHERS],
+                        help="fix this version alone, at its own address (a symbol or relocation only it has)")
+    commands = parser.add_subparsers(dest="command", required=True)
+    command = commands.add_parser("reloc-module", help="set the destination module of relocations")
+    command.add_argument("module", help="module path in the config, e.g. overlays/ov035")
+    command.add_argument("destination", help="destination module, e.g. overlay(12)")
+    command.add_argument("addresses", nargs="+")
+    command = commands.add_parser("overlay-id", help="mark literals as overlay IDs")
+    command.add_argument("module")
+    command.add_argument("overlay", type=int)
+    command.add_argument("addresses", nargs="+")
+    command = commands.add_parser("link-time-const", help="point words at a symbol of dsd's linker script")
+    command.add_argument("module")
+    command.add_argument("symbol", help="the symbol, e.g. SDK_AUTOLOAD_LIST (dsd's LinkTimeConst names)")
+    command.add_argument("addresses", nargs="+")
+    command = commands.add_parser("remove-reloc", help="remove relocations")
+    command.add_argument("module")
+    command.add_argument("addresses", nargs="+")
+    command = commands.add_parser("remove-orphan-reloc", help="remove relocations filed outside their source module")
+    command.add_argument("module", help="module whose relocs.txt contains the orphan")
+    command.add_argument("--source-module", required=True, help="actual owner of the source address, e.g. . for main")
+    command.add_argument("addresses", nargs="+")
+    command = commands.add_parser("reloc-addend", help="point relocations at an object with an addend")
+    command.add_argument("module")
+    command.add_argument("addend")
+    command.add_argument("addresses", nargs="+")
+    command = commands.add_parser("remove-symbol", help="remove symbols")
+    command.add_argument("module")
+    command.add_argument("addresses", nargs="+")
+    command = commands.add_parser("bss-size", help="set a recovered BSS object's size, excluding alignment fill")
+    command.add_argument("module")
+    command.add_argument("size")
+    command.add_argument("addresses", nargs="+")
+    command = commands.add_parser("add-label", help="give a function a second name")
+    command.add_argument("module")
+    command.add_argument("name")
+    command.add_argument("addresses", nargs="+")
+    command = commands.add_parser("remove-label", help="remove a function's second name")
+    command.add_argument("module")
+    command.add_argument("name")
+    command.add_argument("addresses", nargs="+")
+    command = commands.add_parser("add-data", help="add a data object that nothing references")
+    command.add_argument("module")
+    command.add_argument("name")
+    command.add_argument("addresses", nargs="+")
+    command = commands.add_parser("add-function", help="add a function that dsd missed")
+    command.add_argument("module")
+    command.add_argument("name")
+    command.add_argument("mode", choices=["arm", "thumb"])
+    command.add_argument("size")
+    command.add_argument("addresses", nargs="+")
+    command = commands.add_parser("add-reloc", help="add a relocation that dsd missed")
+    command.add_argument("module")
+    command.add_argument("kind", help="relocation kind, e.g. load")
+    command.add_argument("destination", help="destination module, e.g. main or overlay(259)")
+    command.add_argument("target", help="target address, odd for a Thumb function")
+    command.add_argument("--addend", help="offset from the target, for an address inside a function or object")
+    command.add_argument("addresses", nargs="+")
+    for bound in ("start", "end"):
+        command = commands.add_parser(f"section-{bound}", help=f"move the {bound} of a registered file's section")
+        command.add_argument("module")
+        command.add_argument("source", help="the source file as delinks.txt names it, e.g. src/ov310/research_list.c")
+        command.add_argument("section", help="e.g. .rodata")
+        command.add_argument("addresses", nargs="+", help=f"the new {bound}")
+    command = commands.add_parser("add-section", help="give a registered file a section it lacks")
+    command.add_argument("module")
+    command.add_argument("source", help="the source file as delinks.txt names it")
+    command.add_argument("section", help="e.g. .bss")
+    command.add_argument("size", help="the section's size, e.g. 0x408")
+    command.add_argument("addresses", nargs="+", help="the section's start")
+    command = commands.add_parser("remove-section", help="remove a section assigned to the wrong source file")
+    command.add_argument("module")
+    command.add_argument("source", help="the source file as delinks.txt names it")
+    command.add_argument("section", help="e.g. .bss")
+    command.add_argument("addresses", nargs="+", help="the section's original start")
+    command = commands.add_parser("remove-file", help="remove a file's entry that another entry now holds")
+    command.add_argument("module")
+    command.add_argument("source", help="the source file as delinks.txt names it")
+    command.add_argument("addresses", nargs="+", help="the start of one of its sections")
+    command = commands.add_parser("split-section-prefix", help="split a compiler section from a module section prefix")
+    command.add_argument("module")
+    command.add_argument("section", help="the existing module section")
+    command.add_argument("target_section", help="the compiler's original section name")
+    command.add_argument("size", help="the prefix size")
+    command.add_argument("addresses", nargs="+", help="the prefix start")
+    commands.add_parser("apply", help="apply every fix in config/fixes.txt")
+    args = parser.parse_args()
+
+    mapper = AddressMapper()
+    fixes = load_fixes()
+    if args.command == "apply":
+        for fix in fixes:
+            apply_everywhere(mapper, *fix)
+        print(f"applied {len(fixes)} fixes")
+        return
+
+    action = args.command.replace("-", "_")
+    argument = {"reloc_module": getattr(args, "destination", ""), "overlay_id": str(getattr(args, "overlay", "")),
+                "link_time_const": getattr(args, "symbol", ""),
+                "remove_orphan_reloc": getattr(args, "source_module", ""),
+                "reloc_addend": getattr(args, "addend", ""), "add_label": getattr(args, "name", ""),
+                "remove_label": getattr(args, "name", ""), "add_data": getattr(args, "name", ""),
+                "bss_size": getattr(args, "size", ""),
+                "add_function": f"{getattr(args, 'name', '')}:{getattr(args, 'mode', '')}:{getattr(args, 'size', '')}",
+                "add_reloc": ",".join([getattr(args, "kind", ""), getattr(args, "destination", ""),
+                                       getattr(args, "target", ""), *([args.addend] if getattr(args, "addend", None)
+                                                                      else [])]),
+                "section_start": f"{getattr(args, 'source', '')}:{getattr(args, 'section', '')}",
+                "section_end": f"{getattr(args, 'source', '')}:{getattr(args, 'section', '')}",
+                "remove_section": f"{getattr(args, 'source', '')}:{getattr(args, 'section', '')}",
+                "remove_file": getattr(args, "source", ""),
+                "add_section": f"{getattr(args, 'source', '')}:{getattr(args, 'section', '')}:{getattr(args, 'size', '')}"}
+    argument["split_section_prefix"] = f"{getattr(args, 'section', '')}:{getattr(args, 'target_section', '')}:{getattr(args, 'size', '')}"
+    argument = argument.get(action, "")
+    if args.only and action == "remove_orphan_reloc":
+        sys.exit("--only: remove-orphan-reloc maps its source through every version; use remove-reloc for one version")
+    if action == "remove_orphan_reloc":
+        # A command may name several sources. Validate all of them before changing any relocation file or fix record.
+        for address in args.addresses:
+            orphan_reloc_plan(mapper, args.module, int(address, 16), argument)
+    checked = args.only or PRIMARY
+    if action == "remove_file" and f"{argument}:" not in (config_dir(checked, args.module) / "delinks.txt").read_text().splitlines():
+        sys.exit(f"{checked} {args.module}: {argument} is not registered")
+    # A fix of one version alone is recorded as action@version; the records below pair it with that version's others
+    suffix = f"@{args.only}" if args.only else ""
+    base, action = action, action + suffix
+    for address in args.addresses:
+        addr = int(address, 16)
+        apply_everywhere(mapper, args.module, addr, action, argument)
+        # One fix of each kind per address: a word can need its symbol removed and a relocation added. Recording a
+        # file's section boundary again replaces its earlier record: fixes replay in address order, so an older
+        # record of the same boundary at a higher address would undo a move down.
+        fixes = [f for f in fixes if (f[0], f[1], f[2]) != (args.module, addr, action)
+                 and not (base in ("section_start", "section_end") and (f[0], f[2], f[3]) == (args.module, action, argument))
+                 ] + [(args.module, addr, action, argument)]
+        # Removing a label that a recorded fix added drops both records: dsd never makes such a label itself
+        added = (args.module, addr, "add_label" + suffix, argument)
+        if base == "remove_label" and added in fixes:
+            fixes = [f for f in fixes if f not in (added, (args.module, addr, action, argument))]
+        # Removing a file's entry drops the recorded fixes of its sections, which would name an entry that is gone
+        if base == "remove_file":
+            fixes = [f for f in fixes if not (f[0] == args.module and f[2] in [a + suffix for a in SECTION_ACTIONS]
+                                              and f[3].startswith(f"{argument}:"))]
+        print(f"{action} {args.module} {addr:#010x} {argument}".rstrip())
+    save_fixes(fixes)
+
+
+if __name__ == "__main__":
+    with config_lock():
+        main()

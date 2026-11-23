@@ -1,0 +1,22 @@
+BeaconDetail_Text_Name = NAME:
+BeaconDetail_Text_Work = WORK:
+BeaconDetail_Text_Hobby = HOBBY:
+BeaconDetail_Text_Time = TIME:
+BeaconDetail_Text_Empty = {010f:0}
+BeaconDetail_Text_Empty_2 = {010f:0}
+BeaconDetail_Text_Empty_3 = {bd03:0}{0202:2}:{0201:3}
+BeaconDetail_Text_From = FROM:
+BeaconDetail_Text_Empty_4 = {0124:0}\n{0125:1}
+BeaconDetail_Text_NumberTimesThankedNumber = Number of times thanked:\nNumber of people passed by:
+BeaconDetail_Text_Empty_5 = {bd03:0}{0204:0}\n{bd03:0}{0204:1}
+BeaconDetail_Text_Empty_6 =       \x{ffff}
+BeaconDetail_Text_Empty_7 =          \x{ffff}
+BeaconDetail_Text_PasserbyTime = Passerby time: {0201:0}:{0201:1}
+BeaconDetail_Text_PasserbyTime_2 = Passerby time: {0201:0}:{0201:1}
+BeaconDetail_Text_BattlingWild = Battling a wild {0101:0}
+BeaconDetail_Text_BattlingSpecialPokemon = Battling a special Pokémon
+BeaconDetail_Text_Battling = Battling {010e:0} {0100:1}
+BeaconDetail_Text_BattlingGymLeader = Battling a Gym Leader
+BeaconDetail_Text_BattlingSpecialTrainer = Battling a special Trainer
+BeaconDetail_Text_MovingThrough = Moving through {0105:0}
+\pad{2e}

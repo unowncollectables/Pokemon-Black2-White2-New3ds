@@ -1,0 +1,113 @@
+# Code the original link dead-stripped, by source file (docs/configs.md, "Dead-stripped code").
+#
+# Game Freak's link dropped the functions nothing called, but kept the data those functions had pooled with live code,
+# so a few files hold data whose only readers are missing from the ROM. Our link keeps everything with -nodead, since
+# dead-stripping would also drop the delinked objects nothing refers to, and that stays for every other file;
+# mwldarm -partial can't strip either. For a source listed here, the build compiles an intermediate object and
+# tools/build/deadstrip.py drops the listed symbols from it, with what only they reached, before the link and objdiff
+# take it. The rest of the object is unchanged. The ROM has none of the listed code, so it can't be checked against
+# the original's: each entry is a flagged exception for the maintainer to accept, and its source file says which
+# functions are reconstructions and from what.
+#
+# Each key is a source file's path, and its list the global symbols (functions or data) the original link dropped.
+# A static function, a string or an unpooled static (one in a section of its own, such as a local initializer's
+# template) that only listed code uses goes with it; data pooled with live code stays, and so does a global the list
+# doesn't name. The strip fails if code of the object that stays refers to a listed symbol, and
+# tools/build/check_deadstrip.py if any other object of the link does.
+[deadstrip]
+# AuthService's password logins, recovered from the SDK object's Thumb assembly: their callbacks and requests
+# introduce shared XML field names before the remote login. All five reconstructed routines match the SDK object;
+# the game keeps only their shared strings, so the two public entry points are stripped with their private helpers.
+"lib/dwc/src/auth/AuthService.c" = ["wsLoginProfile", "wsLoginUnique"]
+# The 2D OBJ canvas init that the original link dropped: its functions table is the only reader of nothing else
+"lib/nnsys/src/g2d/g2d_CharCanvas.c" = ["NNS_G2dCharCanvasInitForOBJ2DRect"]
+# The wipe handlers the game's table doesn't use, whose function-local statics are the rest of the file's .rodata
+# and .data
+"src/system/wipe_sub.c" = [
+    "WipeFunc_LinesInwardOut",
+    "WipeFunc_LinesOutwardIn",
+    "WipeFunc_LinesOutwardOut",
+    "WipeFunc_LinesInwardIn",
+    "WipeFunc_ShrinkMiddleOut",
+    "WipeFunc_GrowMiddleIn",
+    "WipeFunc_GrowMiddleOut",
+    "WipeFunc_ShrinkMiddleIn",
+    "WipeFunc_LowCircleOut",
+    "WipeFunc_LowCircleIn",
+    "WipeFunc_WedgeOut",
+    "WipeFunc_WedgeIn",
+    "WipeFunc_ShrinkCenterOut",
+    "WipeFunc_GrowCenterIn",
+    "WipeFunc_GrowCenterOut",
+    "WipeFunc_ShrinkCenterIn",
+    "WipeFunc_HourglassOut",
+    "WipeFunc_HourglassIn",
+    "WipeFunc_BandsOut",
+    "WipeFunc_BandsIn",
+    "WipeFunc_LinesThreeWayOut",
+    "WipeFunc_LinesThreeWayIn",
+    "WipeFunc_SweepOut",
+    "WipeFunc_SweepIn",
+    "WipeFunc_CrossOut",
+    "WipeFunc_CrossIn",
+    "WipeFunc_HighCircleOut",
+    "WipeFunc_HighCircleIn",
+    "WipeFunc_ClampOut",
+    "WipeFunc_ClampIn",
+    "WipeFunc_ClockOut",
+]
+# The window readers that only wipe_sub.c's dead-stripped plane swap called
+"src/system/wipe_wnd.c" = ["WipeWnd_GetInsidePlane", "WipeWnd_GetOutsidePlane"]
+# The list of the key names GSI_UNICODE builds allocate, which only the two functions that keep it use; GameSpy's SDK
+# (UniSpySDK's copy) has them, and qr2.c's shutdown doesn't call qr2_internal_key_list_free
+"lib/dwc/src/qr2/qr2regkeys.c" = ["qr2_internal_key_list_append", "qr2_internal_key_list_free"]
+# GameSpy's stats and persistent data functions the game doesn't call, from GameSpy's SDK (UniSpySDK's copy): their
+# statics, function-local statics and local initializers give the file's data, built with -ipa file, the ROM's layout
+"lib/dwc/src/gstats/gstats.c" = [
+    "GenerateAuthA",
+    "InitStatsAsync",
+    "InitStatsThink",
+    "InitStatsConnection",
+    "GetChallenge",
+    "NewGame",
+    "FreeGame",
+    "SendGameSnapShotA",
+    "NewPlayerA",
+    "RemovePlayer",
+    "NewTeamA",
+    "RemoveTeam",
+    "PreAuthenticatePlayerPartner",
+    "PreAuthenticatePlayerPM",
+    "PreAuthenticatePlayerCDA",
+    "GetProfileIDFromCDA",
+    "GetPersistData",
+    "GetPersistDataModified",
+    "SetPersistData",
+    "GetPersistDataValuesModifiedA",
+    "GetPersistDataValuesA",
+    "SetPersistDataValuesA",
+    "StatsThink",
+]
+# The multiboot child's reception of the beacon and the setters nothing calls, which the parent of overlay 181 doesn't
+# link, from ntrtwl's NitroSDK: they keep the receive side's four pointers in the file's pooled .bss, ahead of the
+# send state, where the ROM has them
+"lib/nitro/src/mb/mb_gameinfo.c" = [
+    "MB_GetBeaconRecvStatus",
+    "MBi_SetBeaconRecvStatusBufferDefault",
+    "MBi_SetBeaconRecvStatusBuffer",
+    "MBi_SetScanLockFunc",
+    "MB_DeleteGameInfo",
+    "MB_InitRecvGameInfoStatus",
+    "MB_RecvGameInfoBeacon",
+    "MB_CountGameInfoLifetime",
+    "MB_DeleteRecvGameInfo",
+    "MB_DeleteRecvGameInfoWithoutBssdesc",
+    "MB_GetGameInfoRecvList",
+    "MB_SetSendVolatCallback",
+    "MB_SetUserVolatData",
+    "MB_GetUserVolatData",
+]
+# The Download Play wireless helper's child connection, which the game doesn't call: the first use of the two buffer
+# size messages it shares with the parent's connection, which puts them ahead of the channel measurement's messages
+# in the file's .data, where the ROM has them. Reconstructed from those messages alone
+"lib/dwcutil/src/dwc_mov_wh.c" = ["DWCi_MOV_WH_ChildConnect"]

@@ -1,0 +1,6 @@
+{
+    "$schema": "map_matrix.schema.json",
+    "maps": [
+        [ "MAP_MODEL_NIMBASA_CITY_5_M_FOOTBALL01_00", "MAP_MODEL_NIMBASA_CITY_5_M_FOOTBALL01_01" ]
+    ]
+}

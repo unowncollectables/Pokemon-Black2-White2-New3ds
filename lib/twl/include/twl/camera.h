@@ -1,0 +1,317 @@
+#ifndef POKEBW2_TWL_CAMERA_H
+#define POKEBW2_TWL_CAMERA_H
+
+#include "types.h"
+#include "nitro/os.h"
+#include "nitro/pm.h"
+#include "twl/mi.h"
+#include "twl/pm.h"
+
+// TwlSDK's camera library, in the DSi's LTD autoload. The game calls it through the SDK's inline functions, which only
+// call the library when the game runs on a DSi (OS_IsRunOnTwl, swan's hw_isDSi), so the check is inlined at every call.
+// The functions, types and values have the names of the TWL-SDK Function Reference Manual (the public functions and
+// types) and of libntr's reconstruction of TwlSDK's headers (the Core functions, the asynchronous ones and the
+// interrupt bits), from what each function does and the PXI command it sends.
+
+typedef enum {
+    CAMERA_RESULT_SUCCESS = 0,
+    CAMERA_RESULT_SUCCESS_TRUE = 0,
+    CAMERA_RESULT_SUCCESS_FALSE,
+    CAMERA_RESULT_BUSY,
+    CAMERA_RESULT_ILLEGAL_PARAMETER,
+    CAMERA_RESULT_SEND_ERROR,
+    CAMERA_RESULT_INVALID_COMMAND,
+    CAMERA_RESULT_ILLEGAL_STATUS,
+    CAMERA_RESULT_FATAL_ERROR,
+} CAMERAResult;
+
+typedef enum {
+    CAMERA_SELECT_NONE,
+    CAMERA_SELECT_IN,
+    CAMERA_SELECT_OUT,
+    CAMERA_SELECT_BOTH,
+} CAMERASelect;
+
+typedef enum {
+    CAMERA_CONTEXT_A = 1,
+    CAMERA_CONTEXT_B,
+    CAMERA_CONTEXT_BOTH,
+} CAMERAContext;
+
+typedef enum {
+    CAMERA_SIZE_VGA,      // 640 x 480
+    CAMERA_SIZE_QVGA,     // 320 x 240
+    CAMERA_SIZE_QQVGA,    // 160 x 120
+    CAMERA_SIZE_CIF,      // 352 x 288
+    CAMERA_SIZE_QCIF,     // 176 x 144
+    CAMERA_SIZE_DS_LCD,   // 256 x 192
+    CAMERA_SIZE_DS_LCDx4, // 512 x 384
+    CAMERA_SIZE_MAX,
+} CAMERASize;
+
+typedef enum {
+    CAMERA_EFFECT_NONE,
+    CAMERA_EFFECT_MONO,
+    CAMERA_EFFECT_SEPIA,
+    CAMERA_EFFECT_NEGATIVE,
+    CAMERA_EFFECT_NEGAFILM,
+    CAMERA_EFFECT_SEPIA01,
+} CAMERAEffect;
+
+typedef enum {
+    CAMERA_FLIP_NONE,
+    CAMERA_FLIP_VERTICAL,
+    CAMERA_FLIP_HORIZONTAL,
+    CAMERA_FLIP_REVERSE,
+    CAMERA_FLIP_MAX,
+} CAMERAFlip;
+
+// The color temperatures of the white balance's presets; AUTO is what the sensor sets by itself
+typedef enum {
+    CAMERA_WHITE_BALANCE_AUTO,
+    CAMERA_WHITE_BALANCE_3200K,
+    CAMERA_WHITE_BALANCE_4150K,
+    CAMERA_WHITE_BALANCE_5200K,
+    CAMERA_WHITE_BALANCE_6000K,
+    CAMERA_WHITE_BALANCE_7000K,
+} CAMERAWhiteBalance;
+
+typedef enum {
+    CAMERA_FRAME_RATE_15,
+    CAMERA_FRAME_RATE_15_TO_5,
+    CAMERA_FRAME_RATE_15_TO_2,
+    CAMERA_FRAME_RATE_8_5,
+    CAMERA_FRAME_RATE_5,
+    CAMERA_FRAME_RATE_20,
+    CAMERA_FRAME_RATE_20_TO_5,
+    CAMERA_FRAME_RATE_30,
+    CAMERA_FRAME_RATE_30_TO_5,
+    CAMERA_FRAME_RATE_15_TO_10,
+    CAMERA_FRAME_RATE_20_TO_10,
+    CAMERA_FRAME_RATE_30_TO_10,
+    CAMERA_FRAME_RATE_MAX,
+} CAMERAFrameRate;
+
+typedef enum {
+    CAMERA_OUTPUT_YUV,
+    CAMERA_OUTPUT_RGB,
+} CAMERAOutput;
+
+// The camera's modes for a scene, by what camera_api.c sets the white balance, exposure and sharpness to for each (the
+// names are from the DSi's camera settings)
+typedef enum {
+    CAMERA_PHOTO_MODE_NORMAL,
+    CAMERA_PHOTO_MODE_PORTRAIT,
+    CAMERA_PHOTO_MODE_LANDSCAPE,
+    CAMERA_PHOTO_MODE_NIGHTVIEW,
+    CAMERA_PHOTO_MODE_LETTER,
+} CAMERAPhotoMode;
+
+typedef void (*CAMERAIntrCallback)(CAMERAResult result);
+// What the asynchronous I2C commands call when the ARM7 has answered
+typedef void (*CAMERACallback)(CAMERAResult result, void *arg);
+
+CAMERAResult CAMERA_InitCore(void);
+void CAMERA_EndCore(void);
+CAMERAResult CAMERA_StopCore(void); // stops the capture and puts both cameras to standby, called before CAMERA_End
+CAMERAResult CAMERA_I2CInitCore(CAMERASelect camera);
+CAMERAResult CAMERA_I2CActivateCore(CAMERASelect camera);
+CAMERAResult CAMERA_I2CSizeExCore(CAMERASelect camera, CAMERAContext context, CAMERASize size);
+CAMERAResult CAMERA_I2CEffectExCore(CAMERASelect camera, CAMERAContext context, CAMERAEffect effect);
+CAMERAResult CAMERA_I2CAutoExposureCore(CAMERASelect camera, BOOL on);
+CAMERAResult CAMERA_I2CAutoWhiteBalanceCore(CAMERASelect camera, BOOL on);
+void CAMERA_SetVsyncCallbackCore(CAMERAIntrCallback callback);
+void CAMERA_SetBufferErrorCallbackCore(CAMERAIntrCallback callback);
+void CAMERA_SetRebootCallbackCore(CAMERAIntrCallback callback);
+BOOL CAMERA_IsBusyCore(void);
+void CAMERA_StartCaptureCore(void);
+void CAMERA_StopCaptureCore(void);
+void CAMERA_SetTrimmingCore(BOOL enabled);
+void CAMERA_SetOutputFormatCore(CAMERAOutput output);
+void CAMERA_ClearBufferCore(void);
+void CAMERA_SetTransferLinesCore(int lines);
+int CAMERA_GetMaxLinesRoundCore(u16 width, u16 height);
+u32 CAMERA_GetBytesAtOnceCore(u16 width);
+u16 CAMERA_SizeToWidthCore(CAMERASize size);
+u16 CAMERA_SizeToHeightCore(CAMERASize size);
+
+// The interface's VSync interrupt: none, or on the falling or the rising edge (bits 8 and 9 of its control)
+typedef enum {
+    CAMERA_INTR_VSYNC_NONE = 0 << 8,
+    CAMERA_INTR_VSYNC_NEGATIVE_EDGE = 2 << 8,
+    CAMERA_INTR_VSYNC_POSITIVE_EDGE = 3 << 8,
+} CAMERAIntrVsync;
+
+// camera.c's other functions on the camera interface's registers (SCFG_CLK and the control word at 0x04004202), which
+// camera_api.c calls while it starts the camera, stops it and handles its interrupt. CAMERA_GetErrorStatusCore is the
+// manual's; the three interrupt setters are libntr's (camera_intr.h)
+void CAMERA_ResetCore(void);                      // resets the interface and its camera clock
+BOOL CAMERA_GetErrorStatusCore(void);             // whether the interface reports a buffer error (bit 4 of its control)
+void CAMERA_SetMasterInterruptCore(BOOL enabled); // the interface's interrupt enable (bit 11 of its control)
+void CAMERA_SetVsyncInterruptCore(CAMERAIntrVsync type); // bits 8 and 9 of the interface's control
+void CAMERA_SetBufferErrorInterruptCore(BOOL enabled);   // the buffer error's interrupt (bit 10 of its control)
+
+static inline CAMERAResult CAMERA_Init(void) {
+    if (OS_IsRunOnTwl() == TRUE) {
+        CAMERAResult result = CAMERA_InitCore();
+        if (result == CAMERA_RESULT_SUCCESS) {
+            result = CAMERA_I2CInitCore(CAMERA_SELECT_BOTH);
+        }
+        return result;
+    }
+    return CAMERA_RESULT_FATAL_ERROR;
+}
+
+static inline void CAMERA_End(void) {
+    if (OS_IsRunOnTwl() == TRUE) {
+        CAMERA_EndCore();
+    }
+}
+
+// Not an SDK name: what the SDK calls this wrapper of CAMERA_StopCore is unknown
+static inline CAMERAResult CAMERA_I2CStop(void) {
+    if (OS_IsRunOnTwl() == TRUE) {
+        return CAMERA_StopCore();
+    }
+    return CAMERA_RESULT_FATAL_ERROR;
+}
+
+static inline CAMERAResult CAMERA_I2CActivate(CAMERASelect camera) {
+    if (OS_IsRunOnTwl() == TRUE) {
+        return CAMERA_I2CActivateCore(camera);
+    }
+    return CAMERA_RESULT_FATAL_ERROR;
+}
+
+static inline CAMERAResult CAMERA_I2CSizeEx(CAMERASelect camera, CAMERAContext context, CAMERASize size) {
+    if (OS_IsRunOnTwl() == TRUE) {
+        return CAMERA_I2CSizeExCore(camera, context, size);
+    }
+    return CAMERA_RESULT_FATAL_ERROR;
+}
+
+static inline CAMERAResult CAMERA_I2CEffectEx(CAMERASelect camera, CAMERAContext context, CAMERAEffect effect) {
+    if (OS_IsRunOnTwl() == TRUE) {
+        return CAMERA_I2CEffectExCore(camera, context, effect);
+    }
+    return CAMERA_RESULT_FATAL_ERROR;
+}
+
+static inline CAMERAResult CAMERA_I2CAutoExposure(CAMERASelect camera, BOOL on) {
+    if (OS_IsRunOnTwl() == TRUE) {
+        return CAMERA_I2CAutoExposureCore(camera, on);
+    }
+    return CAMERA_RESULT_FATAL_ERROR;
+}
+
+static inline CAMERAResult CAMERA_I2CAutoWhiteBalance(CAMERASelect camera, BOOL on) {
+    if (OS_IsRunOnTwl() == TRUE) {
+        return CAMERA_I2CAutoWhiteBalanceCore(camera, on);
+    }
+    return CAMERA_RESULT_FATAL_ERROR;
+}
+
+static inline void CAMERA_SetVsyncCallback(CAMERAIntrCallback callback) {
+    if (OS_IsRunOnTwl() == TRUE) {
+        CAMERA_SetVsyncCallbackCore(callback);
+    }
+}
+
+static inline void CAMERA_SetBufferErrorCallback(CAMERAIntrCallback callback) {
+    if (OS_IsRunOnTwl() == TRUE) {
+        CAMERA_SetBufferErrorCallbackCore(callback);
+    }
+}
+
+static inline void CAMERA_SetRebootCallback(CAMERAIntrCallback callback) {
+    if (OS_IsRunOnTwl() == TRUE) {
+        CAMERA_SetRebootCallbackCore(callback);
+    }
+}
+
+static inline BOOL CAMERA_IsBusy(void) {
+    if (OS_IsRunOnTwl() == TRUE) {
+        return CAMERA_IsBusyCore();
+    }
+    return FALSE;
+}
+
+static inline void CAMERA_StartCapture(void) {
+    if (OS_IsRunOnTwl() == TRUE) {
+        CAMERA_StartCaptureCore();
+    }
+}
+
+static inline void CAMERA_StopCapture(void) {
+    if (OS_IsRunOnTwl() == TRUE) {
+        CAMERA_StopCaptureCore();
+    }
+}
+
+static inline void CAMERA_SetTrimming(BOOL enabled) {
+    if (OS_IsRunOnTwl() == TRUE) {
+        CAMERA_SetTrimmingCore(enabled);
+    }
+}
+
+static inline void CAMERA_SetOutputFormat(CAMERAOutput output) {
+    if (OS_IsRunOnTwl() == TRUE) {
+        CAMERA_SetOutputFormatCore(output);
+    }
+}
+
+static inline void CAMERA_ClearBuffer(void) {
+    if (OS_IsRunOnTwl() == TRUE) {
+        CAMERA_ClearBufferCore();
+    }
+}
+
+static inline BOOL CAMERA_GetErrorStatus(void) {
+    if (OS_IsRunOnTwl() == TRUE) {
+        return CAMERA_GetErrorStatusCore();
+    }
+    return FALSE;
+}
+
+static inline void CAMERA_SetTransferLines(int lines) {
+    if (OS_IsRunOnTwl() == TRUE) {
+        CAMERA_SetTransferLinesCore(lines);
+    }
+}
+
+static inline int CAMERA_GetMaxLinesRound(u16 width, u16 height) {
+    if (OS_IsRunOnTwl() == TRUE) {
+        return CAMERA_GetMaxLinesRoundCore(width, height);
+    }
+    return 0;
+}
+
+static inline u32 CAMERA_GetBytesAtOnce(u16 width) {
+    if (OS_IsRunOnTwl() == TRUE) {
+        return CAMERA_GetBytesAtOnceCore(width);
+    }
+    return 0;
+}
+
+static inline u16 CAMERA_SizeToWidth(CAMERASize size) {
+    if (OS_IsRunOnTwl() == TRUE) {
+        return CAMERA_SizeToWidthCore(size);
+    }
+    return 0;
+}
+
+static inline u16 CAMERA_SizeToHeight(CAMERASize size) {
+    if (OS_IsRunOnTwl() == TRUE) {
+        return CAMERA_SizeToHeightCore(size);
+    }
+    return 0;
+}
+
+#define CAMERA_GET_FRAME_BYTES(width, height) ((width) * 2 * (height))
+
+static inline void CAMERA_DmaRecvAsync(u32 ndmaNo, void *dest, u32 unit, u32 length, MINDmaCallback callback,
+                                       void *arg) {
+    MI_Camera_NDmaRecvAsync(ndmaNo, dest, unit / 4, length, 0, callback, arg);
+}
+
+#endif // POKEBW2_TWL_CAMERA_H

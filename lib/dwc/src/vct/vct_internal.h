@@ -1,0 +1,68 @@
+#ifndef POKEBW2_DWC_VCT_INTERNAL_H
+#define POKEBW2_DWC_VCT_INTERNAL_H
+
+#include "types.h"
+#include "dwc/transport.h"
+#include "dwc/vct.h"
+
+// The voice chat library libVCT (the ROM carries its version string, "[SDK+Nintendo:libVCT 1.4.1]"), which sends the
+// microphone's sound to the machines of a Wi-Fi match and plays what they send. Overlay 29 holds it. The ROM names none
+// of its functions: the names are libVCT's own, as ntrtwl's reconstruction of libVCT has them, where the code shows
+// them, and ours elsewhere.
+
+// libVCT's signature, "[SDK+Nintendo:libVCT 1.4.1]", in the main module, which VCT_Init registers
+extern const char VCTi_Signature[];
+
+// Sound is cut into frames of 0x440 bytes of 16-bit samples (544 samples) at 8 kHz, and each frame goes out as one
+// packet. A packet starts with a 12-byte header, then holds the frame coded in one of five ways (see VCTCodec).
+#define VCT_FRAME_SAMPLES 544
+#define VCT_FRAME_BYTES (VCT_FRAME_SAMPLES * 2)
+// The most machines whose voices are mixed
+#define VCT_SLOT_MAX 3
+// The most machines of a match
+#define VCT_AID_MAX 32
+
+// The magic number that starts every packet, "TCV_" in memory
+#define VCT_PACKET_MAGIC 0x5f564354
+
+// The kind of a packet
+#define VCT_METHOD_RESPONSE 0x00
+#define VCT_HEADER_AUDIO 0x40
+#define VCT_HEADER_AUDIO_END 0x41
+#define VCT_METHOD_REQUEST 0xff
+
+// Whether this machine listens as a client or as the server of the transceiver mode: the SDK's VCTListenMode (ntrtwl's
+// libvct, src/vct_main.h)
+typedef enum VCTListenMode {
+    LISTEN_MODE_CLIENT = 0,
+    LISTEN_MODE_SERVER,
+} VCTListenMode;
+
+// What the library keeps of its configuration
+struct VCTi_Globals {
+    u8 myAID;
+    u8 serverAID;
+    u8 pad2[2];
+    VCTEventCallback callback;
+    void *userData;
+    VCTListenMode listenMode;
+    VCTMode SSPMode;
+    int autoResponse;
+};
+
+extern VCTi_Globals vct;
+
+// The hardware's divider and square root unit
+#define REG_DIVCNT (*(vu16 *)0x04000280)
+#define REG_DIV_NUMER_LO (*(vu32 *)0x04000290)
+#define REG_DIV_NUMER_HI (*(vu32 *)0x04000294)
+#define REG_DIV_DENOM_LO (*(vu32 *)0x04000298)
+#define REG_DIV_DENOM_HI (*(vu32 *)0x0400029c)
+#define REG_DIV_RESULT_LO (*(vu32 *)0x040002a0)
+#define REG_SQRTCNT (*(vu16 *)0x040002b0)
+#define REG_SQRT_RESULT (*(vu32 *)0x040002b4)
+#define REG_SQRT_PARAM_LO (*(vu32 *)0x040002b8)
+#define REG_DIVCNT_BUSY 0x8000
+#define REG_SQRTCNT_BUSY 0x8000
+
+#endif // POKEBW2_DWC_VCT_INTERNAL_H

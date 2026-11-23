@@ -1,0 +1,1663 @@
+#include "types.h"
+#include "app/box/box2_bgwfrm.h"
+#include "app/box/box2_main.h"
+#include "app/box/box2_obj.h"
+#include "app/box/box2_ui.h"
+#include "constants/pokemon.h"
+#include "gfl/heap.h"
+#include "gfl/key.h"
+#include "gfl/touchpanel.h"
+#include "gfl/ui.h"
+#include "pml/poke_party.h"
+#include "system/cursor_move.h"
+
+// The PC box's cursor: the positions it moves between in each of the box's modes and what moving it and touching a
+// position do, and the touch screen's areas. The ROM names this file in its asserts. Names are ours
+
+// A cursor's positions and callbacks
+typedef struct {
+    const CursorMoveData *data;
+    const CursorMoveCallbacks *callbacks;
+} Box2CursorMoveTable;
+
+static void MoveCursorTo(Box2SysWork *syswk, u32 pos);
+static void CursorOn(void *work, int pos, int prevPos);
+static void CursorOff(void *work, int pos, int prevPos);
+static void CursorMoveAnim(void *work, int pos, int prevPos);
+static void Cursor9_Touch(void *work, int pos, int prevPos);
+static void CursorNone(void *work, int pos, int prevPos);
+static void Cursor0_Touch(void *work, int pos, int prevPos);
+static void Cursor2_Touch(void *work, int pos, int prevPos);
+static void Cursor3_Move(void *work, int pos, int prevPos);
+static void Cursor3_Touch(void *work, int pos, int prevPos);
+static void Cursor4_Move(void *work, int pos, int prevPos);
+static void Cursor4_Touch(void *work, int pos, int prevPos);
+static void Cursor5_Move(void *work, int pos, int prevPos);
+static void Cursor5_Touch(void *work, int pos, int prevPos);
+static void Cursor6_Move(void *work, int pos, int prevPos);
+static void Cursor6_Touch(void *work, int pos, int prevPos);
+static void Cursor7_Move(void *work, int pos, int prevPos);
+static void Cursor7_Touch(void *work, int pos, int prevPos);
+static void Cursor8_Move(void *work, int pos, int prevPos);
+static void Cursor8_Touch(void *work, int pos, int prevPos);
+static void Cursor10_Move(void *work, int pos, int prevPos);
+static void Cursor10_Touch(void *work, int pos, int prevPos);
+static void Cursor11_Move(void *work, int pos, int prevPos);
+static void Cursor11_Touch(void *work, int pos, int prevPos);
+static void Cursor12_Move(void *work, int pos, int prevPos);
+static void Cursor12_Touch(void *work, int pos, int prevPos);
+static void Cursor13_Move(void *work, int pos, int prevPos);
+static void Cursor13_Touch(void *work, int pos, int prevPos);
+static void Cursor14_Move(void *work, int pos, int prevPos);
+static void Cursor14_Touch(void *work, int pos, int prevPos);
+static void Cursor15_Move(void *work, int pos, int prevPos);
+static void Cursor15_Touch(void *work, int pos, int prevPos);
+static void StartCursorMoveWork(Box2AppWork *app, u8 fromX, u8 fromY, u8 toX, u8 toY);
+static u32 FindTriggeredRect(const CursorMoveData *data, u32 count);
+static u32 FindHeldRect(const CursorMoveData *data, u32 count);
+static u32 FindRectAt(const CursorMoveData *data, u32 count, u32 x, u32 y);
+
+// MWCC sorts a file's data by size, in an order that depends on where each object is declared; the objects of the same
+// size are declared in the order that lays them out as in the ROM (tools/decomp/rodata_order.py)
+
+// The end of a table of touch rectangles
+static const TouchRect sTouchRectEnd = { TOUCH_RECT_END, 0, 0, 0 };
+
+static const TouchRect sBoxListTouchRect[2] = {
+    { 0, 191, 168, 255 },
+    { TOUCH_RECT_END, 0, 0, 0 },
+};
+
+static const TouchRect sLeftPartyTouchRect[2] = {
+    { 48, 167, 16, 103 },
+    { TOUCH_RECT_END, 0, 0, 0 },
+};
+
+static const TouchRect sTrayTouchRect[2] = {
+    { 40, 160, 0, 167 },
+    { TOUCH_RECT_END, 0, 0, 0 },
+};
+
+static const TouchRect sRightPartyTouchRect[2] = {
+    { 48, 167, 168, 255 },
+    { TOUCH_RECT_END, 0, 0, 0 },
+};
+
+static const TouchRect sBoxListScrollTouchRects[3] = {
+    { 0, 167, 228, 255 },
+    { 0, 167, 168, 195 },
+    { TOUCH_RECT_END, 0, 0, 0 },
+};
+
+static const TouchRect sBoxListArrowRects[3] = {
+    { 0, 21, 173, 255 },
+    { 148, 167, 173, 255 },
+    { TOUCH_RECT_END, 0, 0, 0 },
+};
+
+static const CursorMoveCallbacks sCursorCallbacks10 = {
+    CursorOn,
+    CursorOff,
+    Cursor10_Move,
+    Cursor10_Touch,
+};
+
+static const CursorMoveCallbacks sCursorCallbacks12 = {
+    CursorOn,
+    CursorOff,
+    Cursor12_Move,
+    Cursor12_Touch,
+};
+
+static const CursorMoveCallbacks sCursorCallbacks13 = {
+    CursorOn,
+    CursorOff,
+    Cursor13_Move,
+    Cursor13_Touch,
+};
+
+static const CursorMoveCallbacks sCursorCallbacks5 = {
+    CursorOn,
+    CursorOff,
+    Cursor5_Move,
+    Cursor5_Touch,
+};
+
+static const CursorMoveCallbacks sCursorCallbacks3 = {
+    CursorOn,
+    CursorOff,
+    Cursor3_Move,
+    Cursor3_Touch,
+};
+
+static const CursorMoveCallbacks sCursorCallbacks2 = {
+    CursorOn,
+    CursorOff,
+    CursorMoveAnim,
+    Cursor2_Touch,
+};
+
+static const CursorMoveCallbacks sCursorCallbacks4 = {
+    CursorOn,
+    CursorOff,
+    Cursor4_Move,
+    Cursor4_Touch,
+};
+
+static const CursorMoveCallbacks sCursorCallbacks6 = {
+    CursorOn,
+    CursorOff,
+    Cursor6_Move,
+    Cursor6_Touch,
+};
+
+static const CursorMoveCallbacks sCursorCallbacks14 = {
+    CursorOn,
+    CursorOff,
+    Cursor14_Move,
+    Cursor14_Touch,
+};
+
+static const CursorMoveCallbacks sCursorCallbacks7 = {
+    CursorOn,
+    CursorOff,
+    Cursor7_Move,
+    Cursor7_Touch,
+};
+
+static const CursorMoveCallbacks sCursorCallbacks11 = {
+    CursorOn,
+    CursorOff,
+    Cursor11_Move,
+    Cursor11_Touch,
+};
+
+static const CursorMoveCallbacks sCursorCallbacks15 = {
+    CursorOn,
+    CursorOff,
+    Cursor15_Move,
+    Cursor15_Touch,
+};
+
+static const CursorMoveCallbacks sCursorCallbacks8 = {
+    CursorOn,
+    CursorOff,
+    Cursor8_Move,
+    Cursor8_Touch,
+};
+
+static const CursorMoveCallbacks sCursorCallbacks1 = {
+    CursorOn,
+    CursorOff,
+    CursorNone,
+    CursorNone,
+};
+
+static const CursorMoveCallbacks sCursorCallbacks9 = {
+    CursorOn,
+    CursorOff,
+    CursorMoveAnim,
+    Cursor9_Touch,
+};
+
+static const CursorMoveCallbacks sCursorCallbacks0 = {
+    CursorOn,
+    CursorOff,
+    CursorMoveAnim,
+    Cursor0_Touch,
+};
+
+static const TouchRect sBoxListRowTouchRects[5] = {
+    { 20, 50, 180, 254 },   { 51, 84, 180, 254 },        { 85, 119, 180, 254 },
+    { 120, 150, 180, 254 }, { TOUCH_RECT_END, 0, 0, 0 },
+};
+
+// clang-format off
+static const CursorMoveData sCursorData10[5] = {
+    { 212, 60, 0, 0, 3, 1, 0, 0, { 64, 87, 168, 255 } },
+    { 212, 84, 0, 0, 0, 2, 1, 1, { 88, 111, 168, 255 } },
+    { 212, 108, 0, 0, 1, 3, 2, 2, { 112, 135, 168, 255 } },
+    { 212, 132, 0, 0, 2, 0, 3, 3, { 136, 159, 168, 255 } },
+    { 0, 0, 0, 0, 0, 0, 0, 0, { TOUCH_RECT_END, 0, 0, 0 } },
+};
+
+// clang-format on
+
+// clang-format off
+static const CursorMoveData sCursorData1[6] = {
+    { 84, 16, 0, 0, 0, 0, 0, 0, { 18, 38, 27, 140 } },
+    { 0, 0, 0, 0, 1, 1, 1, 1, { 51, 172, 3, 164 } },
+    { 0, 0, 0, 0, 2, 2, 2, 2, { 18, 38, 6, 26 } },
+    { 0, 0, 0, 0, 3, 3, 3, 3, { 18, 38, 141, 161 } },
+    { 0, 0, 0, 0, 4, 4, 4, 4, { 168, 191, 232, 255 } },
+    { 0, 0, 0, 0, 0, 0, 0, 0, { TOUCH_RECT_END, 0, 0, 0 } },
+};
+
+// clang-format on
+
+// clang-format off
+static const CursorMoveData sCursorData11[7] = {
+    { 212, 12, 0, 0, 5, 1, 0, 0, { 16, 39, 168, 255 } },
+    { 212, 36, 0, 0, 0, 2, 1, 1, { 40, 63, 168, 255 } },
+    { 212, 60, 0, 0, 1, 3, 2, 2, { 64, 87, 168, 255 } },
+    { 212, 84, 0, 0, 2, 4, 3, 3, { 88, 111, 168, 255 } },
+    { 212, 108, 0, 0, 3, 5, 4, 4, { 112, 135, 168, 255 } },
+    { 212, 132, 0, 0, 4, 0, 5, 5, { 136, 159, 168, 255 } },
+    { 0, 0, 0, 0, 0, 0, 0, 0, { TOUCH_RECT_END, 0, 0, 0 } },
+};
+
+// clang-format on
+
+// clang-format off
+static const CursorMoveData sCursorData12[8] = {
+    { 0, 0, 0, 0, 0, 0, 0, 0, { 0, 11, 200, 223 } },
+    { 212, 22, 0, 0, 1, 2, 1, 1, { 22, 45, 200, 223 } },
+    { 212, 56, 0, 0, 1, 3, 2, 2, { 56, 79, 200, 223 } },
+    { 212, 90, 0, 0, 2, 4, 3, 3, { 90, 113, 200, 223 } },
+    { 212, 124, 0, 0, 3, 4, 4, 4, { 124, 147, 200, 223 } },
+    { 0, 0, 0, 0, 5, 5, 5, 5, { 158, 167, 200, 223 } },
+    { 0, 0, 0, 0, 6, 6, 6, 6, { 168, 191, 232, 255 } },
+    { 0, 0, 0, 0, 0, 0, 0, 0, { TOUCH_RECT_END, 0, 0, 0 } },
+};
+
+// clang-format on
+
+// clang-format off
+static const CursorMoveData sCursorData9[9] = {
+    { 200, 36, 0, 0, 0, 2, 0, 1, { 44, 59, 188, 203 } },
+    { 232, 36, 0, 0, 1, 3, 0, 1, { 44, 59, 220, 235 } },
+    { 200, 60, 0, 0, 0, 4, 2, 3, { 68, 83, 188, 203 } },
+    { 232, 60, 0, 0, 1, 5, 2, 3, { 68, 83, 220, 235 } },
+    { 200, 84, 0, 0, 2, 6, 4, 5, { 92, 107, 188, 203 } },
+    { 232, 84, 0, 0, 3, 6, 4, 5, { 92, 107, 220, 235 } },
+    { 212, 108, 0, 0, 132, 7, 6, 6, { 112, 135, 168, 255 } },
+    { 212, 132, 0, 0, 6, 7, 7, 7, { 136, 159, 168, 255 } },
+    { 0, 0, 0, 0, 0, 0, 0, 0, { TOUCH_RECT_END, 0, 0, 0 } },
+};
+
+// clang-format on
+
+static const CursorMoveData sCursorData0[14] = {
+    { 40, 52, 0, 0, 4, 2, 5, 1, { 56, 79, 30, 53 } },
+    { 80, 60, 0, 0, 5, 3, 0, 2, { 64, 87, 66, 89 } },
+    { 40, 84, 0, 0, 0, 4, 1, 3, { 88, 111, 30, 53 } },
+    { 80, 92, 0, 0, 1, 5, 2, 4, { 96, 119, 66, 89 } },
+    { 40, 116, 0, 0, 2, 0, 3, 5, { 120, 143, 30, 53 } },
+    { 80, 124, 0, 0, 3, 1, 4, 0, { 128, 151, 66, 89 } },
+    { 0, 0, 0, 0, 6, 6, 6, 6, { 168, 191, 200, 223 } },
+    { 0, 0, 0, 0, 7, 7, 7, 7, { 168, 191, 232, 255 } },
+    { 212, 36, 0, 0, 12, 9, 8, 8, { 40, 63, 168, 255 } },
+    { 212, 60, 0, 0, 8, 10, 9, 9, { 64, 87, 168, 255 } },
+    { 212, 84, 0, 0, 9, 11, 10, 10, { 88, 111, 168, 255 } },
+    { 212, 108, 0, 0, 10, 12, 11, 11, { 112, 135, 168, 255 } },
+    { 212, 132, 0, 0, 11, 8, 12, 12, { 136, 159, 168, 255 } },
+    { 0, 0, 0, 0, 0, 0, 0, 0, { TOUCH_RECT_END, 0, 0, 0 } },
+};
+
+static const CursorMoveData sCursorData8[15] = {
+    { 40, 52, 0, 0, 6, 2, 0, 1, { 56, 79, 30, 53 } },
+    { 80, 60, 0, 0, 6, 3, 0, 2, { 64, 87, 66, 89 } },
+    { 40, 84, 0, 0, 0, 4, 1, 3, { 88, 111, 30, 53 } },
+    { 80, 92, 0, 0, 1, 5, 2, 4, { 96, 119, 66, 89 } },
+    { 40, 116, 0, 0, 2, 6, 3, 5, { 120, 143, 30, 53 } },
+    { 80, 124, 0, 0, 3, 6, 4, 6, { 128, 151, 66, 89 } },
+    { 44, 168, 0, 0, 133, 0, 5, 0, { 168, 191, 0, 95 } },
+    { 0, 0, 0, 0, 7, 7, 7, 7, { 168, 191, 200, 223 } },
+    { 0, 0, 0, 0, 8, 8, 8, 8, { 168, 191, 232, 255 } },
+    { 212, 84, 0, 0, 11, 10, 9, 9, { 88, 111, 168, 255 } },
+    { 212, 108, 0, 0, 9, 11, 10, 10, { 112, 135, 168, 255 } },
+    { 212, 132, 0, 0, 10, 9, 11, 11, { 136, 159, 168, 255 } },
+    { 0, 0, 0, 0, 12, 12, 12, 12, { 0, 10, 8, 59 } },
+    { 0, 0, 0, 0, 12, 13, 13, 13, { 0, 10, 60, 109 } },
+    { 0, 0, 0, 0, 0, 0, 0, 0, { TOUCH_RECT_END, 0, 0, 0 } },
+};
+
+static const CursorMoveData sCursorData14[18] = {
+    { 40, 52, 0, 0, 6, 2, 0, 1, { 56, 79, 30, 53 } },
+    { 80, 60, 0, 0, 6, 3, 0, 2, { 64, 87, 66, 89 } },
+    { 40, 84, 0, 0, 0, 4, 1, 3, { 88, 111, 30, 53 } },
+    { 80, 92, 0, 0, 1, 5, 2, 4, { 96, 119, 66, 89 } },
+    { 40, 116, 0, 0, 2, 6, 3, 5, { 120, 143, 30, 53 } },
+    { 80, 124, 0, 0, 3, 6, 4, 6, { 128, 151, 66, 89 } },
+    { 44, 168, 0, 0, 133, 0, 5, 0, { 168, 191, 0, 95 } },
+    { 0, 0, 0, 0, 7, 7, 7, 7, { 168, 191, 200, 223 } },
+    { 0, 0, 0, 0, 8, 8, 8, 8, { 168, 191, 232, 255 } },
+    { 212, 60, 0, 0, 12, 10, 9, 9, { 64, 87, 168, 255 } },
+    { 212, 84, 0, 0, 9, 11, 10, 10, { 88, 111, 168, 255 } },
+    { 212, 108, 0, 0, 10, 12, 11, 11, { 112, 135, 168, 255 } },
+    { 212, 132, 0, 0, 11, 9, 12, 12, { 136, 159, 168, 255 } },
+    { 0, 0, 0, 0, 13, 13, 13, 13, { 0, 10, 8, 59 } },
+    { 0, 0, 0, 0, 14, 14, 14, 14, { 0, 10, 60, 109 } },
+    { 0, 0, 0, 0, 15, 15, 15, 15, { 0, 10, 110, 159 } },
+    { 0, 0, 0, 0, 16, 16, 16, 16, { 168, 191, 168, 191 } },
+    { 0, 0, 0, 0, 0, 0, 0, 0, { TOUCH_RECT_END, 0, 0, 0 } },
+};
+
+static const CursorMoveData sCursorData5[20] = {
+    { 40, 52, 0, 0, 6, 2, 0, 1, { 56, 79, 30, 53 } },
+    { 80, 60, 0, 0, 6, 3, 0, 2, { 64, 87, 66, 89 } },
+    { 40, 84, 0, 0, 0, 4, 1, 3, { 88, 111, 30, 53 } },
+    { 80, 92, 0, 0, 1, 5, 2, 4, { 96, 119, 66, 89 } },
+    { 40, 116, 0, 0, 2, 6, 3, 5, { 120, 143, 30, 53 } },
+    { 80, 124, 0, 0, 3, 6, 4, 6, { 128, 151, 66, 89 } },
+    { 44, 168, 0, 0, 133, 0, 5, 0, { 168, 191, 0, 95 } },
+    { 0, 0, 0, 0, 7, 7, 7, 7, { 168, 191, 200, 223 } },
+    { 0, 0, 0, 0, 8, 8, 8, 8, { 168, 191, 232, 255 } },
+    { 212, 12, 0, 0, 14, 10, 9, 9, { 16, 39, 168, 255 } },
+    { 212, 36, 0, 0, 9, 11, 10, 10, { 40, 63, 168, 255 } },
+    { 212, 60, 0, 0, 10, 12, 11, 11, { 64, 87, 168, 255 } },
+    { 212, 84, 0, 0, 11, 13, 12, 12, { 88, 111, 168, 255 } },
+    { 212, 108, 0, 0, 12, 14, 13, 13, { 112, 135, 168, 255 } },
+    { 212, 132, 0, 0, 13, 9, 14, 14, { 136, 159, 168, 255 } },
+    { 0, 0, 0, 0, 15, 15, 15, 15, { 0, 10, 8, 59 } },
+    { 0, 0, 0, 0, 16, 16, 16, 16, { 0, 10, 60, 109 } },
+    { 0, 0, 0, 0, 17, 17, 17, 17, { 0, 10, 110, 159 } },
+    { 0, 0, 0, 0, 18, 18, 18, 18, { 168, 191, 168, 191 } },
+    { 0, 0, 0, 0, 0, 0, 0, 0, { TOUCH_RECT_END, 0, 0, 0 } },
+};
+
+static const CursorMoveData sCursorData15[37] = {
+    { 24, 36, 0, 0, 30, 6, 5, 1, { 40, 63, 12, 35 } },
+    { 48, 36, 0, 0, 30, 7, 0, 2, { 40, 63, 36, 59 } },
+    { 72, 36, 0, 0, 30, 8, 1, 3, { 40, 63, 60, 83 } },
+    { 96, 36, 0, 0, 30, 9, 2, 4, { 40, 63, 84, 107 } },
+    { 120, 36, 0, 0, 30, 10, 3, 5, { 40, 63, 108, 131 } },
+    { 144, 36, 0, 0, 30, 11, 4, 0, { 40, 63, 132, 155 } },
+    { 24, 60, 0, 0, 0, 12, 11, 7, { 64, 87, 12, 35 } },
+    { 48, 60, 0, 0, 1, 13, 6, 8, { 64, 87, 36, 59 } },
+    { 72, 60, 0, 0, 2, 14, 7, 9, { 64, 87, 60, 83 } },
+    { 96, 60, 0, 0, 3, 15, 8, 10, { 64, 87, 84, 107 } },
+    { 120, 60, 0, 0, 4, 16, 9, 11, { 64, 87, 108, 131 } },
+    { 144, 60, 0, 0, 5, 17, 10, 6, { 64, 87, 132, 155 } },
+    { 24, 84, 0, 0, 6, 18, 17, 13, { 88, 111, 12, 35 } },
+    { 48, 84, 0, 0, 7, 19, 12, 14, { 88, 111, 36, 59 } },
+    { 72, 84, 0, 0, 8, 20, 13, 15, { 88, 111, 60, 83 } },
+    { 96, 84, 0, 0, 9, 21, 14, 16, { 88, 111, 84, 107 } },
+    { 120, 84, 0, 0, 10, 22, 15, 17, { 88, 111, 108, 131 } },
+    { 144, 84, 0, 0, 11, 23, 16, 12, { 88, 111, 132, 155 } },
+    { 24, 108, 0, 0, 12, 24, 23, 19, { 112, 135, 12, 35 } },
+    { 48, 108, 0, 0, 13, 25, 18, 20, { 112, 135, 36, 59 } },
+    { 72, 108, 0, 0, 14, 26, 19, 21, { 112, 135, 60, 83 } },
+    { 96, 108, 0, 0, 15, 27, 20, 22, { 112, 135, 84, 107 } },
+    { 120, 108, 0, 0, 16, 28, 21, 23, { 112, 135, 108, 131 } },
+    { 144, 108, 0, 0, 17, 29, 22, 18, { 112, 135, 132, 155 } },
+    { 24, 132, 0, 0, 18, 30, 29, 25, { 136, 159, 12, 35 } },
+    { 48, 132, 0, 0, 19, 30, 24, 26, { 136, 159, 36, 59 } },
+    { 72, 132, 0, 0, 20, 30, 25, 27, { 136, 159, 60, 83 } },
+    { 96, 132, 0, 0, 21, 30, 26, 28, { 136, 159, 84, 107 } },
+    { 120, 132, 0, 0, 22, 30, 27, 29, { 136, 159, 108, 131 } },
+    { 144, 132, 0, 0, 23, 30, 28, 24, { 136, 159, 132, 155 } },
+    { 84, 16, 0, 0, 24, 128, 30, 30, { 18, 38, 27, 140 } },
+    { 0, 0, 0, 0, 31, 31, 31, 31, { 18, 38, 6, 26 } },
+    { 0, 0, 0, 0, 32, 32, 32, 32, { 18, 38, 141, 161 } },
+    { 0, 0, 0, 0, 33, 33, 33, 33, { 168, 191, 232, 255 } },
+    { 212, 108, 0, 0, 35, 35, 34, 34, { 112, 135, 168, 255 } },
+    { 212, 132, 0, 0, 34, 34, 35, 35, { 136, 159, 168, 255 } },
+    { 0, 0, 0, 0, 0, 0, 0, 0, { TOUCH_RECT_END, 0, 0, 0 } },
+};
+
+static const CursorMoveData sCursorData2[41] = {
+    { 24, 36, 0, 0, 30, 6, 5, 1, { 40, 63, 12, 35 } },
+    { 48, 36, 0, 0, 30, 7, 0, 2, { 40, 63, 36, 59 } },
+    { 72, 36, 0, 0, 30, 8, 1, 3, { 40, 63, 60, 83 } },
+    { 96, 36, 0, 0, 30, 9, 2, 4, { 40, 63, 84, 107 } },
+    { 120, 36, 0, 0, 30, 10, 3, 5, { 40, 63, 108, 131 } },
+    { 144, 36, 0, 0, 30, 11, 4, 0, { 40, 63, 132, 155 } },
+    { 24, 60, 0, 0, 0, 12, 11, 7, { 64, 87, 12, 35 } },
+    { 48, 60, 0, 0, 1, 13, 6, 8, { 64, 87, 36, 59 } },
+    { 72, 60, 0, 0, 2, 14, 7, 9, { 64, 87, 60, 83 } },
+    { 96, 60, 0, 0, 3, 15, 8, 10, { 64, 87, 84, 107 } },
+    { 120, 60, 0, 0, 4, 16, 9, 11, { 64, 87, 108, 131 } },
+    { 144, 60, 0, 0, 5, 17, 10, 6, { 64, 87, 132, 155 } },
+    { 24, 84, 0, 0, 6, 18, 17, 13, { 88, 111, 12, 35 } },
+    { 48, 84, 0, 0, 7, 19, 12, 14, { 88, 111, 36, 59 } },
+    { 72, 84, 0, 0, 8, 20, 13, 15, { 88, 111, 60, 83 } },
+    { 96, 84, 0, 0, 9, 21, 14, 16, { 88, 111, 84, 107 } },
+    { 120, 84, 0, 0, 10, 22, 15, 17, { 88, 111, 108, 131 } },
+    { 144, 84, 0, 0, 11, 23, 16, 12, { 88, 111, 132, 155 } },
+    { 24, 108, 0, 0, 12, 24, 23, 19, { 112, 135, 12, 35 } },
+    { 48, 108, 0, 0, 13, 25, 18, 20, { 112, 135, 36, 59 } },
+    { 72, 108, 0, 0, 14, 26, 19, 21, { 112, 135, 60, 83 } },
+    { 96, 108, 0, 0, 15, 27, 20, 22, { 112, 135, 84, 107 } },
+    { 120, 108, 0, 0, 16, 28, 21, 23, { 112, 135, 108, 131 } },
+    { 144, 108, 0, 0, 17, 29, 22, 18, { 112, 135, 132, 155 } },
+    { 24, 132, 0, 0, 18, 30, 29, 25, { 136, 159, 12, 35 } },
+    { 48, 132, 0, 0, 19, 30, 24, 26, { 136, 159, 36, 59 } },
+    { 72, 132, 0, 0, 20, 30, 25, 27, { 136, 159, 60, 83 } },
+    { 96, 132, 0, 0, 21, 30, 26, 28, { 136, 159, 84, 107 } },
+    { 120, 132, 0, 0, 22, 30, 27, 29, { 136, 159, 108, 131 } },
+    { 144, 132, 0, 0, 23, 30, 28, 24, { 136, 159, 132, 155 } },
+    { 84, 16, 0, 0, 24, 128, 30, 30, { 18, 38, 27, 140 } },
+    { 0, 0, 0, 0, 31, 31, 31, 31, { 18, 38, 6, 26 } },
+    { 0, 0, 0, 0, 32, 32, 32, 32, { 18, 38, 141, 161 } },
+    { 0, 0, 0, 0, 33, 33, 33, 33, { 168, 191, 200, 223 } },
+    { 0, 0, 0, 0, 34, 34, 34, 34, { 168, 191, 232, 255 } },
+    { 212, 36, 0, 0, 39, 36, 35, 35, { 40, 63, 168, 255 } },
+    { 212, 60, 0, 0, 35, 37, 36, 36, { 64, 87, 168, 255 } },
+    { 212, 84, 0, 0, 36, 38, 37, 37, { 88, 111, 168, 255 } },
+    { 212, 108, 0, 0, 37, 39, 38, 38, { 112, 135, 168, 255 } },
+    { 212, 132, 0, 0, 38, 35, 39, 39, { 136, 159, 168, 255 } },
+    { 0, 0, 0, 0, 0, 0, 0, 0, { TOUCH_RECT_END, 0, 0, 0 } },
+};
+
+static const CursorMoveData sCursorData7[42] = {
+    { 24, 36, 0, 0, 30, 6, 5, 1, { 40, 63, 12, 35 } },
+    { 48, 36, 0, 0, 30, 7, 0, 2, { 40, 63, 36, 59 } },
+    { 72, 36, 0, 0, 30, 8, 1, 3, { 40, 63, 60, 83 } },
+    { 96, 36, 0, 0, 30, 9, 2, 4, { 40, 63, 84, 107 } },
+    { 120, 36, 0, 0, 30, 10, 3, 5, { 40, 63, 108, 131 } },
+    { 144, 36, 0, 0, 30, 11, 4, 0, { 40, 63, 132, 155 } },
+    { 24, 60, 0, 0, 0, 12, 11, 7, { 64, 87, 12, 35 } },
+    { 48, 60, 0, 0, 1, 13, 6, 8, { 64, 87, 36, 59 } },
+    { 72, 60, 0, 0, 2, 14, 7, 9, { 64, 87, 60, 83 } },
+    { 96, 60, 0, 0, 3, 15, 8, 10, { 64, 87, 84, 107 } },
+    { 120, 60, 0, 0, 4, 16, 9, 11, { 64, 87, 108, 131 } },
+    { 144, 60, 0, 0, 5, 17, 10, 6, { 64, 87, 132, 155 } },
+    { 24, 84, 0, 0, 6, 18, 17, 13, { 88, 111, 12, 35 } },
+    { 48, 84, 0, 0, 7, 19, 12, 14, { 88, 111, 36, 59 } },
+    { 72, 84, 0, 0, 8, 20, 13, 15, { 88, 111, 60, 83 } },
+    { 96, 84, 0, 0, 9, 21, 14, 16, { 88, 111, 84, 107 } },
+    { 120, 84, 0, 0, 10, 22, 15, 17, { 88, 111, 108, 131 } },
+    { 144, 84, 0, 0, 11, 23, 16, 12, { 88, 111, 132, 155 } },
+    { 24, 108, 0, 0, 12, 24, 23, 19, { 112, 135, 12, 35 } },
+    { 48, 108, 0, 0, 13, 25, 18, 20, { 112, 135, 36, 59 } },
+    { 72, 108, 0, 0, 14, 26, 19, 21, { 112, 135, 60, 83 } },
+    { 96, 108, 0, 0, 15, 27, 20, 22, { 112, 135, 84, 107 } },
+    { 120, 108, 0, 0, 16, 28, 21, 23, { 112, 135, 108, 131 } },
+    { 144, 108, 0, 0, 17, 29, 22, 18, { 112, 135, 132, 155 } },
+    { 24, 132, 0, 0, 18, 161, 29, 25, { 136, 159, 12, 35 } },
+    { 48, 132, 0, 0, 19, 161, 24, 26, { 136, 159, 36, 59 } },
+    { 72, 132, 0, 0, 20, 161, 25, 27, { 136, 159, 60, 83 } },
+    { 96, 132, 0, 0, 21, 161, 26, 28, { 136, 159, 84, 107 } },
+    { 120, 132, 0, 0, 22, 161, 27, 29, { 136, 159, 108, 131 } },
+    { 144, 132, 0, 0, 23, 161, 28, 24, { 136, 159, 132, 155 } },
+    { 84, 16, 0, 0, 33, 128, 30, 30, { 18, 38, 27, 140 } },
+    { 0, 0, 0, 0, 31, 31, 31, 31, { 18, 38, 6, 26 } },
+    { 0, 0, 0, 0, 32, 32, 32, 32, { 18, 38, 141, 161 } },
+    { 44, 168, 0, 0, 152, 30, 33, 33, { 168, 191, 0, 95 } },
+    { 0, 0, 0, 0, 34, 34, 34, 34, { 168, 191, 200, 223 } },
+    { 0, 0, 0, 0, 35, 35, 35, 35, { 168, 191, 232, 255 } },
+    { 212, 84, 0, 0, 38, 37, 36, 36, { 88, 111, 168, 255 } },
+    { 212, 108, 0, 0, 36, 38, 37, 37, { 112, 135, 168, 255 } },
+    { 212, 132, 0, 0, 37, 36, 38, 38, { 136, 159, 168, 255 } },
+    { 0, 0, 0, 0, 39, 39, 39, 39, { 0, 10, 8, 59 } },
+    { 0, 0, 0, 0, 40, 40, 40, 40, { 0, 10, 60, 109 } },
+    { 0, 0, 0, 0, 0, 0, 0, 0, { TOUCH_RECT_END, 0, 0, 0 } },
+};
+
+static const CursorMoveData sCursorData13[45] = {
+    { 24, 36, 0, 0, 30, 6, 5, 1, { 40, 63, 12, 35 } },
+    { 48, 36, 0, 0, 30, 7, 0, 2, { 40, 63, 36, 59 } },
+    { 72, 36, 0, 0, 30, 8, 1, 3, { 40, 63, 60, 83 } },
+    { 96, 36, 0, 0, 30, 9, 2, 4, { 40, 63, 84, 107 } },
+    { 120, 36, 0, 0, 30, 10, 3, 5, { 40, 63, 108, 131 } },
+    { 144, 36, 0, 0, 30, 11, 4, 0, { 40, 63, 132, 155 } },
+    { 24, 60, 0, 0, 0, 12, 11, 7, { 64, 87, 12, 35 } },
+    { 48, 60, 0, 0, 1, 13, 6, 8, { 64, 87, 36, 59 } },
+    { 72, 60, 0, 0, 2, 14, 7, 9, { 64, 87, 60, 83 } },
+    { 96, 60, 0, 0, 3, 15, 8, 10, { 64, 87, 84, 107 } },
+    { 120, 60, 0, 0, 4, 16, 9, 11, { 64, 87, 108, 131 } },
+    { 144, 60, 0, 0, 5, 17, 10, 6, { 64, 87, 132, 155 } },
+    { 24, 84, 0, 0, 6, 18, 17, 13, { 88, 111, 12, 35 } },
+    { 48, 84, 0, 0, 7, 19, 12, 14, { 88, 111, 36, 59 } },
+    { 72, 84, 0, 0, 8, 20, 13, 15, { 88, 111, 60, 83 } },
+    { 96, 84, 0, 0, 9, 21, 14, 16, { 88, 111, 84, 107 } },
+    { 120, 84, 0, 0, 10, 22, 15, 17, { 88, 111, 108, 131 } },
+    { 144, 84, 0, 0, 11, 23, 16, 12, { 88, 111, 132, 155 } },
+    { 24, 108, 0, 0, 12, 24, 23, 19, { 112, 135, 12, 35 } },
+    { 48, 108, 0, 0, 13, 25, 18, 20, { 112, 135, 36, 59 } },
+    { 72, 108, 0, 0, 14, 26, 19, 21, { 112, 135, 60, 83 } },
+    { 96, 108, 0, 0, 15, 27, 20, 22, { 112, 135, 84, 107 } },
+    { 120, 108, 0, 0, 16, 28, 21, 23, { 112, 135, 108, 131 } },
+    { 144, 108, 0, 0, 17, 29, 22, 18, { 112, 135, 132, 155 } },
+    { 24, 132, 0, 0, 18, 33, 29, 25, { 136, 159, 12, 35 } },
+    { 48, 132, 0, 0, 19, 33, 24, 26, { 136, 159, 36, 59 } },
+    { 72, 132, 0, 0, 20, 33, 25, 27, { 136, 159, 60, 83 } },
+    { 96, 132, 0, 0, 21, 33, 26, 28, { 136, 159, 84, 107 } },
+    { 120, 132, 0, 0, 22, 33, 27, 29, { 136, 159, 108, 131 } },
+    { 144, 132, 0, 0, 23, 33, 28, 24, { 136, 159, 132, 155 } },
+    { 84, 16, 0, 0, 33, 128, 30, 30, { 18, 38, 27, 140 } },
+    { 0, 0, 0, 0, 31, 31, 31, 31, { 18, 38, 6, 26 } },
+    { 0, 0, 0, 0, 32, 32, 32, 32, { 18, 38, 141, 161 } },
+    { 44, 168, 0, 0, 152, 30, 33, 33, { 168, 191, 0, 95 } },
+    { 0, 0, 0, 0, 34, 34, 34, 34, { 168, 191, 200, 223 } },
+    { 0, 0, 0, 0, 35, 35, 35, 35, { 168, 191, 232, 255 } },
+    { 212, 60, 0, 0, 39, 37, 36, 36, { 64, 87, 168, 255 } },
+    { 212, 84, 0, 0, 36, 38, 37, 37, { 88, 111, 168, 255 } },
+    { 212, 108, 0, 0, 37, 39, 38, 38, { 112, 135, 168, 255 } },
+    { 212, 132, 0, 0, 38, 36, 39, 39, { 136, 159, 168, 255 } },
+    { 0, 0, 0, 0, 40, 40, 40, 40, { 0, 10, 8, 59 } },
+    { 0, 0, 0, 0, 41, 41, 41, 41, { 0, 10, 60, 109 } },
+    { 0, 0, 0, 0, 42, 42, 42, 42, { 0, 10, 110, 159 } },
+    { 0, 0, 0, 0, 43, 43, 43, 43, { 168, 191, 168, 191 } },
+    { 0, 0, 0, 0, 0, 0, 0, 0, { TOUCH_RECT_END, 0, 0, 0 } },
+};
+
+// The positions of cursors 3, 4 and 6, which share the tray's layout. Each ends with an empty position, and
+// some functions use the positions after the tray's by themselves
+static const CursorMoveData sTrayCursorData[3][47] = {
+    {
+        { 24, 36, 0, 0, 30, 6, 5, 1, { 40, 63, 12, 35 } },
+        { 48, 36, 0, 0, 30, 7, 0, 2, { 40, 63, 36, 59 } },
+        { 72, 36, 0, 0, 30, 8, 1, 3, { 40, 63, 60, 83 } },
+        { 96, 36, 0, 0, 30, 9, 2, 4, { 40, 63, 84, 107 } },
+        { 120, 36, 0, 0, 30, 10, 3, 5, { 40, 63, 108, 131 } },
+        { 144, 36, 0, 0, 30, 11, 4, 0, { 40, 63, 132, 155 } },
+        { 24, 60, 0, 0, 0, 12, 11, 7, { 64, 87, 12, 35 } },
+        { 48, 60, 0, 0, 1, 13, 6, 8, { 64, 87, 36, 59 } },
+        { 72, 60, 0, 0, 2, 14, 7, 9, { 64, 87, 60, 83 } },
+        { 96, 60, 0, 0, 3, 15, 8, 10, { 64, 87, 84, 107 } },
+        { 120, 60, 0, 0, 4, 16, 9, 11, { 64, 87, 108, 131 } },
+        { 144, 60, 0, 0, 5, 17, 10, 6, { 64, 87, 132, 155 } },
+        { 24, 84, 0, 0, 6, 18, 17, 13, { 88, 111, 12, 35 } },
+        { 48, 84, 0, 0, 7, 19, 12, 14, { 88, 111, 36, 59 } },
+        { 72, 84, 0, 0, 8, 20, 13, 15, { 88, 111, 60, 83 } },
+        { 96, 84, 0, 0, 9, 21, 14, 16, { 88, 111, 84, 107 } },
+        { 120, 84, 0, 0, 10, 22, 15, 17, { 88, 111, 108, 131 } },
+        { 144, 84, 0, 0, 11, 23, 16, 12, { 88, 111, 132, 155 } },
+        { 24, 108, 0, 0, 12, 24, 23, 19, { 112, 135, 12, 35 } },
+        { 48, 108, 0, 0, 13, 25, 18, 20, { 112, 135, 36, 59 } },
+        { 72, 108, 0, 0, 14, 26, 19, 21, { 112, 135, 60, 83 } },
+        { 96, 108, 0, 0, 15, 27, 20, 22, { 112, 135, 84, 107 } },
+        { 120, 108, 0, 0, 16, 28, 21, 23, { 112, 135, 108, 131 } },
+        { 144, 108, 0, 0, 17, 29, 22, 18, { 112, 135, 132, 155 } },
+        { 24, 132, 0, 0, 18, 33, 29, 25, { 136, 159, 12, 35 } },
+        { 48, 132, 0, 0, 19, 33, 24, 26, { 136, 159, 36, 59 } },
+        { 72, 132, 0, 0, 20, 33, 25, 27, { 136, 159, 60, 83 } },
+        { 96, 132, 0, 0, 21, 33, 26, 28, { 136, 159, 84, 107 } },
+        { 120, 132, 0, 0, 22, 33, 27, 29, { 136, 159, 108, 131 } },
+        { 144, 132, 0, 0, 23, 33, 28, 24, { 136, 159, 132, 155 } },
+        { 84, 16, 0, 0, 33, 128, 30, 30, { 18, 38, 27, 140 } },
+        { 0, 0, 0, 0, 31, 31, 31, 31, { 18, 38, 6, 26 } },
+        { 0, 0, 0, 0, 32, 32, 32, 32, { 18, 38, 141, 161 } },
+        { 44, 168, 0, 0, 152, 30, 33, 33, { 168, 191, 0, 95 } },
+        { 0, 0, 0, 0, 34, 34, 34, 34, { 168, 191, 200, 223 } },
+        { 0, 0, 0, 0, 35, 35, 35, 35, { 168, 191, 232, 255 } },
+        { 212, 12, 0, 0, 41, 37, 36, 36, { 16, 39, 168, 255 } },
+        { 212, 36, 0, 0, 36, 38, 37, 37, { 40, 63, 168, 255 } },
+        { 212, 60, 0, 0, 37, 39, 38, 38, { 64, 87, 168, 255 } },
+        { 212, 84, 0, 0, 38, 40, 39, 39, { 88, 111, 168, 255 } },
+        { 212, 108, 0, 0, 39, 41, 40, 40, { 112, 135, 168, 255 } },
+        { 212, 132, 0, 0, 40, 36, 41, 41, { 136, 159, 168, 255 } },
+        { 0, 0, 0, 0, 42, 42, 42, 42, { 0, 8, 8, 56 } },
+        { 0, 0, 0, 0, 43, 43, 43, 43, { 0, 8, 64, 112 } },
+        { 0, 0, 0, 0, 44, 44, 44, 44, { 0, 8, 120, 168 } },
+        { 0, 0, 0, 0, 45, 45, 45, 45, { 168, 191, 168, 191 } },
+        { 0, 0, 0, 0, 0, 0, 0, 0, { TOUCH_RECT_END, 0, 0, 0 } },
+    },
+    {
+        { 24, 36, 0, 0, 30, 6, 34, 1, { 40, 63, 12, 35 } },
+        { 48, 36, 0, 0, 30, 7, 0, 2, { 40, 63, 36, 59 } },
+        { 72, 36, 0, 0, 30, 8, 1, 3, { 40, 63, 60, 83 } },
+        { 96, 36, 0, 0, 30, 9, 2, 4, { 40, 63, 84, 107 } },
+        { 120, 36, 0, 0, 30, 10, 3, 5, { 40, 63, 108, 131 } },
+        { 144, 36, 0, 0, 30, 11, 4, 162, { 40, 63, 132, 155 } },
+        { 24, 60, 0, 0, 0, 12, 35, 7, { 64, 87, 12, 35 } },
+        { 48, 60, 0, 0, 1, 13, 6, 8, { 64, 87, 36, 59 } },
+        { 72, 60, 0, 0, 2, 14, 7, 9, { 64, 87, 60, 83 } },
+        { 96, 60, 0, 0, 3, 15, 8, 10, { 64, 87, 84, 107 } },
+        { 120, 60, 0, 0, 4, 16, 9, 11, { 64, 87, 108, 131 } },
+        { 144, 60, 0, 0, 5, 17, 10, 163, { 64, 87, 132, 155 } },
+        { 24, 84, 0, 0, 6, 18, 36, 13, { 88, 111, 12, 35 } },
+        { 48, 84, 0, 0, 7, 19, 12, 14, { 88, 111, 36, 59 } },
+        { 72, 84, 0, 0, 8, 20, 13, 15, { 88, 111, 60, 83 } },
+        { 96, 84, 0, 0, 9, 21, 14, 16, { 88, 111, 84, 107 } },
+        { 120, 84, 0, 0, 10, 22, 15, 17, { 88, 111, 108, 131 } },
+        { 144, 84, 0, 0, 11, 23, 16, 164, { 88, 111, 132, 155 } },
+        { 24, 108, 0, 0, 12, 24, 37, 19, { 112, 135, 12, 35 } },
+        { 48, 108, 0, 0, 13, 25, 18, 20, { 112, 135, 36, 59 } },
+        { 72, 108, 0, 0, 14, 26, 19, 21, { 112, 135, 60, 83 } },
+        { 96, 108, 0, 0, 15, 27, 20, 22, { 112, 135, 84, 107 } },
+        { 120, 108, 0, 0, 16, 28, 21, 23, { 112, 135, 108, 131 } },
+        { 144, 108, 0, 0, 17, 29, 22, 165, { 112, 135, 132, 155 } },
+        { 24, 132, 0, 0, 18, 39, 37, 25, { 136, 159, 12, 35 } },
+        { 48, 132, 0, 0, 19, 39, 24, 26, { 136, 159, 36, 59 } },
+        { 72, 132, 0, 0, 20, 39, 25, 27, { 136, 159, 60, 83 } },
+        { 96, 132, 0, 0, 21, 39, 26, 28, { 136, 159, 84, 107 } },
+        { 120, 132, 0, 0, 22, 39, 27, 29, { 136, 159, 108, 131 } },
+        { 144, 132, 0, 0, 23, 39, 28, 165, { 136, 159, 132, 155 } },
+        { 84, 16, 0, 0, 39, 128, 30, 30, { 18, 38, 27, 140 } },
+        { 0, 0, 0, 0, 31, 31, 31, 31, { 18, 38, 6, 26 } },
+        { 0, 0, 0, 0, 32, 32, 32, 32, { 18, 38, 141, 161 } },
+        { 0, 0, 0, 0, 33, 33, 161, 33, { 0, 11, 200, 223 } },
+        { 212, 22, 0, 0, 34, 35, 133, 0, { 22, 45, 200, 223 } },
+        { 212, 56, 0, 0, 34, 36, 139, 6, { 56, 79, 200, 223 } },
+        { 212, 90, 0, 0, 35, 37, 145, 12, { 90, 113, 200, 223 } },
+        { 212, 124, 0, 0, 36, 37, 151, 18, { 124, 147, 200, 223 } },
+        { 0, 0, 0, 0, 38, 38, 166, 38, { 158, 167, 200, 223 } },
+        { 44, 168, 0, 0, 152, 30, 39, 39, { 168, 191, 0, 87 } },
+        { 0, 0, 0, 0, 40, 40, 40, 40, { 168, 191, 112, 135 } },
+        { 0, 0, 0, 0, 41, 41, 41, 41, { 168, 191, 232, 255 } },
+        { 0, 0, 0, 0, 42, 42, 42, 42, { 0, 10, 8, 59 } },
+        { 0, 0, 0, 0, 43, 43, 43, 43, { 0, 10, 60, 109 } },
+        { 0, 0, 0, 0, 44, 44, 44, 44, { 0, 10, 110, 159 } },
+        { 0, 0, 0, 0, 45, 45, 45, 45, { 168, 191, 168, 191 } },
+        { 0, 0, 0, 0, 0, 0, 0, 0, { TOUCH_RECT_END, 0, 0, 0 } },
+    },
+    {
+        { 24, 36, 0, 0, 36, 6, 31, 1, { 40, 63, 12, 35 } },
+        { 48, 36, 0, 0, 36, 7, 0, 2, { 40, 63, 36, 59 } },
+        { 72, 36, 0, 0, 36, 8, 1, 3, { 40, 63, 60, 83 } },
+        { 96, 36, 0, 0, 36, 9, 2, 4, { 40, 63, 84, 107 } },
+        { 120, 36, 0, 0, 36, 10, 3, 5, { 40, 63, 108, 131 } },
+        { 144, 36, 0, 0, 36, 11, 4, 158, { 40, 63, 132, 155 } },
+        { 24, 60, 0, 0, 0, 12, 31, 7, { 64, 87, 12, 35 } },
+        { 48, 60, 0, 0, 1, 13, 6, 8, { 64, 87, 36, 59 } },
+        { 72, 60, 0, 0, 2, 14, 7, 9, { 64, 87, 60, 83 } },
+        { 96, 60, 0, 0, 3, 15, 8, 10, { 64, 87, 84, 107 } },
+        { 120, 60, 0, 0, 4, 16, 9, 11, { 64, 87, 108, 131 } },
+        { 144, 60, 0, 0, 5, 17, 10, 158, { 64, 87, 132, 155 } },
+        { 24, 84, 0, 0, 6, 18, 33, 13, { 88, 111, 12, 35 } },
+        { 48, 84, 0, 0, 7, 19, 12, 14, { 88, 111, 36, 59 } },
+        { 72, 84, 0, 0, 8, 20, 13, 15, { 88, 111, 60, 83 } },
+        { 96, 84, 0, 0, 9, 21, 14, 16, { 88, 111, 84, 107 } },
+        { 120, 84, 0, 0, 10, 22, 15, 17, { 88, 111, 108, 131 } },
+        { 144, 84, 0, 0, 11, 23, 16, 160, { 88, 111, 132, 155 } },
+        { 24, 108, 0, 0, 12, 24, 35, 19, { 112, 135, 12, 35 } },
+        { 48, 108, 0, 0, 13, 25, 18, 20, { 112, 135, 36, 59 } },
+        { 72, 108, 0, 0, 14, 26, 19, 21, { 112, 135, 60, 83 } },
+        { 96, 108, 0, 0, 15, 27, 20, 22, { 112, 135, 84, 107 } },
+        { 120, 108, 0, 0, 16, 28, 21, 23, { 112, 135, 108, 131 } },
+        { 144, 108, 0, 0, 17, 29, 22, 162, { 112, 135, 132, 155 } },
+        { 24, 132, 0, 0, 18, 39, 35, 25, { 136, 159, 12, 35 } },
+        { 48, 132, 0, 0, 19, 39, 24, 26, { 136, 159, 36, 59 } },
+        { 72, 132, 0, 0, 20, 39, 25, 27, { 136, 159, 60, 83 } },
+        { 96, 132, 0, 0, 21, 39, 26, 28, { 136, 159, 84, 107 } },
+        { 120, 132, 0, 0, 22, 39, 27, 29, { 136, 159, 108, 131 } },
+        { 144, 132, 0, 0, 23, 39, 28, 162, { 136, 159, 132, 155 } },
+        { 192, 52, 0, 0, 34, 32, 133, 31, { 56, 79, 182, 205 } },
+        { 232, 60, 0, 0, 35, 33, 30, 128, { 64, 87, 218, 241 } },
+        { 192, 84, 0, 0, 30, 34, 145, 33, { 88, 111, 182, 205 } },
+        { 232, 92, 0, 0, 31, 35, 32, 140, { 96, 119, 218, 241 } },
+        { 192, 116, 0, 0, 32, 30, 151, 35, { 120, 143, 182, 205 } },
+        { 232, 124, 0, 0, 33, 31, 34, 152, { 128, 151, 218, 241 } },
+        { 84, 16, 0, 0, 39, 128, 36, 36, { 18, 38, 27, 140 } },
+        { 0, 0, 0, 0, 37, 37, 37, 37, { 18, 38, 6, 26 } },
+        { 0, 0, 0, 0, 38, 38, 38, 38, { 18, 38, 141, 161 } },
+        { 44, 168, 0, 0, 152, 36, 39, 39, { 168, 191, 0, 87 } },
+        { 0, 0, 0, 0, 40, 40, 40, 40, { 168, 191, 112, 135 } },
+        { 0, 0, 0, 0, 41, 41, 41, 41, { 168, 191, 232, 255 } },
+        { 0, 0, 0, 0, 42, 42, 42, 42, { 0, 10, 8, 59 } },
+        { 0, 0, 0, 0, 43, 43, 43, 43, { 0, 10, 60, 109 } },
+        { 0, 0, 0, 0, 44, 44, 44, 44, { 0, 10, 110, 159 } },
+        { 0, 0, 0, 0, 45, 45, 45, 45, { 168, 191, 168, 191 } },
+        { 0, 0, 0, 0, 0, 0, 0, 0, { TOUCH_RECT_END, 0, 0, 0 } },
+    },
+};
+
+// The positions of each cursor and their callbacks
+// clang-format off
+static const Box2CursorMoveTable sCursorMoveTables[16] = {
+    { sCursorData0, &sCursorCallbacks0 },
+    { sCursorData1, &sCursorCallbacks1 },
+    { sCursorData2, &sCursorCallbacks2 },
+    { sTrayCursorData[0], &sCursorCallbacks3 },
+    { sTrayCursorData[1], &sCursorCallbacks4 },
+    { sCursorData5, &sCursorCallbacks5 },
+    { sTrayCursorData[2], &sCursorCallbacks6 },
+    { sCursorData7, &sCursorCallbacks7 },
+    { sCursorData8, &sCursorCallbacks8 },
+    { sCursorData9, &sCursorCallbacks9 },
+    { sCursorData10, &sCursorCallbacks10 },
+    { sCursorData11, &sCursorCallbacks11 },
+    { sCursorData12, &sCursorCallbacks12 },
+    { sCursorData13, &sCursorCallbacks13 },
+    { sCursorData14, &sCursorCallbacks14 },
+    { sCursorData15, &sCursorCallbacks15 },
+};
+
+// clang-format on
+
+void Box2Ui_CreateCursor(Box2SysWork *syswk) {
+    BOOL visible;
+    u32 id;
+
+    visible = GCTX_HIDIsUsingTouch() == TRUE ? FALSE : TRUE;
+    switch (syswk->param->mode) {
+    case BOX2_MODE_DEPOSIT:
+        id = BOX2_CURSOR_DEPOSIT_PARTY;
+        break;
+    case BOX2_MODE_WITHDRAW:
+        id = BOX2_CURSOR_WITHDRAW;
+        break;
+    case BOX2_MODE_MOVE_POKEMON:
+        id = BOX2_CURSOR_ARRANGE_TRAY;
+        break;
+    case BOX2_MODE_MOVE_ITEMS:
+        id = BOX2_CURSOR_ITEM_TRAY;
+        break;
+    case BOX2_MODE_BATTLE_BOX:
+        id = BOX2_CURSOR_BATTLE_BOX_TRAY;
+        break;
+    case BOX2_MODE_DREAM_WORLD:
+        id = BOX2_CURSOR_DREAM_WORLD;
+        break;
+    }
+    Box2Ui_DeleteCursor(syswk);
+    syswk->app->cursorMove = CursorMove_Create(sCursorMoveTables[id].data, sCursorMoveTables[id].callbacks, syswk,
+                                               visible, syswk->curRcvPos, HEAPID_BOX2_APP);
+    CursorMove_SetHideOnTouch(syswk->app->cursorMove);
+    MoveCursorTo(syswk, syswk->curRcvPos);
+    Box2Obj_ShowCursor(syswk, visible);
+    syswk->app->oldCurPos = syswk->curRcvPos;
+}
+
+void Box2Ui_ChangeCursor(Box2SysWork *syswk, u32 id, u32 pos) {
+    BOOL visible = CursorMove_IsCursorVisible(syswk->app->cursorMove);
+
+    Box2Ui_DeleteCursor(syswk);
+    syswk->app->cursorMove = CursorMove_Create(sCursorMoveTables[id].data, sCursorMoveTables[id].callbacks, syswk,
+                                               visible, pos, HEAPID_BOX2_APP);
+    CursorMove_SetHideOnTouch(syswk->app->cursorMove);
+    MoveCursorTo(syswk, pos);
+    Box2Obj_ShowCursor(syswk, visible);
+    syswk->app->oldCurPos = pos;
+}
+
+void Box2Ui_DeleteCursor(Box2SysWork *syswk) {
+    if (syswk->app->cursorMove != NULL) {
+        CursorMove_Delete(syswk->app->cursorMove);
+        syswk->app->cursorMove = NULL;
+    }
+}
+
+void Box2Ui_PlaceCursorActor(Box2SysWork *syswk, u32 pos) {
+    const CursorMoveData *data = CursorMove_GetData(syswk->app->cursorMove, pos);
+
+    Box2Obj_SetPos(syswk->app, BOX2_ACTOR_CURSOR, data->x, data->y, CLACT_SURFACE_MAIN);
+}
+
+static void MoveCursorTo(Box2SysWork *syswk, u32 pos) {
+    Box2Ui_PlaceCursorActor(syswk, pos);
+    Box2Obj_MoveHeldIcons(syswk);
+}
+
+static void CursorOn(void *work, int pos, int prevPos) {
+    Box2SysWork *syswk = work;
+
+    MoveCursorTo(syswk, pos);
+    Box2Obj_SetVisible(syswk->app, BOX2_ACTOR_CURSOR, TRUE);
+}
+
+static void CursorOff(void *work, int pos, int prevPos) {
+    Box2SysWork *syswk = work;
+
+    Box2Obj_SetVisible(syswk->app, BOX2_ACTOR_CURSOR, FALSE);
+}
+
+static void CursorMoveAnim(void *work, int pos, int prevPos) {
+    Box2SysWork *syswk = work;
+
+    Box2Ui_StartCursorMove(syswk->app, pos, prevPos);
+    Box2Main_VFuncReq(syswk->app, Box2Main_VFuncCursorMove);
+}
+
+static void Cursor9_Touch(void *work, int pos, int prevPos) {
+    Box2SysWork *syswk = work;
+
+    CursorMove_SetPos(syswk->app->cursorMove, pos);
+    MoveCursorTo(syswk, pos);
+}
+
+static void CursorNone(void *work, int pos, int prevPos) {
+}
+
+u32 Box2Ui_UpdateCursor0(Box2SysWork *syswk) {
+    u8 prev = CursorMove_GetPos(syswk->app->cursorMove);
+    u32 res = CursorMove_Update(syswk->app->cursorMove);
+
+    if (Box2Frame_IsMenuOnScreen(syswk->app->bgWinFrame) == FALSE) {
+        if (res >= BOX2_DEPOSIT_PARTY_INPUT_DEPOSIT && res <= BOX2_DEPOSIT_PARTY_INPUT_CANCEL) {
+            CursorMove_SetPos(syswk->app->cursorMove, prev);
+            MoveCursorTo(syswk, prev);
+            return CURSORMOVE_NONE;
+        }
+        if (GCTX_HIDGetPressedKeys() & PAD_BUTTON_X) {
+            GCTX_HIDSetUsingTouch(FALSE);
+            return BOX2_DEPOSIT_PARTY_INPUT_CLOSE;
+        }
+        if (res == BOX2_DEPOSIT_PARTY_INPUT_CLOSE) {
+            GCTX_HIDSetUsingTouch(TRUE);
+            return BOX2_DEPOSIT_PARTY_INPUT_CLOSE;
+        }
+        if (res == BOX2_DEPOSIT_PARTY_INPUT_BACK) {
+            CursorMove_SetPos(syswk->app->cursorMove, prev);
+            return BOX2_DEPOSIT_PARTY_INPUT_BACK;
+        }
+    } else if (res == BOX2_DEPOSIT_PARTY_INPUT_CLOSE || res == BOX2_DEPOSIT_PARTY_INPUT_BACK) {
+        CursorMove_SetPos(syswk->app->cursorMove, prev);
+        MoveCursorTo(syswk, prev);
+        return CURSORMOVE_NONE;
+    }
+    return res;
+}
+
+static void Cursor0_Touch(void *work, int pos, int prevPos) {
+    if (pos != BOX2_DEPOSIT_PARTY_INPUT_CLOSE && pos != BOX2_DEPOSIT_PARTY_INPUT_BACK) {
+        MoveCursorTo(work, pos);
+    }
+}
+
+void Box2Ui_StartMoveToPartyPos(Box2SysWork *syswk, u32 pos) {
+    const CursorMoveData *data = CursorMove_GetData(syswk->app->cursorMove, pos);
+
+    StartCursorMoveWork(syswk->app, 84, 16, data->x, data->y);
+}
+
+void Box2Ui_StartMoveToCursor1(Box2SysWork *syswk, u32 pos) {
+    const CursorMoveData *to = sCursorData1;
+    const CursorMoveData *data;
+
+    if (pos < BOX2_TRAY_POKE_MAX) {
+        data = &sTrayCursorData[0][pos];
+    } else {
+        data = &sCursorData0[pos - BOX2_TRAY_POKE_MAX];
+    }
+    StartCursorMoveWork(syswk->app, data->x, data->y, to->x, to->y);
+}
+
+u32 Box2Ui_UpdateCursor2(Box2SysWork *syswk) {
+    u8 prev = CursorMove_GetPos(syswk->app->cursorMove);
+    u32 res = CursorMove_Update(syswk->app->cursorMove);
+
+    if (Box2Frame_IsMenuOnScreen(syswk->app->bgWinFrame) == FALSE) {
+        if (res >= BOX2_WITHDRAW_INPUT_WITHDRAW && res <= BOX2_WITHDRAW_INPUT_CANCEL) {
+            CursorMove_SetPos(syswk->app->cursorMove, prev);
+            MoveCursorTo(syswk, prev);
+            return CURSORMOVE_NONE;
+        }
+        if (GCTX_HIDGetPressedKeys() & PAD_BUTTON_X) {
+            GCTX_HIDSetUsingTouch(FALSE);
+            return BOX2_WITHDRAW_INPUT_CLOSE;
+        }
+        if (res == BOX2_WITHDRAW_INPUT_CLOSE) {
+            GCTX_HIDSetUsingTouch(TRUE);
+            return BOX2_WITHDRAW_INPUT_CLOSE;
+        }
+        if (res == BOX2_WITHDRAW_INPUT_BACK) {
+            CursorMove_SetPos(syswk->app->cursorMove, prev);
+            return BOX2_WITHDRAW_INPUT_BACK;
+        }
+    } else if (res == BOX2_WITHDRAW_INPUT_CLOSE || res == BOX2_WITHDRAW_INPUT_BACK) {
+        CursorMove_SetPos(syswk->app->cursorMove, prev);
+        MoveCursorTo(syswk, prev);
+        return CURSORMOVE_NONE;
+    }
+    if (res == CURSORMOVE_NONE) {
+        if (GCTX_HIDGetTypedKeys() & PAD_BUTTON_L) {
+            Box2Main_ShowCursor(syswk);
+            return BOX2_WITHDRAW_INPUT_SCROLL_LEFT;
+        }
+        if (GCTX_HIDGetTypedKeys() & PAD_BUTTON_R) {
+            Box2Main_ShowCursor(syswk);
+            return BOX2_WITHDRAW_INPUT_SCROLL_RIGHT;
+        }
+    }
+    return res;
+}
+
+static void Cursor2_Touch(void *work, int pos, int prevPos) {
+    if (pos != BOX2_WITHDRAW_INPUT_CLOSE && pos != BOX2_WITHDRAW_INPUT_BACK) {
+        MoveCursorTo(work, pos);
+    }
+}
+
+u32 Box2Ui_UpdateCursor3(Box2SysWork *syswk) {
+    u8 prev = CursorMove_GetPos(syswk->app->cursorMove);
+    u32 res = CursorMove_Update(syswk->app->cursorMove);
+
+    if (Box2Frame_IsMenuOnScreen(syswk->app->bgWinFrame) == FALSE) {
+        if (res >= BOX2_ARRANGE_TRAY_INPUT_MOVE && res <= BOX2_ARRANGE_TRAY_INPUT_CANCEL) {
+            CursorMove_SetPos(syswk->app->cursorMove, prev);
+            MoveCursorTo(syswk, prev);
+            return CURSORMOVE_NONE;
+        }
+        if (GCTX_HIDGetPressedKeys() & PAD_BUTTON_X) {
+            GCTX_HIDSetUsingTouch(FALSE);
+            return BOX2_ARRANGE_TRAY_INPUT_CLOSE;
+        }
+        if (res == BOX2_ARRANGE_TRAY_INPUT_CLOSE) {
+            GCTX_HIDSetUsingTouch(TRUE);
+            return BOX2_ARRANGE_TRAY_INPUT_CLOSE;
+        }
+        if (res == BOX2_ARRANGE_TRAY_INPUT_BACK) {
+            CursorMove_SetPos(syswk->app->cursorMove, prev);
+            return BOX2_ARRANGE_TRAY_INPUT_BACK;
+        }
+    } else if (res == BOX2_ARRANGE_TRAY_INPUT_PARTY || res == BOX2_ARRANGE_TRAY_INPUT_CLOSE ||
+               res == BOX2_ARRANGE_TRAY_INPUT_BACK || res == BOX2_ARRANGE_TRAY_INPUT_SEARCH) {
+        CursorMove_SetPos(syswk->app->cursorMove, prev);
+        MoveCursorTo(syswk, prev);
+        return CURSORMOVE_NONE;
+    }
+    if (res == CURSORMOVE_NONE) {
+        if (GCTX_HIDGetTypedKeys() & PAD_BUTTON_L) {
+            Box2Main_ShowCursor(syswk);
+            return BOX2_ARRANGE_TRAY_INPUT_SCROLL_LEFT;
+        }
+        if (GCTX_HIDGetTypedKeys() & PAD_BUTTON_R) {
+            Box2Main_ShowCursor(syswk);
+            return BOX2_ARRANGE_TRAY_INPUT_SCROLL_RIGHT;
+        }
+    }
+    return res;
+}
+
+static void Cursor3_Move(void *work, int pos, int prevPos) {
+    Box2SysWork *syswk = work;
+
+    Box2Ui_StartCursorMove(syswk->app, pos, prevPos);
+    Box2Main_VFuncReq(syswk->app, Box2Main_VFuncCursorMove);
+    syswk->app->oldCurPos = pos;
+}
+
+static void Cursor3_Touch(void *work, int pos, int prevPos) {
+    Box2SysWork *syswk = work;
+
+    if (pos == BOX2_ARRANGE_TRAY_INPUT_CLOSE || pos == BOX2_ARRANGE_TRAY_INPUT_BACK ||
+        pos == BOX2_ARRANGE_TRAY_INPUT_MENU_MODE || pos == BOX2_ARRANGE_TRAY_INPUT_SINGLE_MODE ||
+        pos == BOX2_ARRANGE_TRAY_INPUT_RANGE_MODE || pos == BOX2_ARRANGE_TRAY_INPUT_SEARCH) {
+        CursorMove_SetPos(syswk->app->cursorMove, syswk->app->oldCurPos);
+        pos = syswk->app->oldCurPos;
+    } else if (Box2Frame_IsMenuOnScreen(syswk->app->bgWinFrame) == FALSE && pos >= BOX2_ARRANGE_TRAY_INPUT_MOVE &&
+               pos <= BOX2_ARRANGE_TRAY_INPUT_CANCEL) {
+        CursorMove_SetPos(syswk->app->cursorMove, syswk->app->oldCurPos);
+        pos = syswk->app->oldCurPos;
+    } else {
+        MoveCursorTo(syswk, pos);
+    }
+    syswk->app->oldCurPos = pos;
+}
+
+void Box2Ui_SetButtonStates(Box2SysWork *syswk, u32 pos) {
+    u8 backButtonState = BOX2_BUTTON_ENABLED;
+    u8 summaryButtonState = BOX2_BUTTON_ENABLED;
+    u8 searchButtonState = BOX2_BUTTON_ENABLED;
+
+    if (syswk->pickState != BOX2_PICK_NONE) {
+        backButtonState = BOX2_BUTTON_DISABLED;
+        if (syswk->param->mode == BOX2_MODE_MOVE_ITEMS) {
+            summaryButtonState = BOX2_BUTTON_HIDDEN;
+            searchButtonState = BOX2_BUTTON_HIDDEN;
+        } else if (syswk->moveMode == BOX2_MOVE_MODE_RANGE) {
+            summaryButtonState = backButtonState;
+            searchButtonState = backButtonState;
+        }
+    } else if (syswk->param->mode == BOX2_MODE_MOVE_ITEMS) {
+        summaryButtonState = BOX2_BUTTON_HIDDEN;
+        searchButtonState = BOX2_BUTTON_HIDDEN;
+    } else if (pos >= BOX2_PARTY_POS) {
+        if (Box2Frame_IsPartyAtRight(syswk->app->bgWinFrame) == FALSE ||
+            Box2Main_GetPokeParam(syswk, pos, syswk->tray, PKM_PARAM_SPECIES_VALID, NULL) == 0) {
+            summaryButtonState = BOX2_BUTTON_DISABLED;
+        }
+    } else if (Box2Main_GetPokeParam(syswk, pos, syswk->tray, PKM_PARAM_SPECIES_VALID, NULL) == 0) {
+        summaryButtonState = BOX2_BUTTON_DISABLED;
+    }
+    Box2Obj_SetButtons(syswk, backButtonState, BOX2_BUTTON_HIDDEN, summaryButtonState, searchButtonState);
+}
+
+static void Cursor4_Move(void *work, int pos, int prevPos) {
+    Box2SysWork *syswk = work;
+
+    Box2Ui_SetButtonStates(syswk, pos);
+    Box2Ui_StartCursorMove(syswk->app, pos, prevPos);
+    Box2Main_VFuncReq(syswk->app, Box2Main_VFuncCursorMove);
+    syswk->app->oldCurPos = pos;
+}
+
+static void Cursor4_Touch(void *work, int pos, int prevPos) {
+    Box2SysWork *syswk = work;
+
+    if (pos == BOX2_MOVE_BOXLIST_INPUT_SCROLL_LEFT || pos == BOX2_MOVE_BOXLIST_INPUT_SCROLL_RIGHT) {
+        CursorMove_SetPos(syswk->app->cursorMove, BOX2_MOVE_BOXLIST_INPUT_TITLE);
+        pos = BOX2_MOVE_BOXLIST_INPUT_TITLE;
+    } else if (pos == BOX2_MOVE_BOXLIST_INPUT_LIST_SCROLL_UP || pos == BOX2_MOVE_BOXLIST_INPUT_LIST_SCROLL_DOWN ||
+               pos == BOX2_MOVE_BOXLIST_INPUT_SUMMARY || pos == BOX2_MOVE_BOXLIST_INPUT_BACK ||
+               pos == BOX2_MOVE_BOXLIST_INPUT_MENU_MODE || pos == BOX2_MOVE_BOXLIST_INPUT_SINGLE_MODE ||
+               pos == BOX2_MOVE_BOXLIST_INPUT_RANGE_MODE || pos == BOX2_MOVE_BOXLIST_INPUT_SEARCH) {
+        CursorMove_SetPos(syswk->app->cursorMove, syswk->app->oldCurPos);
+        pos = syswk->app->oldCurPos;
+    } else {
+        MoveCursorTo(syswk, pos);
+    }
+    Box2Main_UpdateRangeIconsPos(syswk, pos);
+    Box2Ui_SetButtonStates(syswk, pos);
+    syswk->app->oldCurPos = pos;
+}
+
+u32 Box2Ui_UpdateCursor4(Box2SysWork *syswk) {
+    u32 x;
+    u32 y;
+    u32 res = CursorMove_Update(syswk->app->cursorMove);
+
+    GFL_HIDGetTouchHeldPoint(&x, &y);
+    if (res == CURSORMOVE_NONE) {
+        if (GCTX_HIDGetPressedKeys() & PAD_BUTTON_Y) {
+            Box2Main_ShowCursor(syswk);
+            return BOX2_MOVE_BOXLIST_INPUT_SUMMARY;
+        }
+        if (GCTX_HIDGetTypedKeys() & PAD_BUTTON_L) {
+            Box2Main_ShowCursor(syswk);
+            Box2Main_UpdateRangeIconsPos(syswk, BOX2_PARTY_POS);
+            return BOX2_MOVE_BOXLIST_INPUT_SCROLL_LEFT;
+        }
+        if (GCTX_HIDGetTypedKeys() & PAD_BUTTON_R) {
+            Box2Main_ShowCursor(syswk);
+            Box2Main_UpdateRangeIconsPos(syswk, BOX2_PARTY_POS);
+            return BOX2_MOVE_BOXLIST_INPUT_SCROLL_RIGHT;
+        }
+    }
+    return res;
+}
+
+u32 Box2Ui_UpdateCursor5(Box2SysWork *syswk) {
+    u8 prev = CursorMove_GetPos(syswk->app->cursorMove);
+    u32 res = CursorMove_Update(syswk->app->cursorMove);
+
+    if (Box2Frame_IsMenuOnScreen(syswk->app->bgWinFrame) == FALSE) {
+        if (res >= BOX2_ARRANGE_PARTY_INPUT_MOVE && res <= BOX2_ARRANGE_PARTY_INPUT_CANCEL) {
+            CursorMove_SetPos(syswk->app->cursorMove, prev);
+            MoveCursorTo(syswk, prev);
+            return CURSORMOVE_NONE;
+        }
+        if (GCTX_HIDGetPressedKeys() & PAD_BUTTON_X) {
+            GCTX_HIDSetUsingTouch(FALSE);
+            return BOX2_ARRANGE_PARTY_INPUT_CLOSE;
+        }
+        if (res == BOX2_ARRANGE_PARTY_INPUT_CLOSE) {
+            GCTX_HIDSetUsingTouch(TRUE);
+            return BOX2_ARRANGE_PARTY_INPUT_CLOSE;
+        }
+        if (res == BOX2_ARRANGE_PARTY_INPUT_BACK) {
+            CursorMove_SetPos(syswk->app->cursorMove, prev);
+            return BOX2_ARRANGE_PARTY_INPUT_BACK;
+        }
+    } else if (res == BOX2_ARRANGE_PARTY_INPUT_BOXES || res == BOX2_ARRANGE_PARTY_INPUT_CLOSE ||
+               res == BOX2_ARRANGE_PARTY_INPUT_BACK || res == BOX2_ARRANGE_PARTY_INPUT_SEARCH) {
+        CursorMove_SetPos(syswk->app->cursorMove, prev);
+        MoveCursorTo(syswk, prev);
+        return CURSORMOVE_NONE;
+    }
+    return res;
+}
+
+static void Cursor5_Move(void *work, int pos, int prevPos) {
+    Box2SysWork *syswk = work;
+
+    Box2Ui_StartCursorMove(syswk->app, pos, prevPos);
+    Box2Main_VFuncReq(syswk->app, Box2Main_VFuncCursorMove);
+    syswk->app->oldCurPos = pos;
+}
+
+static void Cursor5_Touch(void *work, int pos, int prevPos) {
+    Box2SysWork *syswk = work;
+
+    if (pos == BOX2_ARRANGE_PARTY_INPUT_CLOSE || pos == BOX2_ARRANGE_PARTY_INPUT_BACK ||
+        pos == BOX2_ARRANGE_PARTY_INPUT_MENU_MODE || pos == BOX2_ARRANGE_PARTY_INPUT_SINGLE_MODE ||
+        pos == BOX2_ARRANGE_PARTY_INPUT_RANGE_MODE || pos == BOX2_ARRANGE_PARTY_INPUT_SEARCH) {
+        CursorMove_SetPos(syswk->app->cursorMove, syswk->app->oldCurPos);
+        pos = syswk->app->oldCurPos;
+    } else if (Box2Frame_IsMenuOnScreen(syswk->app->bgWinFrame) == FALSE && pos >= BOX2_ARRANGE_PARTY_INPUT_MOVE &&
+               pos <= BOX2_ARRANGE_PARTY_INPUT_CANCEL) {
+        CursorMove_SetPos(syswk->app->cursorMove, syswk->app->oldCurPos);
+        pos = syswk->app->oldCurPos;
+    } else {
+        MoveCursorTo(syswk, pos);
+    }
+    syswk->app->oldCurPos = pos;
+}
+
+u32 Box2Ui_UpdateCursor6(Box2SysWork *syswk) {
+    u32 res = CursorMove_Update(syswk->app->cursorMove);
+
+    if (res == CURSORMOVE_NONE) {
+        if (GCTX_HIDGetPressedKeys() & PAD_BUTTON_Y) {
+            Box2Main_ShowCursor(syswk);
+            return BOX2_MOVE_PARTY_INPUT_SUMMARY;
+        }
+        if (GCTX_HIDGetTypedKeys() & PAD_BUTTON_L) {
+            Box2Main_ShowCursor(syswk);
+            Box2Main_UpdateRangeIconsPos(syswk, BOX2_BOXLIST_POS);
+            return BOX2_MOVE_PARTY_INPUT_SCROLL_LEFT;
+        }
+        if (GCTX_HIDGetTypedKeys() & PAD_BUTTON_R) {
+            Box2Main_ShowCursor(syswk);
+            Box2Main_UpdateRangeIconsPos(syswk, BOX2_BOXLIST_POS);
+            return BOX2_MOVE_PARTY_INPUT_SCROLL_RIGHT;
+        }
+    }
+    return res;
+}
+
+static void Cursor6_Move(void *work, int pos, int prevPos) {
+    Box2SysWork *syswk = work;
+
+    Box2Ui_SetButtonStates(syswk, pos);
+    Box2Ui_StartCursorMove(syswk->app, pos, prevPos);
+    Box2Main_VFuncReq(syswk->app, Box2Main_VFuncCursorMove);
+    syswk->app->oldCurPos = pos;
+}
+
+static void Cursor6_Touch(void *work, int pos, int prevPos) {
+    Box2SysWork *syswk = work;
+
+    if (pos == BOX2_MOVE_PARTY_INPUT_SCROLL_LEFT || pos == BOX2_MOVE_PARTY_INPUT_SCROLL_RIGHT) {
+        CursorMove_SetPos(syswk->app->cursorMove, BOX2_MOVE_PARTY_INPUT_TITLE);
+        pos = BOX2_MOVE_PARTY_INPUT_TITLE;
+    } else if (pos == BOX2_MOVE_PARTY_INPUT_SUMMARY || pos == BOX2_MOVE_PARTY_INPUT_BACK ||
+               pos == BOX2_MOVE_PARTY_INPUT_MENU_MODE || pos == BOX2_MOVE_PARTY_INPUT_SINGLE_MODE ||
+               pos == BOX2_MOVE_PARTY_INPUT_RANGE_MODE || pos == BOX2_MOVE_PARTY_INPUT_SEARCH) {
+        CursorMove_SetPos(syswk->app->cursorMove, syswk->app->oldCurPos);
+        pos = syswk->app->oldCurPos;
+    } else {
+        MoveCursorTo(syswk, pos);
+    }
+    Box2Main_UpdateRangeIconsPos(syswk, pos);
+    Box2Ui_SetButtonStates(syswk, pos);
+    syswk->app->oldCurPos = pos;
+}
+
+u32 Box2Ui_UpdateCursor7(Box2SysWork *syswk) {
+    u8 prev = CursorMove_GetPos(syswk->app->cursorMove);
+    u32 res = CursorMove_Update(syswk->app->cursorMove);
+
+    if (Box2Frame_IsMenuOnScreen(syswk->app->bgWinFrame) == FALSE) {
+        if (res == BOX2_ITEM_TRAY_INPUT_MOVE || res == BOX2_ITEM_TRAY_INPUT_BAG || res == BOX2_ITEM_TRAY_INPUT_CANCEL) {
+            CursorMove_SetPos(syswk->app->cursorMove, prev);
+            MoveCursorTo(syswk, prev);
+            return CURSORMOVE_NONE;
+        }
+        if (GCTX_HIDGetPressedKeys() & PAD_BUTTON_X) {
+            GCTX_HIDSetUsingTouch(FALSE);
+            return BOX2_ITEM_TRAY_INPUT_CLOSE;
+        }
+        if (res == BOX2_ITEM_TRAY_INPUT_CLOSE) {
+            GCTX_HIDSetUsingTouch(TRUE);
+            return BOX2_ITEM_TRAY_INPUT_CLOSE;
+        }
+        if (res == BOX2_ITEM_TRAY_INPUT_BACK) {
+            CursorMove_SetPos(syswk->app->cursorMove, prev);
+            return BOX2_ITEM_TRAY_INPUT_BACK;
+        }
+    } else if (res == BOX2_ITEM_TRAY_INPUT_PARTY || res == BOX2_ITEM_TRAY_INPUT_CLOSE ||
+               res == BOX2_ITEM_TRAY_INPUT_BACK) {
+        CursorMove_SetPos(syswk->app->cursorMove, prev);
+        MoveCursorTo(syswk, prev);
+        return CURSORMOVE_NONE;
+    }
+    if (res == CURSORMOVE_NONE) {
+        if (GCTX_HIDGetTypedKeys() & PAD_BUTTON_L) {
+            Box2Main_ShowCursor(syswk);
+            return BOX2_ITEM_TRAY_INPUT_SCROLL_LEFT;
+        }
+        if (GCTX_HIDGetTypedKeys() & PAD_BUTTON_R) {
+            Box2Main_ShowCursor(syswk);
+            return BOX2_ITEM_TRAY_INPUT_SCROLL_RIGHT;
+        }
+    }
+    return res;
+}
+
+static void Cursor7_Move(void *work, int pos, int prevPos) {
+    Box2SysWork *syswk = work;
+
+    Box2Ui_StartCursorMove(syswk->app, pos, prevPos);
+    Box2Main_VFuncReq(syswk->app, Box2Main_VFuncCursorMove);
+    syswk->app->oldCurPos = pos;
+}
+
+static void Cursor7_Touch(void *work, int pos, int prevPos) {
+    Box2SysWork *syswk = work;
+
+    if (pos == BOX2_ITEM_TRAY_INPUT_CLOSE || pos == BOX2_ITEM_TRAY_INPUT_BACK ||
+        pos == BOX2_ITEM_TRAY_INPUT_MENU_MODE || pos == BOX2_ITEM_TRAY_INPUT_SINGLE_MODE) {
+        CursorMove_SetPos(syswk->app->cursorMove, syswk->app->oldCurPos);
+        pos = syswk->app->oldCurPos;
+    } else {
+        MoveCursorTo(syswk, pos);
+    }
+    syswk->app->oldCurPos = pos;
+}
+
+u32 Box2Ui_UpdateCursor8(Box2SysWork *syswk) {
+    u8 prev = CursorMove_GetPos(syswk->app->cursorMove);
+    u32 res = CursorMove_Update(syswk->app->cursorMove);
+
+    if (Box2Frame_IsMenuOnScreen(syswk->app->bgWinFrame) == FALSE) {
+        if (res == BOX2_ITEM_PARTY_INPUT_MOVE || res == BOX2_ITEM_PARTY_INPUT_BAG ||
+            res == BOX2_ITEM_PARTY_INPUT_CANCEL) {
+            CursorMove_SetPos(syswk->app->cursorMove, prev);
+            MoveCursorTo(syswk, prev);
+            return CURSORMOVE_NONE;
+        }
+        if (GCTX_HIDGetPressedKeys() & PAD_BUTTON_X) {
+            GCTX_HIDSetUsingTouch(FALSE);
+            return BOX2_ITEM_PARTY_INPUT_CLOSE;
+        }
+        if (res == BOX2_ITEM_PARTY_INPUT_CLOSE) {
+            GCTX_HIDSetUsingTouch(TRUE);
+            return BOX2_ITEM_PARTY_INPUT_CLOSE;
+        }
+        if (res == BOX2_ITEM_PARTY_INPUT_BACK) {
+            CursorMove_SetPos(syswk->app->cursorMove, prev);
+            return BOX2_ITEM_PARTY_INPUT_BACK;
+        }
+    } else if (res == BOX2_ITEM_PARTY_INPUT_BOXES || res == BOX2_ITEM_PARTY_INPUT_CLOSE ||
+               res == BOX2_ITEM_PARTY_INPUT_BACK) {
+        CursorMove_SetPos(syswk->app->cursorMove, prev);
+        MoveCursorTo(syswk, prev);
+        return CURSORMOVE_NONE;
+    }
+    return res;
+}
+
+static void Cursor8_Move(void *work, int pos, int prevPos) {
+    Box2SysWork *syswk = work;
+
+    Box2Ui_StartCursorMove(syswk->app, pos, prevPos);
+    Box2Main_VFuncReq(syswk->app, Box2Main_VFuncCursorMove);
+    syswk->app->oldCurPos = pos;
+}
+
+static void Cursor8_Touch(void *work, int pos, int prevPos) {
+    Box2SysWork *syswk = work;
+
+    if (pos == BOX2_ITEM_PARTY_INPUT_CLOSE || pos == BOX2_ITEM_PARTY_INPUT_BACK ||
+        pos == BOX2_ITEM_PARTY_INPUT_MENU_MODE || pos == BOX2_ITEM_PARTY_INPUT_SINGLE_MODE) {
+        CursorMove_SetPos(syswk->app->cursorMove, syswk->app->oldCurPos);
+        pos = syswk->app->oldCurPos;
+    } else {
+        MoveCursorTo(syswk, pos);
+    }
+    syswk->app->oldCurPos = pos;
+}
+
+static void Cursor10_Move(void *work, int pos, int prevPos) {
+    Box2SysWork *syswk = work;
+
+    Box2Ui_StartCursorMove(syswk->app, pos, prevPos);
+    Box2Main_VFuncReq(syswk->app, Box2Main_VFuncCursorMove);
+}
+
+static void Cursor10_Touch(void *work, int pos, int prevPos) {
+    Box2SysWork *syswk = work;
+
+    CursorMove_SetPos(syswk->app->cursorMove, pos);
+    MoveCursorTo(syswk, pos);
+}
+
+static void Cursor11_Move(void *work, int pos, int prevPos) {
+    Box2SysWork *syswk = work;
+
+    Box2Ui_StartCursorMove(syswk->app, pos, prevPos);
+    Box2Main_VFuncReq(syswk->app, Box2Main_VFuncCursorMove);
+}
+
+static void Cursor11_Touch(void *work, int pos, int prevPos) {
+    Box2SysWork *syswk = work;
+
+    CursorMove_SetPos(syswk->app->cursorMove, pos);
+    MoveCursorTo(syswk, pos);
+}
+
+static void Cursor12_Move(void *work, int pos, int prevPos) {
+    Box2SysWork *syswk = work;
+
+    if (pos >= BOX2_BOX_JUMP_INPUT_BOX_ROW_FIRST && pos <= BOX2_BOX_JUMP_INPUT_BOX_ROW_LAST) {
+        Box2Obj_ShowBoxNameFrame(syswk, pos - 1, TRUE);
+    } else {
+        Box2Obj_ShowBoxNameFrame(syswk, 0, FALSE);
+    }
+    Box2Ui_StartCursorMove(syswk->app, pos, prevPos);
+    Box2Main_VFuncReq(syswk->app, Box2Main_VFuncCursorMove);
+    syswk->app->oldCurPos = pos;
+}
+
+static void Cursor12_Touch(void *work, int pos, int prevPos) {
+    Box2SysWork *syswk = work;
+
+    if (pos == BOX2_BOX_JUMP_INPUT_SCROLL_UP || pos == BOX2_BOX_JUMP_INPUT_SCROLL_DOWN ||
+        pos == BOX2_BOX_JUMP_INPUT_BACK) {
+        CursorMove_SetPos(syswk->app->cursorMove, syswk->app->oldCurPos);
+        pos = syswk->app->oldCurPos;
+    } else {
+        MoveCursorTo(syswk, pos);
+    }
+    syswk->app->oldCurPos = pos;
+}
+
+u32 Box2Ui_UpdateCursor13(Box2SysWork *syswk) {
+    u8 prev = CursorMove_GetPos(syswk->app->cursorMove);
+    u32 res = CursorMove_Update(syswk->app->cursorMove);
+
+    if (Box2Frame_IsMenuOnScreen(syswk->app->bgWinFrame) == FALSE) {
+        if (res >= BOX2_BATTLE_BOX_TRAY_INPUT_MOVE && res <= BOX2_BATTLE_BOX_TRAY_INPUT_CANCEL) {
+            CursorMove_SetPos(syswk->app->cursorMove, prev);
+            MoveCursorTo(syswk, prev);
+            return CURSORMOVE_NONE;
+        }
+        if (GCTX_HIDGetPressedKeys() & PAD_BUTTON_X) {
+            GCTX_HIDSetUsingTouch(FALSE);
+            return BOX2_BATTLE_BOX_TRAY_INPUT_CLOSE;
+        }
+        if (res == BOX2_BATTLE_BOX_TRAY_INPUT_CLOSE) {
+            GCTX_HIDSetUsingTouch(TRUE);
+            return BOX2_BATTLE_BOX_TRAY_INPUT_CLOSE;
+        }
+        if (res == BOX2_BATTLE_BOX_TRAY_INPUT_BACK) {
+            CursorMove_SetPos(syswk->app->cursorMove, prev);
+            return BOX2_BATTLE_BOX_TRAY_INPUT_BACK;
+        }
+    } else if (res == BOX2_BATTLE_BOX_TRAY_INPUT_TITLE || res == BOX2_BATTLE_BOX_TRAY_INPUT_PARTY ||
+               res == BOX2_BATTLE_BOX_TRAY_INPUT_CLOSE || res == BOX2_BATTLE_BOX_TRAY_INPUT_BACK ||
+               res == BOX2_BATTLE_BOX_TRAY_INPUT_SEARCH) {
+        CursorMove_SetPos(syswk->app->cursorMove, prev);
+        MoveCursorTo(syswk, prev);
+        return CURSORMOVE_NONE;
+    }
+    if (res == CURSORMOVE_NONE) {
+        if (GCTX_HIDGetTypedKeys() & PAD_BUTTON_L) {
+            Box2Main_ShowCursor(syswk);
+            return BOX2_BATTLE_BOX_TRAY_INPUT_SCROLL_LEFT;
+        }
+        if (GCTX_HIDGetTypedKeys() & PAD_BUTTON_R) {
+            Box2Main_ShowCursor(syswk);
+            return BOX2_BATTLE_BOX_TRAY_INPUT_SCROLL_RIGHT;
+        }
+    }
+    return res;
+}
+
+static void Cursor13_Move(void *work, int pos, int prevPos) {
+    Box2SysWork *syswk = work;
+
+    Box2Ui_StartCursorMove(syswk->app, pos, prevPos);
+    Box2Main_VFuncReq(syswk->app, Box2Main_VFuncCursorMove);
+    syswk->app->oldCurPos = pos;
+}
+
+static void Cursor13_Touch(void *work, int pos, int prevPos) {
+    Box2SysWork *syswk = work;
+
+    if (pos == BOX2_BATTLE_BOX_TRAY_INPUT_CLOSE || pos == BOX2_BATTLE_BOX_TRAY_INPUT_BACK ||
+        pos == BOX2_BATTLE_BOX_TRAY_INPUT_MENU_MODE || pos == BOX2_BATTLE_BOX_TRAY_INPUT_SINGLE_MODE ||
+        pos == BOX2_BATTLE_BOX_TRAY_INPUT_RANGE_MODE || pos == BOX2_BATTLE_BOX_TRAY_INPUT_SEARCH) {
+        CursorMove_SetPos(syswk->app->cursorMove, syswk->app->oldCurPos);
+        pos = syswk->app->oldCurPos;
+    } else if (Box2Frame_IsMenuOnScreen(syswk->app->bgWinFrame) == FALSE && pos >= BOX2_BATTLE_BOX_TRAY_INPUT_MOVE &&
+               pos <= BOX2_BATTLE_BOX_TRAY_INPUT_CANCEL) {
+        CursorMove_SetPos(syswk->app->cursorMove, syswk->app->oldCurPos);
+        pos = syswk->app->oldCurPos;
+    } else {
+        MoveCursorTo(syswk, pos);
+    }
+    syswk->app->oldCurPos = pos;
+}
+
+u32 Box2Ui_UpdateCursor14(Box2SysWork *syswk) {
+    u8 prev = CursorMove_GetPos(syswk->app->cursorMove);
+    u32 res = CursorMove_Update(syswk->app->cursorMove);
+
+    if (Box2Frame_IsMenuOnScreen(syswk->app->bgWinFrame) == FALSE) {
+        if (res >= BOX2_BATTLE_BOX_PARTY_INPUT_MOVE && res <= BOX2_BATTLE_BOX_PARTY_INPUT_CANCEL) {
+            CursorMove_SetPos(syswk->app->cursorMove, prev);
+            MoveCursorTo(syswk, prev);
+            return CURSORMOVE_NONE;
+        }
+        if (GCTX_HIDGetPressedKeys() & PAD_BUTTON_X) {
+            GCTX_HIDSetUsingTouch(FALSE);
+            return BOX2_BATTLE_BOX_PARTY_INPUT_CLOSE;
+        }
+        if (res == BOX2_BATTLE_BOX_PARTY_INPUT_CLOSE) {
+            GCTX_HIDSetUsingTouch(TRUE);
+            return BOX2_BATTLE_BOX_PARTY_INPUT_CLOSE;
+        }
+        if (res == BOX2_BATTLE_BOX_PARTY_INPUT_BACK) {
+            CursorMove_SetPos(syswk->app->cursorMove, prev);
+            return BOX2_BATTLE_BOX_PARTY_INPUT_BACK;
+        }
+    } else if (res == BOX2_BATTLE_BOX_PARTY_INPUT_BOXES || res == BOX2_BATTLE_BOX_PARTY_INPUT_CLOSE ||
+               res == BOX2_BATTLE_BOX_PARTY_INPUT_BACK || res == BOX2_BATTLE_BOX_PARTY_INPUT_SEARCH) {
+        CursorMove_SetPos(syswk->app->cursorMove, prev);
+        MoveCursorTo(syswk, prev);
+        return CURSORMOVE_NONE;
+    }
+    return res;
+}
+
+static void Cursor14_Move(void *work, int pos, int prevPos) {
+    Box2SysWork *syswk = work;
+
+    Box2Ui_StartCursorMove(syswk->app, pos, prevPos);
+    Box2Main_VFuncReq(syswk->app, Box2Main_VFuncCursorMove);
+    syswk->app->oldCurPos = pos;
+}
+
+static void Cursor14_Touch(void *work, int pos, int prevPos) {
+    Box2SysWork *syswk = work;
+
+    if (pos == BOX2_BATTLE_BOX_PARTY_INPUT_CLOSE || pos == BOX2_BATTLE_BOX_PARTY_INPUT_BACK ||
+        pos == BOX2_BATTLE_BOX_PARTY_INPUT_MENU_MODE || pos == BOX2_BATTLE_BOX_PARTY_INPUT_SINGLE_MODE ||
+        pos == BOX2_BATTLE_BOX_PARTY_INPUT_RANGE_MODE || pos == BOX2_BATTLE_BOX_PARTY_INPUT_SEARCH) {
+        CursorMove_SetPos(syswk->app->cursorMove, syswk->app->oldCurPos);
+        pos = syswk->app->oldCurPos;
+    } else if (Box2Frame_IsMenuOnScreen(syswk->app->bgWinFrame) == FALSE && pos >= BOX2_BATTLE_BOX_PARTY_INPUT_MOVE &&
+               pos <= BOX2_BATTLE_BOX_PARTY_INPUT_CANCEL) {
+        CursorMove_SetPos(syswk->app->cursorMove, syswk->app->oldCurPos);
+        pos = syswk->app->oldCurPos;
+    } else {
+        MoveCursorTo(syswk, pos);
+    }
+    syswk->app->oldCurPos = pos;
+}
+
+u32 Box2Ui_UpdateCursor15(Box2SysWork *syswk) {
+    u8 prev = CursorMove_GetPos(syswk->app->cursorMove);
+    u32 res = CursorMove_Update(syswk->app->cursorMove);
+
+    if (Box2Frame_IsMenuOnScreen(syswk->app->bgWinFrame) == FALSE) {
+        if (res >= BOX2_DREAM_WORLD_INPUT_TUCK_IN && res <= BOX2_DREAM_WORLD_INPUT_CANCEL) {
+            CursorMove_SetPos(syswk->app->cursorMove, prev);
+            MoveCursorTo(syswk, prev);
+            return CURSORMOVE_NONE;
+        }
+        if (res == BOX2_DREAM_WORLD_INPUT_BACK) {
+            CursorMove_SetPos(syswk->app->cursorMove, prev);
+            return BOX2_DREAM_WORLD_INPUT_BACK;
+        }
+    } else if (res == BOX2_DREAM_WORLD_INPUT_TITLE || res == BOX2_DREAM_WORLD_INPUT_BACK) {
+        CursorMove_SetPos(syswk->app->cursorMove, prev);
+        MoveCursorTo(syswk, prev);
+        return CURSORMOVE_NONE;
+    }
+    if (res == CURSORMOVE_NONE) {
+        if (GCTX_HIDGetTypedKeys() & PAD_BUTTON_L) {
+            Box2Main_ShowCursor(syswk);
+            return BOX2_DREAM_WORLD_INPUT_SCROLL_LEFT;
+        }
+        if (GCTX_HIDGetTypedKeys() & PAD_BUTTON_R) {
+            Box2Main_ShowCursor(syswk);
+            return BOX2_DREAM_WORLD_INPUT_SCROLL_RIGHT;
+        }
+    }
+    return res;
+}
+
+static void Cursor15_Move(void *work, int pos, int prevPos) {
+    Box2SysWork *syswk = work;
+
+    Box2Ui_StartCursorMove(syswk->app, pos, prevPos);
+    Box2Main_VFuncReq(syswk->app, Box2Main_VFuncCursorMove);
+}
+
+static void Cursor15_Touch(void *work, int pos, int prevPos) {
+    if (pos != BOX2_DREAM_WORLD_INPUT_BACK) {
+        MoveCursorTo(work, pos);
+    }
+}
+
+void Box2Ui_StartCursorMove(Box2AppWork *app, u32 pos, u32 curPos) {
+    const CursorMoveData *from = CursorMove_GetData(app->cursorMove, pos);
+    const CursorMoveData *to = CursorMove_GetData(app->cursorMove, curPos);
+
+    StartCursorMoveWork(app, from->x, from->y, to->x, to->y);
+}
+
+static void StartCursorMoveWork(Box2AppWork *app, u8 fromX, u8 fromY, u8 toX, u8 toY) {
+    Box2CursorMoveWork *mv = GFL_HeapAllocate(HEAPID_BOX2_APP, sizeof(Box2CursorMoveWork), FALSE, "box2_ui.c", 2600);
+
+    mv->cnt = 4;
+    mv->px = fromX;
+    mv->py = fromY;
+    if (fromX >= toX) {
+        mv->vx = fromX - toX;
+        mv->mx = 0;
+    } else {
+        mv->vx = toX - fromX;
+        mv->mx = 1;
+    }
+    if (fromY >= toY) {
+        mv->vy = fromY - toY;
+        mv->my = 0;
+    } else {
+        mv->vy = toY - fromY;
+        mv->my = 1;
+    }
+    mv->vx = (mv->vx << 8) / mv->cnt >> 8;
+    mv->vy = (mv->vy << 8) / mv->cnt >> 8;
+    app->vfunk.work = mv;
+}
+
+static u32 FindTriggeredRect(const CursorMoveData *data, u32 count) {
+    TouchRect rects[2];
+    u32 i;
+
+    rects[1] = sTouchRectEnd;
+    for (i = 0; i < count; i++) {
+        rects[0] = data[i].rect;
+        if (GFL_HIDGetTouchPressedRect(rects) != TOUCH_RECT_NONE) {
+            return i;
+        }
+    }
+    return CURSORMOVE_NONE;
+}
+
+static u32 FindHeldRect(const CursorMoveData *data, u32 count) {
+    TouchRect rects[2];
+    u32 i;
+
+    rects[1] = sTouchRectEnd;
+    for (i = 0; i < count; i++) {
+        rects[0] = data[i].rect;
+        if (GFL_HIDGetTouchHeldRect(rects) != TOUCH_RECT_NONE) {
+            return i;
+        }
+    }
+    return CURSORMOVE_NONE;
+}
+
+static u32 FindRectAt(const CursorMoveData *data, u32 count, u32 x, u32 y) {
+    TouchRect rects[2];
+    u32 i;
+
+    rects[1] = sTouchRectEnd;
+    for (i = 0; i < count; i++) {
+        rects[0] = data[i].rect;
+        if (GFL_HIDGetTouchRectAt(rects, x, y) != TOUCH_RECT_NONE) {
+            return i;
+        }
+    }
+    return CURSORMOVE_NONE;
+}
+
+u32 Box2Ui_GetTrayPokeTrigger(void) {
+    return FindTriggeredRect(sTrayCursorData[0], BOX2_TRAY_POKE_MAX);
+}
+
+u32 Box2Ui_GetTrayPokeHeld(void) {
+    return FindHeldRect(sTrayCursorData[0], BOX2_TRAY_POKE_MAX);
+}
+
+u32 Box2Ui_GetTrayPokeAt(u32 x, u32 y) {
+    return FindRectAt(sTrayCursorData[0], BOX2_TRAY_POKE_MAX, x, y);
+}
+
+u32 Box2Ui_GetLeftPartyPokeTrigger(void) {
+    return FindTriggeredRect(sCursorData5, 6);
+}
+
+u32 Box2Ui_GetPartyPokeTrigger(void) {
+    return FindTriggeredRect(&sTrayCursorData[2][30], 6);
+}
+
+u32 Box2Ui_GetPartyPokeHeld(void) {
+    return FindHeldRect(&sTrayCursorData[2][30], 6);
+}
+
+u32 Box2Ui_GetTrayArrowHeld(void) {
+    return FindHeldRect(&sTrayCursorData[0][31], 2);
+}
+
+u32 Box2Ui_GetBoxListArrowHeld(void) {
+    return GFL_HIDGetTouchHeldRect(sBoxListArrowRects);
+}
+
+BOOL Box2Ui_GetBoxListScrollTouch(u32 *x, u32 *y) {
+    if (GFL_HIDGetTouchHeldRect(sBoxListScrollTouchRects) != TOUCH_RECT_NONE) {
+        GFL_HIDGetTouchHeldPoint(x, y);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+BOOL Box2Ui_GetBoxListTouch(u32 *x, u32 *y) {
+    if (GFL_HIDGetTouchHeldRect(sBoxListTouchRect) != TOUCH_RECT_NONE) {
+        GFL_HIDGetTouchHeldPoint(x, y);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+int Box2Ui_GetBoxListRowAt(u32 x, u32 y) {
+    int res = GFL_HIDGetTouchRectAt(sBoxListRowTouchRects, x, y);
+
+    if (res == TOUCH_RECT_NONE) {
+        return TOUCH_RECT_NONE;
+    }
+    return res;
+}
+
+u32 Box2Ui_GetBoxListPosAt(u32 x, u32 y) {
+    u32 res = FindRectAt(&sTrayCursorData[1][34], 4, x, y);
+
+    if (res != CURSORMOVE_NONE) {
+        return res + BOX2_BOXLIST_POS;
+    }
+    return BOX2_GET_NONE;
+}
+
+BOOL Box2Ui_IsPartyLeftHeld(void) {
+    if (GFL_HIDGetTouchHeldRect(sLeftPartyTouchRect) != TOUCH_RECT_NONE) {
+        return TRUE;
+    }
+    return FALSE;
+}
+
+BOOL Box2Ui_IsPartyRightHeld(void) {
+    if (GFL_HIDGetTouchHeldRect(sRightPartyTouchRect) != TOUCH_RECT_NONE) {
+        return TRUE;
+    }
+    return FALSE;
+}
+
+u32 Box2Ui_GetSwitchButtonHeld(void) {
+    return FindHeldRect(&sTrayCursorData[0][33], 1);
+}
+
+BOOL Box2Ui_IsTrayHeld(void) {
+    if (GFL_HIDGetTouchHeldRect(sTrayTouchRect) != TOUCH_RECT_NONE) {
+        return TRUE;
+    }
+    return FALSE;
+}

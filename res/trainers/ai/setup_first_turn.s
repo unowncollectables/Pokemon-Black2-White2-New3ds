@@ -1,0 +1,80 @@
+#include "asm/tr_ai.inc"
+
+// AI flag 3, SetupFirstTurn: on the first turn, gives +2 to moves with an effect in SetupFirstTurn_SetupEffects,
+// 68.75% of the time.
+
+SetupFirstTurn_Main:
+    IfTargetIsPartner SetupFirstTurn_Terminate
+    LoadTurnCount
+    IfLoadedNotEqualTo 0, SetupFirstTurn_Terminate
+    LoadCurrentMoveEffect
+    IfLoadedNotInTable SetupFirstTurn_SetupEffects, SetupFirstTurn_Terminate
+    IfRandomLessThan 80, SetupFirstTurn_Terminate
+    AddToMoveScore 2
+
+SetupFirstTurn_Terminate:
+    End
+
+SetupFirstTurn_SetupEffects:
+    TableEntry BATTLE_EFFECT_ATK_UP
+    TableEntry BATTLE_EFFECT_DEF_UP
+    TableEntry BATTLE_EFFECT_SPEED_UP
+    TableEntry BATTLE_EFFECT_SP_ATK_UP
+    TableEntry BATTLE_EFFECT_SP_DEF_UP
+    TableEntry BATTLE_EFFECT_ACC_UP
+    TableEntry BATTLE_EFFECT_EVA_UP
+    TableEntry BATTLE_EFFECT_ATK_DOWN
+    TableEntry BATTLE_EFFECT_DEF_DOWN
+    TableEntry BATTLE_EFFECT_SPEED_DOWN
+    TableEntry BATTLE_EFFECT_SP_ATK_DOWN
+    TableEntry BATTLE_EFFECT_SP_DEF_DOWN
+    TableEntry BATTLE_EFFECT_ACC_DOWN
+    TableEntry BATTLE_EFFECT_EVA_DOWN
+    TableEntry BATTLE_EFFECT_CONVERSION
+    TableEntry BATTLE_EFFECT_SET_LIGHT_SCREEN
+    TableEntry BATTLE_EFFECT_SP_DEF_UP_2
+    TableEntry BATTLE_EFFECT_CRIT_UP_2
+    TableEntry BATTLE_EFFECT_STATUS_CONFUSE
+    TableEntry BATTLE_EFFECT_ATK_UP_2
+    TableEntry BATTLE_EFFECT_DEF_UP_2
+    TableEntry BATTLE_EFFECT_SPEED_UP_2
+    TableEntry BATTLE_EFFECT_SP_ATK_UP_2
+    TableEntry BATTLE_EFFECT_SP_DEF_UP_2
+    TableEntry BATTLE_EFFECT_ACC_UP_2
+    TableEntry BATTLE_EFFECT_EVA_UP_2
+    TableEntry BATTLE_EFFECT_ATK_DOWN_2
+    TableEntry BATTLE_EFFECT_DEF_DOWN_2
+    TableEntry BATTLE_EFFECT_SPEED_DOWN_2
+    TableEntry BATTLE_EFFECT_SP_ATK_DOWN_2
+    TableEntry BATTLE_EFFECT_SP_DEF_DOWN_2
+    TableEntry BATTLE_EFFECT_EVA_DOWN_2
+    TableEntry BATTLE_EFFECT_ACC_DOWN_2
+    TableEntry BATTLE_EFFECT_SET_REFLECT
+    TableEntry BATTLE_EFFECT_STATUS_POISON
+    TableEntry BATTLE_EFFECT_STATUS_PARALYZE
+    TableEntry BATTLE_EFFECT_SET_SUBSTITUTE
+    TableEntry BATTLE_EFFECT_STATUS_LEECH_SEED
+    TableEntry BATTLE_EFFECT_EVA_UP_2_MINIMIZE
+    TableEntry BATTLE_EFFECT_CURSE
+    TableEntry BATTLE_EFFECT_ATK_UP_2_STATUS_CONFUSION
+    TableEntry BATTLE_EFFECT_CAMOUFLAGE
+    TableEntry BATTLE_EFFECT_STATUS_SLEEP_NEXT_TURN
+    TableEntry BATTLE_EFFECT_DEF_UP_DOUBLE_ROLLOUT_POWER
+    TableEntry BATTLE_EFFECT_TORMENT
+    TableEntry BATTLE_EFFECT_SP_ATK_UP_CAUSE_CONFUSION
+    TableEntry BATTLE_EFFECT_STATUS_BURN
+    TableEntry BATTLE_EFFECT_GROUND_TRAP_USER_CONTINUOUS_HEAL
+    TableEntry BATTLE_EFFECT_MAKE_SHARED_MOVES_UNUSEABLE
+    TableEntry BATTLE_EFFECT_CONFUSE_ALL
+    TableEntry BATTLE_EFFECT_ATK_DEF_DOWN
+    TableEntry BATTLE_EFFECT_DEF_SPD_UP
+    TableEntry BATTLE_EFFECT_ATK_DEF_UP
+    TableEntry BATTLE_EFFECT_SP_ATK_SP_DEF_UP
+    TableEntry BATTLE_EFFECT_CAMOUFLAGE
+    TableEntry BATTLE_EFFECT_DOUBLE_SPEED_3_TURNS
+    TableEntry BATTLE_EFFECT_RANDOM_STAT_UP_2
+    TableEntry BATTLE_EFFECT_PREVENT_CRITS
+    TableEntry BATTLE_EFFECT_GIVE_GROUND_IMMUNITY
+    TableEntry BATTLE_EFFECT_REMOVE_HAZARDS_SCREENS_EVA_DOWN
+    TableEntry BATTLE_EFFECT_WHIRLPOOL
+    TableEntry TABLE_END

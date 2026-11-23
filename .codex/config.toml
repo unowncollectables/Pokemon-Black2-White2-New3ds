@@ -1,0 +1,54 @@
+[agents]
+default_subagent_model = "gpt-5.3-codex"
+
+[agents.boundary-scout]
+description = "Read-only scout that identifies original source-file boundaries, names, section ranges, statics, and add_source_file commands."
+config_file = "agents/boundary-scout.toml"
+
+[agents.decomp-reviewer]
+description = "Read-only adversarial reviewer of a decompiled file and its diff before commit."
+config_file = "agents/decomp-reviewer.toml"
+
+[agents.file-writer]
+description = "Writes one original source file from assembly, probes it, and reports names, headers, statics, and mismatches without registering or committing."
+config_file = "agents/file-writer.toml"
+
+[agents.function-matcher]
+description = "Matches one nonmatching function byte-for-byte using the project's triage, lever, and stop-rule workflow."
+config_file = "agents/function-matcher.toml"
+
+[agents.struct-recovery]
+description = "Read-only specialist that derives a struct layout from all assembly accesses and reports the owning header and evidence."
+config_file = "agents/struct-recovery.toml"
+
+[agents.pbw-game-reviewer]
+description = "pokebw2 game code reviewer."
+config_file = "agents/pbw-game-reviewer.toml"
+
+[agents.pbw-library-reviewer]
+description = "pokebw2 library code reviewer."
+config_file = "agents/pbw-library-reviewer.toml"
+
+[agents.pbw-config-reviewer]
+description = "pokebw2 configs and decomp docs reviewer."
+config_file = "agents/pbw-config-reviewer.toml"
+
+[agents.pbw-data-reviewer]
+description = "pokebw2 data reviewer."
+config_file = "agents/pbw-data-reviewer.toml"
+
+[agents.pbw-tools-reviewer]
+description = "pokebw2 tools and infrastructure reviewer."
+config_file = "agents/pbw-tools-reviewer.toml"
+
+[agents.pbw-mwcc-expert]
+description = "MWCC matching expert for pokebw2."
+config_file = "agents/pbw-mwcc-expert.toml"
+
+[agents.pbw-arm-expert]
+description = "ARM9 assembly expert for pokebw2."
+config_file = "agents/pbw-arm-expert.toml"
+
+[agents.pbw-sdk-expert]
+description = "Nintendo DS/DSi SDK expert for pokebw2."
+config_file = "agents/pbw-sdk-expert.toml"

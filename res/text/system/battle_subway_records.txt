@@ -1,0 +1,8 @@
+BattleSubwayRecords_Text_SuccessiveTrainers = SUCCESSIVE TRAINERS
+BattleSubwayRecords_Text_Rank = Rank {0201:0}
+BattleSubwayRecords_Text_TrainNumber = Train Number {0202:1}
+BattleSubwayRecords_Text_Location = LOCATION
+BattleSubwayRecords_Text_Empty = {0124:2}
+BattleSubwayRecords_Text_Empty_2 = {0125:3}
+BattleSubwayRecords_Text_TrainersQuote = TRAINER'S QUOTE
+\pad{c2}

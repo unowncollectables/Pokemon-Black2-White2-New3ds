@@ -1,0 +1,2315 @@
+{
+    "$schema": "missions.schema.json",
+    "missions": [
+        {
+            "kind": 4,
+            "message": "FunfestMissions_Text_FirstBerrySearch",
+            "result_message": "FunfestMissions_Text_CollectMoreBerriesWithin",
+            "target": 5,
+            "target_kind": 3,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_PREMIER_BALL",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 180,
+                    "count": 5,
+                    "reward_item_count": 5
+                },
+                {
+                    "seconds": 180,
+                    "count": 5,
+                    "reward_item_count": 5
+                },
+                {
+                    "seconds": 180,
+                    "count": 5,
+                    "reward_item_count": 5
+                },
+                {
+                    "seconds": 180,
+                    "count": 5,
+                    "reward_item_count": 5
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 1,
+            "unlock_flag": 0,
+            "stage_patterns": 157988,
+            "version": 0,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 4,
+            "message": "FunfestMissions_Text_CollectBerries",
+            "result_message": "FunfestMissions_Text_CollectMoreBerriesWithin_2",
+            "target": 5,
+            "target_kind": 3,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_PREMIER_BALL",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 180,
+                    "count": 3,
+                    "reward_item_count": 2
+                },
+                {
+                    "seconds": 180,
+                    "count": 6,
+                    "reward_item_count": 4
+                },
+                {
+                    "seconds": 180,
+                    "count": 12,
+                    "reward_item_count": 8
+                },
+                {
+                    "seconds": 180,
+                    "count": 25,
+                    "reward_item_count": 15
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 1,
+            "unlock_flag": 0,
+            "stage_patterns": 92386,
+            "version": 0,
+            "clear_flag": 2444,
+            "params_unk01": 0
+        },
+        {
+            "kind": 4,
+            "message": "FunfestMissions_Text_FindLostItems",
+            "result_message": "FunfestMissions_Text_CollectMoreLostItems",
+            "target": 2,
+            "target_kind": 3,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_PREMIER_BALL",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 300,
+                    "count": 10,
+                    "reward_item_count": 3
+                },
+                {
+                    "seconds": 300,
+                    "count": 15,
+                    "reward_item_count": 5
+                },
+                {
+                    "seconds": 300,
+                    "count": 20,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 300,
+                    "count": 40,
+                    "reward_item_count": 15
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 1,
+            "unlock_flag": 2444,
+            "stage_patterns": 91292,
+            "version": 0,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 5,
+            "message": "FunfestMissions_Text_FindLostBoys",
+            "result_message": "FunfestMissions_Text_FindMoreLostChildren",
+            "target": 0,
+            "target_kind": 1,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_MOOMOO_MILK",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 180,
+                    "count": 4,
+                    "reward_item_count": 4
+                },
+                {
+                    "seconds": 180,
+                    "count": 8,
+                    "reward_item_count": 8
+                },
+                {
+                    "seconds": 180,
+                    "count": 16,
+                    "reward_item_count": 16
+                },
+                {
+                    "seconds": 180,
+                    "count": 50,
+                    "reward_item_count": 25
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 12,
+            "unlock_flag": 0,
+            "stage_patterns": 91884,
+            "version": 0,
+            "clear_flag": 2445,
+            "params_unk01": 0
+        },
+        {
+            "kind": 5,
+            "message": "FunfestMissions_Text_EnjoyShopping",
+            "result_message": "FunfestMissions_Text_EnjoyBargainShoppingSpeak",
+            "target": 3,
+            "target_kind": 4,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_NUGGET",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 180,
+                    "count": 3,
+                    "reward_item_count": 2
+                },
+                {
+                    "seconds": 180,
+                    "count": 6,
+                    "reward_item_count": 5
+                },
+                {
+                    "seconds": 180,
+                    "count": 12,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 180,
+                    "count": 25,
+                    "reward_item_count": 15
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 1,
+            "unlock_flag": 2445,
+            "stage_patterns": 91876,
+            "version": 0,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 1,
+            "message": "FunfestMissions_Text_Find",
+            "result_message": "FunfestMissions_Text_FindRustlingGrassDefeat",
+            "target": "SPECIES_AUDINO",
+            "target_kind": 2,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_MAX_REPEL",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 300,
+                    "count": 1,
+                    "reward_item_count": 5
+                },
+                {
+                    "seconds": 300,
+                    "count": 5,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 300,
+                    "count": 10,
+                    "reward_item_count": 20
+                },
+                {
+                    "seconds": 300,
+                    "count": 50,
+                    "reward_item_count": 50
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 10,
+            "unlock_flag": 0,
+            "stage_patterns": 0,
+            "version": 0,
+            "clear_flag": 2462,
+            "params_unk01": 0
+        },
+        {
+            "kind": 1,
+            "message": "FunfestMissions_Text_SearchPokemon",
+            "result_message": "FunfestMissions_Text_FindPokemonRustlingGrass_2",
+            "target": "SPECIES_NONE",
+            "target_kind": 2,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_NONE",
+            "required_flag": 0,
+            "extra_seconds_index": 1,
+            "levels": [
+                {
+                    "seconds": 180,
+                    "count": 3,
+                    "reward_item_count": 5
+                },
+                {
+                    "seconds": 180,
+                    "count": 5,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 180,
+                    "count": 10,
+                    "reward_item_count": 15
+                },
+                {
+                    "seconds": 300,
+                    "count": 50,
+                    "reward_item_count": 20
+                }
+            ],
+            "ends_at_target": 1,
+            "unk03": 1,
+            "second_item_count": 0,
+            "unlock_flag": 2462,
+            "stage_patterns": 0,
+            "version": 0,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 5,
+            "message": "FunfestMissions_Text_TrainMartialArtists",
+            "result_message": "FunfestMissions_Text_FightNoviceMartialArtists",
+            "target": 6,
+            "target_kind": 1,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_MAX_REVIVE",
+            "required_flag": "EVENT_FLAG_ARRIVED_CASTELIA_CITY",
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 300,
+                    "count": 2,
+                    "reward_item_count": 3
+                },
+                {
+                    "seconds": 300,
+                    "count": 4,
+                    "reward_item_count": 6
+                },
+                {
+                    "seconds": 300,
+                    "count": 8,
+                    "reward_item_count": 12
+                },
+                {
+                    "seconds": 300,
+                    "count": 100,
+                    "reward_item_count": 60
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 1,
+            "unlock_flag": 2452,
+            "stage_patterns": 92443,
+            "version": 0,
+            "clear_flag": 2548,
+            "params_unk01": 0
+        },
+        {
+            "kind": 5,
+            "message": "FunfestMissions_Text_SparringTrainers",
+            "result_message": "FunfestMissions_Text_FightNoviceMartialArtists_2",
+            "target": 6,
+            "target_kind": 1,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_NONE",
+            "required_flag": "EVENT_FLAG_ARRIVED_CASTELIA_CITY",
+            "extra_seconds_index": 2,
+            "levels": [
+                {
+                    "seconds": 180,
+                    "count": 10,
+                    "reward_item_count": 2
+                },
+                {
+                    "seconds": 180,
+                    "count": 30,
+                    "reward_item_count": 4
+                },
+                {
+                    "seconds": 300,
+                    "count": 50,
+                    "reward_item_count": 8
+                },
+                {
+                    "seconds": 300,
+                    "count": 100,
+                    "reward_item_count": 10
+                }
+            ],
+            "ends_at_target": 1,
+            "unk03": 1,
+            "second_item_count": 0,
+            "unlock_flag": 2548,
+            "stage_patterns": 91930,
+            "version": 0,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 4,
+            "message": "FunfestMissions_Text_GetRichQuick",
+            "result_message": "FunfestMissions_Text_CollectMoreTreasuresWithin",
+            "target": 1,
+            "target_kind": 3,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_STAR_PIECE",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 180,
+                    "count": 3,
+                    "reward_item_count": 2
+                },
+                {
+                    "seconds": 180,
+                    "count": 6,
+                    "reward_item_count": 5
+                },
+                {
+                    "seconds": 180,
+                    "count": 12,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 180,
+                    "count": 25,
+                    "reward_item_count": 15
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 5,
+            "unlock_flag": 2447,
+            "stage_patterns": 91857,
+            "version": 2,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 4,
+            "message": "FunfestMissions_Text_TreasureHunting",
+            "result_message": "FunfestMissions_Text_CollectItemsCavesForests",
+            "target": 9,
+            "target_kind": 3,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_STAR_PIECE",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 180,
+                    "count": 6,
+                    "reward_item_count": 2
+                },
+                {
+                    "seconds": 180,
+                    "count": 12,
+                    "reward_item_count": 5
+                },
+                {
+                    "seconds": 180,
+                    "count": 24,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 180,
+                    "count": 50,
+                    "reward_item_count": 15
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 5,
+            "unlock_flag": 2447,
+            "stage_patterns": 92443,
+            "version": 1,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 5,
+            "message": "FunfestMissions_Text_ExcitingTrading",
+            "result_message": "FunfestMissions_Text_TradeItemsMorePeople_2",
+            "target": 2,
+            "target_kind": 1,
+            "variant": 2,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_NUGGET",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 300,
+                    "count": 2,
+                    "reward_item_count": 3
+                },
+                {
+                    "seconds": 300,
+                    "count": 4,
+                    "reward_item_count": 6
+                },
+                {
+                    "seconds": 300,
+                    "count": 8,
+                    "reward_item_count": 12
+                },
+                {
+                    "seconds": 300,
+                    "count": 50,
+                    "reward_item_count": 50
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 1,
+            "unlock_flag": 2453,
+            "stage_patterns": 92379,
+            "version": 2,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 5,
+            "message": "FunfestMissions_Text_ExhilaratingTrading",
+            "result_message": "FunfestMissions_Text_TradeItemsMorePeople_3",
+            "target": 2,
+            "target_kind": 1,
+            "variant": 1,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_NUGGET",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 300,
+                    "count": 2,
+                    "reward_item_count": 3
+                },
+                {
+                    "seconds": 300,
+                    "count": 4,
+                    "reward_item_count": 6
+                },
+                {
+                    "seconds": 300,
+                    "count": 8,
+                    "reward_item_count": 12
+                },
+                {
+                    "seconds": 300,
+                    "count": 50,
+                    "reward_item_count": 50
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 1,
+            "unlock_flag": 2453,
+            "stage_patterns": 92379,
+            "version": 1,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 1,
+            "message": "FunfestMissions_Text_Find",
+            "result_message": "FunfestMissions_Text_FindRustlingGrassPokemon",
+            "target": "SPECIES_EMOLGA",
+            "target_kind": 2,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_MAX_REPEL",
+            "required_flag": "EVENT_FLAG_0x09c8",
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 300,
+                    "count": 1,
+                    "reward_item_count": 3
+                },
+                {
+                    "seconds": 300,
+                    "count": 5,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 300,
+                    "count": 10,
+                    "reward_item_count": 15
+                },
+                {
+                    "seconds": 300,
+                    "count": 30,
+                    "reward_item_count": 40
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 10,
+            "unlock_flag": 2504,
+            "stage_patterns": 0,
+            "version": 0,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 3,
+            "message": "FunfestMissions_Text_WingsFallingDrawbridge",
+            "result_message": "FunfestMissions_Text_PickUpCollectWings",
+            "target": 1,
+            "target_kind": 3,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_RARE_CANDY",
+            "required_flag": "EVENT_FLAG_0x09cb",
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 180,
+                    "count": 5,
+                    "reward_item_count": 1
+                },
+                {
+                    "seconds": 180,
+                    "count": 10,
+                    "reward_item_count": 2
+                },
+                {
+                    "seconds": 180,
+                    "count": 40,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 180,
+                    "count": 100,
+                    "reward_item_count": 30
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 1,
+            "unlock_flag": 2457,
+            "stage_patterns": 0,
+            "version": 0,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 3,
+            "message": "FunfestMissions_Text_FindTreasures",
+            "result_message": "FunfestMissions_Text_FindTreasuresWhichCan",
+            "target": 2,
+            "target_kind": 3,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_COMET_SHARD",
+            "required_flag": "EVENT_FLAG_ARRIVED_DRIFTVEIL_CITY",
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 180,
+                    "count": 5,
+                    "reward_item_count": 1
+                },
+                {
+                    "seconds": 180,
+                    "count": 10,
+                    "reward_item_count": 2
+                },
+                {
+                    "seconds": 180,
+                    "count": 40,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 180,
+                    "count": 100,
+                    "reward_item_count": 30
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 1,
+            "unlock_flag": 2458,
+            "stage_patterns": 0,
+            "version": 0,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 2,
+            "message": "FunfestMissions_Text_MushroomsHideSeek",
+            "result_message": "FunfestMissions_Text_FindFoongusHidingTall",
+            "target": 0,
+            "target_kind": 2,
+            "variant": 0,
+            "reward_item": "ITEM_BIG_MUSHROOM",
+            "second_item": "ITEM_BALM_MUSHROOM",
+            "required_flag": "EVENT_FLAG_0x09cc",
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 300,
+                    "count": 3,
+                    "reward_item_count": 5
+                },
+                {
+                    "seconds": 300,
+                    "count": 10,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 300,
+                    "count": 30,
+                    "reward_item_count": 30
+                },
+                {
+                    "seconds": 180,
+                    "count": 5,
+                    "reward_item_count": 5
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 1,
+            "unlock_flag": 2456,
+            "stage_patterns": 0,
+            "version": 0,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 4,
+            "message": "FunfestMissions_Text_FindMysteriousOres",
+            "result_message": "FunfestMissions_Text_FindMysteriousOresSearch",
+            "target": 7,
+            "target_kind": 3,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_MAX_REVIVE",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 300,
+                    "count": 10,
+                    "reward_item_count": 1
+                },
+                {
+                    "seconds": 300,
+                    "count": 20,
+                    "reward_item_count": 2
+                },
+                {
+                    "seconds": 300,
+                    "count": 30,
+                    "reward_item_count": 3
+                },
+                {
+                    "seconds": 180,
+                    "count": 30,
+                    "reward_item_count": 5
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 5,
+            "unlock_flag": 2448,
+            "stage_patterns": 91921,
+            "version": 2,
+            "clear_flag": 2549,
+            "params_unk01": 0
+        },
+        {
+            "kind": 4,
+            "message": "FunfestMissions_Text_FindShiningOres",
+            "result_message": "FunfestMissions_Text_FindShiningOresSearch",
+            "target": 8,
+            "target_kind": 3,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_MAX_REVIVE",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 300,
+                    "count": 10,
+                    "reward_item_count": 1
+                },
+                {
+                    "seconds": 300,
+                    "count": 20,
+                    "reward_item_count": 2
+                },
+                {
+                    "seconds": 300,
+                    "count": 30,
+                    "reward_item_count": 3
+                },
+                {
+                    "seconds": 180,
+                    "count": 30,
+                    "reward_item_count": 5
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 5,
+            "unlock_flag": 2448,
+            "stage_patterns": 91921,
+            "version": 1,
+            "clear_flag": 2549,
+            "params_unk01": 0
+        },
+        {
+            "kind": 4,
+            "message": "FunfestMissions_Text_LostTreasures",
+            "result_message": "FunfestMissions_Text_FindLostRelicTreasures",
+            "target": 12,
+            "target_kind": 3,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_NONE",
+            "required_flag": 0,
+            "extra_seconds_index": 1,
+            "levels": [
+                {
+                    "seconds": 300,
+                    "count": 2,
+                    "reward_item_count": 2
+                },
+                {
+                    "seconds": 300,
+                    "count": 4,
+                    "reward_item_count": 4
+                },
+                {
+                    "seconds": 300,
+                    "count": 10,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 300,
+                    "count": 30,
+                    "reward_item_count": 30
+                }
+            ],
+            "ends_at_target": 1,
+            "unk03": 1,
+            "second_item_count": 0,
+            "unlock_flag": 2549,
+            "stage_patterns": 58505,
+            "version": 0,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 4,
+            "message": "FunfestMissions_Text_BigHarvestBerries",
+            "result_message": "FunfestMissions_Text_CollectMoreBerriesWithin_3",
+            "target": 6,
+            "target_kind": 3,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_LUM_BERRY",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 180,
+                    "count": 6,
+                    "reward_item_count": 3
+                },
+                {
+                    "seconds": 180,
+                    "count": 12,
+                    "reward_item_count": 6
+                },
+                {
+                    "seconds": 180,
+                    "count": 24,
+                    "reward_item_count": 8
+                },
+                {
+                    "seconds": 180,
+                    "count": 100,
+                    "reward_item_count": 50
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 10,
+            "unlock_flag": 2449,
+            "stage_patterns": 92834,
+            "version": 0,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 3,
+            "message": "FunfestMissions_Text_RingBell",
+            "result_message": "FunfestMissions_Text_RingBellTopCelestial",
+            "target": 0,
+            "target_kind": 4,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_STARDUST",
+            "required_flag": "EVENT_FLAG_ARRIVED_MISTRALTON_CITY",
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 180,
+                    "count": 1,
+                    "reward_item_count": 3
+                },
+                {
+                    "seconds": 180,
+                    "count": 2,
+                    "reward_item_count": 6
+                },
+                {
+                    "seconds": 180,
+                    "count": 8,
+                    "reward_item_count": 12
+                },
+                {
+                    "seconds": 180,
+                    "count": 10,
+                    "reward_item_count": 30
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 5,
+            "unlock_flag": 2513,
+            "stage_patterns": 0,
+            "version": 0,
+            "clear_flag": 2550,
+            "params_unk01": 0
+        },
+        {
+            "kind": 3,
+            "message": "FunfestMissions_Text_BellRingsTimes",
+            "result_message": "FunfestMissions_Text_RingBellTopCelestial_2",
+            "target": 0,
+            "target_kind": 4,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_NONE",
+            "required_flag": "EVENT_FLAG_ARRIVED_MISTRALTON_CITY",
+            "extra_seconds_index": 2,
+            "levels": [
+                {
+                    "seconds": 180,
+                    "count": 3,
+                    "reward_item_count": 1
+                },
+                {
+                    "seconds": 180,
+                    "count": 5,
+                    "reward_item_count": 3
+                },
+                {
+                    "seconds": 180,
+                    "count": 7,
+                    "reward_item_count": 12
+                },
+                {
+                    "seconds": 180,
+                    "count": 10,
+                    "reward_item_count": 30
+                }
+            ],
+            "ends_at_target": 1,
+            "unk03": 1,
+            "second_item_count": 0,
+            "unlock_flag": 2550,
+            "stage_patterns": 0,
+            "version": 0,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 5,
+            "message": "FunfestMissions_Text_PathAce",
+            "result_message": "FunfestMissions_Text_TrainingPartnerAceTrainers",
+            "target": 6,
+            "target_kind": 1,
+            "variant": 1,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_RARE_CANDY",
+            "required_flag": "EVENT_FLAG_ARRIVED_OPELUCID_CITY",
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 300,
+                    "count": 3,
+                    "reward_item_count": 3
+                },
+                {
+                    "seconds": 300,
+                    "count": 6,
+                    "reward_item_count": 6
+                },
+                {
+                    "seconds": 300,
+                    "count": 12,
+                    "reward_item_count": 12
+                },
+                {
+                    "seconds": 300,
+                    "count": 50,
+                    "reward_item_count": 50
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 1,
+            "unlock_flag": 2481,
+            "stage_patterns": 91867,
+            "version": 0,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 5,
+            "message": "FunfestMissions_Text_ShockingShopping",
+            "result_message": "FunfestMissions_Text_SpeakMenWearingBlack",
+            "target": 3,
+            "target_kind": 4,
+            "variant": 4,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_RARE_CANDY",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 180,
+                    "count": 4,
+                    "reward_item_count": 4
+                },
+                {
+                    "seconds": 180,
+                    "count": 8,
+                    "reward_item_count": 8
+                },
+                {
+                    "seconds": 180,
+                    "count": 32,
+                    "reward_item_count": 15
+                },
+                {
+                    "seconds": 180,
+                    "count": 100,
+                    "reward_item_count": 100
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 1,
+            "unlock_flag": 2459,
+            "stage_patterns": 91931,
+            "version": 0,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 5,
+            "message": "FunfestMissions_Text_MemoryTraining",
+            "result_message": "FunfestMissions_Text_SpeakClownsTownsRoads_2",
+            "target": 5,
+            "target_kind": 4,
+            "variant": 0,
+            "reward_item": "ITEM_HEART_SCALE",
+            "second_item": "ITEM_NONE",
+            "required_flag": 0,
+            "extra_seconds_index": 1,
+            "levels": [
+                {
+                    "seconds": 180,
+                    "count": 6,
+                    "reward_item_count": 3
+                },
+                {
+                    "seconds": 180,
+                    "count": 10,
+                    "reward_item_count": 4
+                },
+                {
+                    "seconds": 180,
+                    "count": 12,
+                    "reward_item_count": 5
+                },
+                {
+                    "seconds": 300,
+                    "count": 50,
+                    "reward_item_count": 10
+                }
+            ],
+            "ends_at_target": 1,
+            "unk03": 1,
+            "second_item_count": 0,
+            "unlock_flag": 2454,
+            "stage_patterns": 92452,
+            "version": 0,
+            "clear_flag": 2551,
+            "params_unk01": 0
+        },
+        {
+            "kind": 5,
+            "message": "FunfestMissions_Text_PushLimitMemory",
+            "result_message": "FunfestMissions_Text_SpeakClownsTownsRoads",
+            "target": 5,
+            "target_kind": 4,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_HEART_SCALE",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 300,
+                    "count": 5,
+                    "reward_item_count": 6
+                },
+                {
+                    "seconds": 300,
+                    "count": 10,
+                    "reward_item_count": 12
+                },
+                {
+                    "seconds": 300,
+                    "count": 40,
+                    "reward_item_count": 40
+                },
+                {
+                    "seconds": 180,
+                    "count": 10,
+                    "reward_item_count": 1
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 5,
+            "unlock_flag": 2551,
+            "stage_patterns": 92451,
+            "version": 0,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 1,
+            "message": "FunfestMissions_Text_FindRustlingGrass",
+            "result_message": "FunfestMissions_Text_FindPokemonRustlingGrass",
+            "target": "SPECIES_NONE",
+            "target_kind": 2,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_MAX_REPEL",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 600,
+                    "count": 5,
+                    "reward_item_count": 5
+                },
+                {
+                    "seconds": 600,
+                    "count": 10,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 600,
+                    "count": 20,
+                    "reward_item_count": 20
+                },
+                {
+                    "seconds": 600,
+                    "count": 100,
+                    "reward_item_count": 50
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 10,
+            "unlock_flag": 2400,
+            "stage_patterns": 0,
+            "version": 0,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 4,
+            "message": "FunfestMissions_Text_FindShards",
+            "result_message": "FunfestMissions_Text_CollectMoreShardsWithin",
+            "target": 0,
+            "target_kind": 3,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_STAR_PIECE",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 180,
+                    "count": 3,
+                    "reward_item_count": 2
+                },
+                {
+                    "seconds": 180,
+                    "count": 16,
+                    "reward_item_count": 4
+                },
+                {
+                    "seconds": 180,
+                    "count": 32,
+                    "reward_item_count": 8
+                },
+                {
+                    "seconds": 180,
+                    "count": 100,
+                    "reward_item_count": 30
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 5,
+            "unlock_flag": 2400,
+            "stage_patterns": 91931,
+            "version": 0,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 4,
+            "message": "FunfestMissions_Text_ForgottenLostItems",
+            "result_message": "FunfestMissions_Text_CollectMoreLostItems_2",
+            "target": 3,
+            "target_kind": 3,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_PREMIER_BALL",
+            "required_flag": "EVENT_FLAG_0x0960",
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 120,
+                    "count": 5,
+                    "reward_item_count": 1
+                },
+                {
+                    "seconds": 120,
+                    "count": 10,
+                    "reward_item_count": 2
+                },
+                {
+                    "seconds": 120,
+                    "count": 50,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 120,
+                    "count": 100,
+                    "reward_item_count": 30
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 5,
+            "unlock_flag": 2400,
+            "stage_patterns": 92323,
+            "version": 2,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 4,
+            "message": "FunfestMissions_Text_NotFoundLostItems",
+            "result_message": "FunfestMissions_Text_CollectMoreLostItems_3",
+            "target": 4,
+            "target_kind": 3,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_PREMIER_BALL",
+            "required_flag": "EVENT_FLAG_0x0960",
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 120,
+                    "count": 5,
+                    "reward_item_count": 1
+                },
+                {
+                    "seconds": 120,
+                    "count": 10,
+                    "reward_item_count": 2
+                },
+                {
+                    "seconds": 120,
+                    "count": 50,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 120,
+                    "count": 100,
+                    "reward_item_count": 30
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 5,
+            "unlock_flag": 2400,
+            "stage_patterns": 92323,
+            "version": 1,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 5,
+            "message": "FunfestMissions_Text_WhatBestPrice",
+            "result_message": "FunfestMissions_Text_SpeakMenWearingBlack_2",
+            "target": 3,
+            "target_kind": 4,
+            "variant": 2,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_HEART_SCALE",
+            "required_flag": "EVENT_FLAG_0x0960",
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 180,
+                    "count": 6,
+                    "reward_item_count": 2
+                },
+                {
+                    "seconds": 180,
+                    "count": 12,
+                    "reward_item_count": 4
+                },
+                {
+                    "seconds": 180,
+                    "count": 40,
+                    "reward_item_count": 8
+                },
+                {
+                    "seconds": 180,
+                    "count": 50,
+                    "reward_item_count": 10
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 1,
+            "unlock_flag": 2400,
+            "stage_patterns": 91931,
+            "version": 2,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 5,
+            "message": "FunfestMissions_Text_WhatRealPrice",
+            "result_message": "FunfestMissions_Text_SpeakMenWearingBlack_3",
+            "target": 3,
+            "target_kind": 4,
+            "variant": 1,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_HEART_SCALE",
+            "required_flag": "EVENT_FLAG_0x0960",
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 180,
+                    "count": 6,
+                    "reward_item_count": 2
+                },
+                {
+                    "seconds": 180,
+                    "count": 12,
+                    "reward_item_count": 4
+                },
+                {
+                    "seconds": 180,
+                    "count": 40,
+                    "reward_item_count": 8
+                },
+                {
+                    "seconds": 180,
+                    "count": 50,
+                    "reward_item_count": 10
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 1,
+            "unlock_flag": 2400,
+            "stage_patterns": 91931,
+            "version": 1,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 5,
+            "message": "FunfestMissions_Text_GiveItem",
+            "result_message": "FunfestMissions_Text_FindMoreYoungstersWho",
+            "target": 1,
+            "target_kind": 1,
+            "variant": 0,
+            "reward_item": "ITEM_MAX_REPEL",
+            "second_item": "ITEM_PP_MAX",
+            "required_flag": "EVENT_FLAG_0x0960",
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 300,
+                    "count": 10,
+                    "reward_item_count": 5
+                },
+                {
+                    "seconds": 300,
+                    "count": 15,
+                    "reward_item_count": 7
+                },
+                {
+                    "seconds": 300,
+                    "count": 20,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 300,
+                    "count": 40,
+                    "reward_item_count": 15
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 1,
+            "unlock_flag": 2400,
+            "stage_patterns": 92452,
+            "version": 0,
+            "clear_flag": 2460,
+            "params_unk01": 0
+        },
+        {
+            "kind": 5,
+            "message": "FunfestMissions_Text_GreatTradeUp",
+            "result_message": "FunfestMissions_Text_TradeItemsMorePeople",
+            "target": 2,
+            "target_kind": 1,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_NUGGET",
+            "required_flag": "EVENT_FLAG_0x0960",
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 180,
+                    "count": 3,
+                    "reward_item_count": 5
+                },
+                {
+                    "seconds": 180,
+                    "count": 6,
+                    "reward_item_count": 8
+                },
+                {
+                    "seconds": 180,
+                    "count": 80,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 180,
+                    "count": 10,
+                    "reward_item_count": 5
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 1,
+            "unlock_flag": 2460,
+            "stage_patterns": 91805,
+            "version": 0,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 3,
+            "message": "FunfestMissions_Text_SearchHiddenGrottoes",
+            "result_message": "FunfestMissions_Text_VisitHiddenGrottoesDifferent",
+            "target": 5,
+            "target_kind": 2,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_BIG_MUSHROOM",
+            "required_flag": "EVENT_FLAG_0x0960",
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 600,
+                    "count": 1,
+                    "reward_item_count": 3
+                },
+                {
+                    "seconds": 600,
+                    "count": 3,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 600,
+                    "count": 10,
+                    "reward_item_count": 30
+                },
+                {
+                    "seconds": 300,
+                    "count": 3,
+                    "reward_item_count": 10
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 10,
+            "unlock_flag": 2400,
+            "stage_patterns": 0,
+            "version": 0,
+            "clear_flag": 2461,
+            "params_unk01": 0
+        },
+        {
+            "kind": 3,
+            "message": "FunfestMissions_Text_NoisyHiddenGrottoes",
+            "result_message": "FunfestMissions_Text_VisitHiddenGrottoesDifferent_2",
+            "target": 5,
+            "target_kind": 2,
+            "variant": 2,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_PREMIER_BALL",
+            "required_flag": "EVENT_FLAG_0x0960",
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 600,
+                    "count": 3,
+                    "reward_item_count": 3
+                },
+                {
+                    "seconds": 600,
+                    "count": 5,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 600,
+                    "count": 10,
+                    "reward_item_count": 20
+                },
+                {
+                    "seconds": 600,
+                    "count": 30,
+                    "reward_item_count": 30
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 5,
+            "unlock_flag": 2461,
+            "stage_patterns": 0,
+            "version": 2,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 3,
+            "message": "FunfestMissions_Text_QuietHiddenGrottoes",
+            "result_message": "FunfestMissions_Text_VisitHiddenGrottoesDifferent_3",
+            "target": 5,
+            "target_kind": 2,
+            "variant": 1,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_PREMIER_BALL",
+            "required_flag": "EVENT_FLAG_0x0960",
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 600,
+                    "count": 3,
+                    "reward_item_count": 3
+                },
+                {
+                    "seconds": 600,
+                    "count": 5,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 600,
+                    "count": 10,
+                    "reward_item_count": 20
+                },
+                {
+                    "seconds": 600,
+                    "count": 30,
+                    "reward_item_count": 30
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 5,
+            "unlock_flag": 2461,
+            "stage_patterns": 0,
+            "version": 1,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 3,
+            "message": "FunfestMissions_Text_FishingCompetition",
+            "result_message": "FunfestMissions_Text_UseSuperRodCatch",
+            "target": 4,
+            "target_kind": 4,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_DIVE_BALL",
+            "required_flag": "EVENT_FLAG_0x0985",
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 180,
+                    "count": 5,
+                    "reward_item_count": 3
+                },
+                {
+                    "seconds": 180,
+                    "count": 10,
+                    "reward_item_count": 6
+                },
+                {
+                    "seconds": 180,
+                    "count": 20,
+                    "reward_item_count": 12
+                },
+                {
+                    "seconds": 180,
+                    "count": 30,
+                    "reward_item_count": 50
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 10,
+            "unlock_flag": 2437,
+            "stage_patterns": 0,
+            "version": 0,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 4,
+            "message": "FunfestMissions_Text_MulchCollector",
+            "result_message": "FunfestMissions_Text_CollectMoreMulchesWithin",
+            "target": 10,
+            "target_kind": 3,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_PEARL_STRING",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 180,
+                    "count": 6,
+                    "reward_item_count": 1
+                },
+                {
+                    "seconds": 180,
+                    "count": 12,
+                    "reward_item_count": 2
+                },
+                {
+                    "seconds": 180,
+                    "count": 24,
+                    "reward_item_count": 4
+                },
+                {
+                    "seconds": 90,
+                    "count": 9,
+                    "reward_item_count": 2
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 1,
+            "unlock_flag": 2450,
+            "stage_patterns": 92881,
+            "version": 0,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 4,
+            "message": "FunfestMissions_Text_WhereFlutteringHearts",
+            "result_message": "FunfestMissions_Text_CollectMoreItemsTowns",
+            "target": 11,
+            "target_kind": 3,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_HEART_SCALE",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 300,
+                    "count": 10,
+                    "reward_item_count": 2
+                },
+                {
+                    "seconds": 300,
+                    "count": 20,
+                    "reward_item_count": 4
+                },
+                {
+                    "seconds": 300,
+                    "count": 40,
+                    "reward_item_count": 8
+                },
+                {
+                    "seconds": 300,
+                    "count": 100,
+                    "reward_item_count": 50
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 10,
+            "unlock_flag": 2451,
+            "stage_patterns": 91827,
+            "version": 0,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 5,
+            "message": "FunfestMissions_Text_RockPaperScissorsCompetition",
+            "result_message": "FunfestMissions_Text_FindPreschoolersPlayRock",
+            "target": 4,
+            "target_kind": 1,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_LUCKY_PUNCH",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 180,
+                    "count": 5,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 180,
+                    "count": 10,
+                    "reward_item_count": 15
+                },
+                {
+                    "seconds": 180,
+                    "count": 50,
+                    "reward_item_count": 30
+                },
+                {
+                    "seconds": 180,
+                    "count": 100,
+                    "reward_item_count": 100
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 5,
+            "unlock_flag": 2455,
+            "stage_patterns": 91820,
+            "version": 0,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 3,
+            "message": "FunfestMissions_Text_TakeWalkEggs",
+            "result_message": "FunfestMissions_Text_HatchPokemonEggsWalk",
+            "target": 3,
+            "target_kind": 4,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_RARE_CANDY",
+            "required_flag": "EVENT_FLAG_0x0069",
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 600,
+                    "count": 3,
+                    "reward_item_count": 3
+                },
+                {
+                    "seconds": 600,
+                    "count": 12,
+                    "reward_item_count": 6
+                },
+                {
+                    "seconds": 600,
+                    "count": 50,
+                    "reward_item_count": 12
+                },
+                {
+                    "seconds": 600,
+                    "count": 100,
+                    "reward_item_count": 20
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 1,
+            "unlock_flag": 105,
+            "stage_patterns": 0,
+            "version": 0,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 1,
+            "message": "FunfestMissions_Text_Find",
+            "result_message": "FunfestMissions_Text_FindTryFindDust",
+            "target": "SPECIES_STEELIX",
+            "target_kind": 2,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_MAX_REPEL",
+            "required_flag": "EVENT_FLAG_0x0960",
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 300,
+                    "count": 1,
+                    "reward_item_count": 3
+                },
+                {
+                    "seconds": 300,
+                    "count": 5,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 300,
+                    "count": 10,
+                    "reward_item_count": 15
+                },
+                {
+                    "seconds": 300,
+                    "count": 30,
+                    "reward_item_count": 40
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 10,
+            "unlock_flag": 2400,
+            "stage_patterns": 0,
+            "version": 0,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 4,
+            "message": "FunfestMissions_Text_BerryHuntingAdventure",
+            "result_message": "FunfestMissions_Text_GoManyDifferentPlaces",
+            "target": 15,
+            "target_kind": 3,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_LUM_BERRY",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 180,
+                    "count": 5,
+                    "reward_item_count": 5
+                },
+                {
+                    "seconds": 180,
+                    "count": 20,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 180,
+                    "count": 30,
+                    "reward_item_count": 15
+                },
+                {
+                    "seconds": 180,
+                    "count": 100,
+                    "reward_item_count": 50
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 10,
+            "unlock_flag": 2557,
+            "stage_patterns": 93027,
+            "version": 0,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 3,
+            "message": "FunfestMissions_Text_FindPokemon",
+            "result_message": "FunfestMissions_Text_HasBeenReportedUncommon",
+            "target": 5,
+            "target_kind": 2,
+            "variant": 3,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_PREMIER_BALL",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 600,
+                    "count": 30,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 600,
+                    "count": 30,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 600,
+                    "count": 30,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 600,
+                    "count": 5,
+                    "reward_item_count": 10
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 10,
+            "unlock_flag": 0,
+            "stage_patterns": 0,
+            "version": 3,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 5,
+            "message": "FunfestMissions_Text_PokemonCenterQuizChampion",
+            "result_message": "FunfestMissions_Text_SpeakScientistsTownsRoads_2",
+            "target": 8,
+            "target_kind": 4,
+            "variant": 17,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_MASTER_BALL",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 300,
+                    "count": 100,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 300,
+                    "count": 100,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 300,
+                    "count": 100,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 300,
+                    "count": 5,
+                    "reward_item_count": 10
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 1,
+            "unlock_flag": 0,
+            "stage_patterns": 91885,
+            "version": 3,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 4,
+            "message": "FunfestMissions_Text_FindRareBerries",
+            "result_message": "FunfestMissions_Text_RareBerriesHaveBeen",
+            "target": 14,
+            "target_kind": 3,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_ENIGMA_BERRY",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 300,
+                    "count": 100,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 300,
+                    "count": 100,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 300,
+                    "count": 100,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 300,
+                    "count": 5,
+                    "reward_item_count": 10
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 1,
+            "unlock_flag": 0,
+            "stage_patterns": 92899,
+            "version": 3,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 4,
+            "message": "FunfestMissions_Text_RarePieces",
+            "result_message": "FunfestMissions_Text_GetRareItemsSaid",
+            "target": 13,
+            "target_kind": 3,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_RELIC_CROWN",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 300,
+                    "count": 250,
+                    "reward_item_count": 30
+                },
+                {
+                    "seconds": 300,
+                    "count": 250,
+                    "reward_item_count": 30
+                },
+                {
+                    "seconds": 300,
+                    "count": 250,
+                    "reward_item_count": 30
+                },
+                {
+                    "seconds": 300,
+                    "count": 5,
+                    "reward_item_count": 30
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 1,
+            "unlock_flag": 0,
+            "stage_patterns": 93027,
+            "version": 3,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 5,
+            "message": "FunfestMissions_Text_ShoppingImpossible",
+            "result_message": "FunfestMissions_Text_AgainMenWearingBlack",
+            "target": 3,
+            "target_kind": 4,
+            "variant": 3,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_STAR_PIECE",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 180,
+                    "count": 50,
+                    "reward_item_count": 30
+                },
+                {
+                    "seconds": 180,
+                    "count": 50,
+                    "reward_item_count": 30
+                },
+                {
+                    "seconds": 180,
+                    "count": 50,
+                    "reward_item_count": 30
+                },
+                {
+                    "seconds": 180,
+                    "count": 5,
+                    "reward_item_count": 30
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 50,
+            "unlock_flag": 0,
+            "stage_patterns": 93027,
+            "version": 3,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 5,
+            "message": "FunfestMissions_Text_WomenPokemonCenters",
+            "result_message": "FunfestMissions_Text_SpeakPokemonCenterWomen",
+            "target": 7,
+            "target_kind": 4,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_PREMIER_BALL",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 180,
+                    "count": 50,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 180,
+                    "count": 50,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 180,
+                    "count": 50,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 180,
+                    "count": 5,
+                    "reward_item_count": 10
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 10,
+            "unlock_flag": 0,
+            "stage_patterns": 91885,
+            "version": 3,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 5,
+            "message": "FunfestMissions_Text_PokemonQuizChampionship",
+            "result_message": "FunfestMissions_Text_SpeakScientistsTownsRoads_4",
+            "target": 8,
+            "target_kind": 4,
+            "variant": 18,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_RARE_CANDY",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 300,
+                    "count": 10,
+                    "reward_item_count": 1
+                },
+                {
+                    "seconds": 300,
+                    "count": 20,
+                    "reward_item_count": 3
+                },
+                {
+                    "seconds": 300,
+                    "count": 50,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 300,
+                    "count": 100,
+                    "reward_item_count": 30
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 5,
+            "unlock_flag": 0,
+            "stage_patterns": 91877,
+            "version": 4,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 5,
+            "message": "FunfestMissions_Text_EndlessBattles",
+            "result_message": "FunfestMissions_Text_TryEndlessTrainingVeterans",
+            "target": 6,
+            "target_kind": 1,
+            "variant": 2,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_PP_UP",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 600,
+                    "count": 10,
+                    "reward_item_count": 1
+                },
+                {
+                    "seconds": 600,
+                    "count": 15,
+                    "reward_item_count": 3
+                },
+                {
+                    "seconds": 600,
+                    "count": 30,
+                    "reward_item_count": 5
+                },
+                {
+                    "seconds": 600,
+                    "count": 100,
+                    "reward_item_count": 30
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 10,
+            "unlock_flag": 0,
+            "stage_patterns": 59675,
+            "version": 5,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 5,
+            "message": "FunfestMissions_Text_GiftsFromPokemonCenter",
+            "result_message": "FunfestMissions_Text_SpeakPokemonCenterWomen_2",
+            "target": 7,
+            "target_kind": 4,
+            "variant": 1,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_PREMIER_BALL",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 180,
+                    "count": 3,
+                    "reward_item_count": 5
+                },
+                {
+                    "seconds": 180,
+                    "count": 10,
+                    "reward_item_count": 10
+                },
+                {
+                    "seconds": 180,
+                    "count": 30,
+                    "reward_item_count": 30
+                },
+                {
+                    "seconds": 180,
+                    "count": 50,
+                    "reward_item_count": 50
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 10,
+            "unlock_flag": 0,
+            "stage_patterns": 91885,
+            "version": 6,
+            "clear_flag": 0,
+            "params_unk01": 0
+        },
+        {
+            "kind": 4,
+            "message": "FunfestMissions_Text_BerryFestival",
+            "result_message": "FunfestMissions_Text_RareBerriesHaveBeen_2",
+            "target": 16,
+            "target_kind": 3,
+            "variant": 0,
+            "reward_item": "ITEM_PASS_ORB",
+            "second_item": "ITEM_STARF_BERRY",
+            "required_flag": 0,
+            "extra_seconds_index": 0,
+            "levels": [
+                {
+                    "seconds": 300,
+                    "count": 10,
+                    "reward_item_count": 5
+                },
+                {
+                    "seconds": 300,
+                    "count": 30,
+                    "reward_item_count": 15
+                },
+                {
+                    "seconds": 300,
+                    "count": 100,
+                    "reward_item_count": 50
+                },
+                {
+                    "seconds": 300,
+                    "count": 50,
+                    "reward_item_count": 5
+                }
+            ],
+            "ends_at_target": 0,
+            "unk03": 2,
+            "second_item_count": 1,
+            "unlock_flag": 0,
+            "stage_patterns": 59545,
+            "version": 7,
+            "clear_flag": 0,
+            "params_unk01": 0
+        }
+    ]
+}
