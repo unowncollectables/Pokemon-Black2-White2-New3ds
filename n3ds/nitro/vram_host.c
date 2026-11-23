@@ -68,14 +68,17 @@ u32 PbW2_VramLoadBytes(void) {
 int PbW2_VramResolveArm(const void *ptr, u32 *arm_out) {
     uintptr_t h;
     uintptr_t o;
+    u32 arm_base;
 
     if (ptr == NULL || arm_out == NULL) {
         return 0;
     }
     h = (uintptr_t)ptr;
-    if (h >= PBW2_BG_BASE && h < PBW2_BG_BASE + PBW2_BG_SIZE) {
+    if (h >= (uintptr_t)s_bg && h < (uintptr_t)s_bg + PBW2_BG_SIZE) {
         o = h - (uintptr_t)s_bg;
-        *arm_out = PBW2_BG_BASE + (u32)o;
+        arm_base = 0x05000000u;
+        arm_base += 0x01000000u;
+        *arm_out = arm_base + (u32)o;
         return 1;
     }
     if (h >= (uintptr_t)s_pltt && h < (uintptr_t)s_pltt + PBW2_PLTT_SIZE) {

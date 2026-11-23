@@ -225,8 +225,10 @@ bitmap BG2/BG3 (8/16 bpp with BG scroll), main vs sub engines (`HW_DB_*` VRAM/pl
 POWCNT bit 15: main engine → upper 3DS LCD when set (`0x8000`). Extended BG pltt from
 LCDC F/G when `DISPCNT` bit 30 (slot from `BGxCNT` bit 13). Mode-5 CDemo DC bitmap: `BGxCNT` bit7=1 bitmap, bit2=1 → 16bpp direct (bit15
 opaque); bit2=0 → 8bpp + ext palette when DISPCNT bit 30. Affine sampling uses BGx PA–PD and BGxX/Y (20.8 ref); PA/PD default `0x100`.
-`G2_GetBG*ScrPtr` returns host-mapped pointers; DMA/CPU copies via `PbW2_TryDma*`
-and `MI_CpuFill*`. VRAMCNT decode: MST bits0–2, OFS bits3–4. Mode-5 16bpp DC
+`G2_GetBG*ScrPtr` returns host-mapped pointers; `PbW2_VramResolveArm` compares
+host `s_bg` and rebuilds `0x06000000+off` without ABS32 literal folding (Azahar).
+Post-link: `scripts/n3ds_check_3dsx_reloc.py` on every `.3dsx`. VRAMCNT MST/OFS.
+Mode-5 16bpp DC
 bitmap treats zero RGB as transparent (not bit15). Logs: `vram upload BG2/3`,
 `vramcnt on/+60`, `mode5-on/+60`.
 OBJ ext pltt when `DISPCNT` bit 31. Shell console skip after first present is

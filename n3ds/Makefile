@@ -108,6 +108,7 @@ one: $(BUILD)/$(TARGET).3dsx
 
 $(BUILD)/$(TARGET).3dsx: $(BUILD)/$(TARGET).elf
 	3dsxtool $< $@
+	python3 $(CURDIR)/../scripts/n3ds_check_3dsx_reloc.py $<
 	@echo built $@
 
 $(BUILD)/$(TARGET).elf: $(SHELL_SRC) include/pbw2_port.h ../build/n3ds/pbw2_build_status.h
