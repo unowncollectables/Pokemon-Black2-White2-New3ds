@@ -1,6 +1,12 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "present.h"
 
+#include <3ds.h>
+
+void Pbw2_GspVblank(void) {
+    gspWaitForVBlank();
+}
+
 #include "log.h"
 #include "pbw2_port.h"
 

@@ -1,8 +1,7 @@
 # New 3DS shell for Black 2 and White 2.
 # Uses devkitARM's compiler, libctru and 3dsx.specs.
-# A stock Ubuntu arm-none-eabi-gcc needs -march=armv6k+fp; this probes for that.
 # PBW2_LOCAL_SYSBASE=1 links devkitPro's libsysbase plus compat/syscall_shim.c
-# (only for a newlib that is not devkitARM's).
+# PBW2_LINK_GAME=1 links compiled pokebw2 objects as Pbw2_GameMain (shell keeps main).
 
 ifeq ($(strip $(DEVKITPRO)),)
 $(error Set DEVKITPRO, for example /opt/devkitpro)
@@ -41,12 +40,22 @@ LIBS := -lctru -lm
 SHIM :=
 endif
 
-SOURCES := source/main.c source/log.c source/workers.c source/audio.c source/save_shim.c \
+SHELL_SRC := source/main.c source/log.c source/workers.c source/audio.c source/save_shim.c \
 	source/settings.c source/present.c source/input.c source/io_thread.c \
 	nitro/os_host.c nitro/rtc_host.c nitro/fs_host.c nitro/gx_host.c nitro/host.c \
 	nitro/title_pic.c $(SHIM)
 
-.PHONY: all b2 w2 headers game-objects check clean
+ifeq ($(PBW2_LINK_GAME),1)
+CFLAGS += -DPBW2_LINK_GAME=1
+SHELL_SRC += source/game_thread.c nitro/mi_host.c nitro/ic_dc_host.c nitro/os_more_host.c \
+	nitro/link_syms.c nitro/overlay_host.c nitro/overlay_ids.c nitro/nitro_stubs.c nitro/twl_stub.c
+GAME_RSP := $(CURDIR)/../build/n3ds/$(shell echo $(GAME) | tr A-Z a-z)/game_objects.rsp
+GAME_LDFLAGS := @$(GAME_RSP)
+else
+GAME_LDFLAGS :=
+endif
+
+.PHONY: all b2 w2 headers game-objects link-rsp check clean
 
 all: check headers game-objects b2 w2
 
@@ -58,6 +67,9 @@ headers:
 
 game-objects: headers
 	python3 $(CURDIR)/../scripts/n3ds_game_objects.py
+
+link-rsp: game-objects
+	python3 $(CURDIR)/../scripts/n3ds_link_closure.py
 
 b2: game-objects
 	$(MAKE) --no-print-directory one GAME=BLACK2 TARGET=black2_3ds BUILD=build/b2
@@ -77,9 +89,10 @@ $(BUILD)/$(TARGET).3dsx: $(BUILD)/$(TARGET).elf
 	3dsxtool $< $@
 	@echo built $@
 
-$(BUILD)/$(TARGET).elf: $(SOURCES) include/pbw2_port.h ../build/n3ds/pbw2_build_status.h
+$(BUILD)/$(TARGET).elf: $(SHELL_SRC) include/pbw2_port.h ../build/n3ds/pbw2_build_status.h
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) $(GAMEFLAGS) $(SOURCES) $(LDFLAGS) $(LIBPATHS) $(LIBS) -Wl,-Map,$(BUILD)/$(TARGET).map -o $@
+	$(CC) $(CFLAGS) $(GAMEFLAGS) $(SHELL_SRC) $(LDFLAGS) $(GAME_LDFLAGS) $(LIBPATHS) $(LIBS) \
+		-Wl,-Map,$(BUILD)/$(TARGET).map -o $@
 
 clean:
 	rm -rf build

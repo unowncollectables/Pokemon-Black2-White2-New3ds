@@ -51,10 +51,13 @@ def sources(root: Path) -> list[Path]:
 
 def compile_one(cc: str, flags: list[str], source: Path, out: Path) -> tuple[str, int, str]:
     out.parent.mkdir(parents=True, exist_ok=True)
-    extra = [f"-I{source.parent.as_posix()}"]
+    extra = list(flags)
+    if source.as_posix() == "src/system/main.c":
+        extra.append("-Dmain=Pbw2_GameMain")
+    extra += [f"-I{source.parent.as_posix()}"]
     if source.parent.parent != ROOT:
         extra.append(f"-I{source.parent.parent.as_posix()}")
-    result = subprocess.run([cc, *flags, *extra, str(source), "-o", str(out)],
+    result = subprocess.run([cc, *extra, str(source), "-o", str(out)],
                             cwd=ROOT, capture_output=True, text=True)
     first = ""
     for line in (result.stderr or "").splitlines():
@@ -76,7 +79,10 @@ def compile_game(cc: str, arch_flags: list[str], name: str) -> tuple[int, int, i
     jobs = []
     for tree, kind in ((ROOT / "src", "game"), (ROOT / "lib", "lib")):
         for source in sources(tree):
-            out = ROOT / "build" / "n3ds" / name.lower() / "obj" / source.with_suffix(".o")
+            if source.as_posix() == "src/system/main.c":
+                out = ROOT / "build" / "n3ds" / name.lower() / "obj" / "src" / "system" / "game_main.o"
+            else:
+                out = ROOT / "build" / "n3ds" / name.lower() / "obj" / source.with_suffix(".o")
             jobs.append((source, out, kind))
 
     game_ok = game_n = lib_ok = lib_n = 0
@@ -142,6 +148,7 @@ def main() -> int:
     REPORT.parent.mkdir(parents=True, exist_ok=True)
     REPORT.write_text("\n".join(lines) + "\n")
     print(f"wrote {STATUS.relative_to(ROOT)}")
+    subprocess.run([sys.executable, str(ROOT / "scripts" / "n3ds_link_closure.py")], check=False)
     return 1 if failed_src else 0
 
 

@@ -204,13 +204,14 @@ void OS_SetIrqFunction(OSIrqMask interrupts, OSIrqFunction function) {
     }
 }
 
+extern void Pbw2_GspVblank(void);
+
 void OS_WaitIrq(BOOL clear, OSIrqMask interrupts) {
-    extern void gspWaitForVBlank(void);
     if (clear) {
         s_irq_check &= ~interrupts;
     }
     if (interrupts & OS_IE_V_BLANK) {
-        gspWaitForVBlank();
+        Pbw2_GspVblank();
         pbw2_vblank();
     }
 }

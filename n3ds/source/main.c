@@ -10,6 +10,9 @@
 #include "settings.h"
 #include "title_pic.h"
 #include "workers.h"
+#if defined(PBW2_LINK_GAME)
+#include "game_thread.h"
+#endif
 
 #include <3ds.h>
 #include <stdio.h>
@@ -86,9 +89,13 @@ static void Draw_Top(bool new3ds) {
     if (!new3ds) {
         printf("This port is New 3DS only.\n\n");
     }
+#if defined(PBW2_LINK_GAME)
+    printf("Game main linked as Pbw2_GameMain.\n");
+#else
     printf("Platform shell. Game main is not\n");
     printf("linked, so this is not the logo\n");
     printf("or the title screen.\n");
+#endif
     printf("NitroFS: %s\n", NitroHost_Nitrofs() ? "a/0/0/2 open" : "not staged");
     {
         int year, month, day, hour, minute;
@@ -159,6 +166,10 @@ int main(int argc, char **argv) {
     Io_Start();
     NitroHost_Init();
     Log_Line("3DS", "nitrofs %s", NitroHost_Nitrofs() ? "a/0/0/2 open" : "not staged");
+#if defined(PBW2_LINK_GAME)
+    GameThread_Start();
+    Log_Line("3DS", "game thread %s", GameThread_Started() ? "running" : "pending");
+#endif
     if (TitlePic_Load()) {
         Log_Line("3DS", "title pic: %s", TitlePic_Note());
         gfxSetScreenFormat(GFX_TOP, GSP_RGB565_OES);

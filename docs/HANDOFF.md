@@ -152,11 +152,16 @@ from game C land in `pbw2_io`. DSi/TWL stays stubbed. Sound stays silent.
    tree is clean afterward. Open `black2_3ds.3dsx` in Azahar with NitroFS
    staged and confirm the logo over the title background, the lower screen,
    no crash, and no `.sav`. Then White 2, in its own directory.
-2. Only after that logo is on screen, link `src/system/main.c` as
-   `Pbw2_GameMain` (the shell already owns `main`). That needs the Nitro SDK
-   headers under `include/nnsys/` and a link of the compiled game objects, not
-   just `main.c`. Then static-link or load overlays 12 (`ov012.bin`, 123,520
-   bytes) and 27 (`ov027.bin`, 3,776 bytes). Keep DSi stubbed and sound silent.
+2. Experimental game link: `PBW2_LINK_GAME=1 make -C n3ds b2 w2` after
+   `game-objects`. `scripts/n3ds_game_objects.py` builds
+   `src/system/game_main.o` with `-Dmain=Pbw2_GameMain` and writes
+   `build/n3ds/<game>/game_objects.rsp` via `scripts/n3ds_link_closure.py`
+   (src plus `lib/nitro` closure). The shell starts `Pbw2_GameMain` on a 3DS
+   thread when `PBW2_LINK_GAME` is set. Overlays load from
+   `sdmc:/3ds/<game>_3ds/overlays/arm9_ovt.bin` and `ovNNN.bin`. Stage
+   `ov012.bin` (123,520 B) and `ov027.bin` (3,776 B) from
+   `extract/*/arm9_overlays/`. Nitro MI/OS shims log the first hit per stub.
+   Default `n3ds_build.sh` does not set `PBW2_LINK_GAME`.
 3. Do not write the save from the platform when the game starts calling
    `Save_GameWrite`. Remove the refusal in that function at the same time the
    game becomes the caller, and keep the bytes the cartridge format.
