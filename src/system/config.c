@@ -1,4 +1,7 @@
 #include "types.h"
+#ifdef PBW2_N3DS
+#include "log.h"
+#endif
 #include "gfl/heap.h"
 #include "gfl/key.h"
 #include "gfl/msg.h"
@@ -11,7 +14,13 @@
 static const u32 sKeyRemaps[] = { 0, 0, 0, 8, 1024, 1, 0, 0, 0, 512, 1, 1, 0, 0, 0 };
 
 void initKeyBlk(void) {
+#ifdef PBW2_N3DS
+    Log_Line("game", "initKeyBlk enter");
+#endif
     setKeyBlkStarted(sKeyRemaps);
+#ifdef PBW2_N3DS
+    Log_Line("game", "initKeyBlk return");
+#endif
 }
 
 Config *Config_Create(u32 heapId) {

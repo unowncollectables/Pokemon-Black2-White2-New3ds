@@ -12,6 +12,7 @@
 #define PBW2_IO_SIZE 0x110000u
 
 u8 pbw2_io[PBW2_IO_SIZE] ATTRIBUTE_ALIGN(32);
+vu16 PbW2_ButtonXyBuf;
 
 static OSSystemWork s_work;
 static u32 s_vblanks;
@@ -160,7 +161,7 @@ BOOL OSi_IsCodecTwlMode(void) {
 }
 
 BOOL OS_IsAvailableWireless(void) {
-    return TRUE;
+    return FALSE;
 }
 
 BOOL OS_IsAgreeEULA(void) {
@@ -244,6 +245,7 @@ void CARD_Init(void);
 void OS_Init(void) {
     memset(&s_work, 0, sizeof s_work);
     memset(s_irq, 0, sizeof s_irq);
+    PbW2_ButtonXyBuf = 0;
     OS_InitArena();
 #if defined(PBW2_LINK_GAME)
     PbW2_OsThreadHostInit();

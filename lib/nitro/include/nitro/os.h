@@ -435,7 +435,12 @@ BOOL OS_IsForceDisableWireless(void);
 void OS_WaitVBlankIntr(void);
 
 // The buttons the ARM7 reads, X, Y and the lid among them, in shared memory. NitroSDK's PAD_DetectFold
+#ifdef PBW2_N3DS
+extern vu16 PbW2_ButtonXyBuf;
+#define HW_BUTTON_XY_BUF ((u32)(uptr)(&PbW2_ButtonXyBuf))
+#else
 #define HW_BUTTON_XY_BUF 0x02ffffa8
+#endif
 #define PAD_DETECT_FOLD_MASK 0x8000
 #define PAD_DETECT_FOLD_SHIFT 15
 

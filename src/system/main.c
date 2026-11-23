@@ -153,9 +153,21 @@ static void GameInit(void) {
     GFL_SndInit();
     PokeVoice_Init(1, getResIDFunc, getWaveInfoFunc);
     setMonoSnd(&getTrainerDataBlkAddress(SaveControl_GetInstance())->config);
+#ifdef PBW2_N3DS
+    Log_Line("game", "GameInit setMonoSnd done");
+#endif
     initKeyBlk();
+#ifdef PBW2_N3DS
+    Log_Line("game", "GameInit initKeyBlk done");
+#endif
     GameBeaconSys_Create(1);
+#ifdef PBW2_N3DS
+    Log_Line("game", "GameInit GameBeaconSys_Create done");
+#endif
     PassPower_Init();
+#ifdef PBW2_N3DS
+    Log_Line("game", "GameInit return");
+#endif
 }
 
 static void GameUpdate(void) {

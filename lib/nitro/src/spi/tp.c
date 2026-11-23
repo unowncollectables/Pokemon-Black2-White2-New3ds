@@ -291,6 +291,15 @@ void TP_SetCalibrateParam(const TPCalibrateParam *calibrate) {
 
 // TP_RequestSamplingAsync: asks the ARM7 for one sample
 void TP_RequestSamplingAsync(void) {
+#ifdef PBW2_N3DS
+    tpState.buf.touch = 0;
+    tpState.buf.validity = TP_VALIDITY_INVALID_XY;
+    tpState.buf.x = 0;
+    tpState.buf.y = 0;
+    tpState.command_flg &= ~TP_REQUEST_COMMAND_FLAG_SAMPLING;
+    tpState.err_flg &= ~TP_REQUEST_COMMAND_FLAG_SAMPLING;
+    return;
+#else
     OSIntrMode enabled = OS_DisableInterrupts();
     BOOL sent = FALSE;
 
@@ -310,16 +319,24 @@ void TP_RequestSamplingAsync(void) {
     tpState.command_flg |= TP_REQUEST_COMMAND_FLAG_SAMPLING;
     tpState.err_flg &= ~TP_REQUEST_COMMAND_FLAG_SAMPLING;
     OS_RestoreInterrupts(enabled);
+#endif
 }
 
 // TP_WaitRawResult: waits for the sample that TP_RequestSamplingAsync asked for. 1 when the request failed
 u32 TP_WaitRawResult(TPData *result) {
+#ifdef PBW2_N3DS
+    if (result != NULL) {
+        *result = tpState.buf;
+    }
+    return 0;
+#else
     TP_WaitBusy(TP_REQUEST_COMMAND_FLAG_SAMPLING);
     if (tpState.err_flg & TP_REQUEST_COMMAND_FLAG_SAMPLING) {
         return 1;
     }
     *result = tpState.buf;
     return 0;
+#endif
 }
 
 // Sends the command that starts the automatic sampling, in two words. FALSE when the FIFO is full

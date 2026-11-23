@@ -164,8 +164,17 @@ void GFLAppInit(void) {
 }
 
 void GFLAppUpdate(void) {
+#ifdef PBW2_N3DS
+    static int s_logged_proc_mgr;
+#endif
     GCTX_HIDUpdate();
     NetDefine_Update();
+#ifdef PBW2_N3DS
+    if (!s_logged_proc_mgr) {
+        s_logged_proc_mgr = 1;
+        Log_Line("game", "GFLAppUpdate first GCTX_ProcMgrUpdate");
+    }
+#endif
     GCTX_ProcMgrUpdate();
     RTCCache_Update();
 }

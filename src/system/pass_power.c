@@ -1,4 +1,7 @@
 #include "types.h"
+#ifdef PBW2_N3DS
+#include "log.h"
+#endif
 #include "constants/arc.h"
 #include "constants/pokemon.h"
 #include "gfl/arc.h"
@@ -42,8 +45,14 @@ static const u32 PASSPOWER_HOLLOW_CHANCES[PASS_POWER_GROTTO_LEVELS] = { 10, 20, 
 static PassPowerState g_PassPowerState;
 
 void PassPower_Init(void) {
+#ifdef PBW2_N3DS
+    Log_Line("game", "PassPower_Init enter");
+#endif
     MI_CpuFill8(&g_PassPowerState, 0, sizeof(PassPowerState));
     PassPower_DeactivateAllEffects();
+#ifdef PBW2_N3DS
+    Log_Line("game", "PassPower_Init return");
+#endif
 }
 
 void PassPower_Update(void) {

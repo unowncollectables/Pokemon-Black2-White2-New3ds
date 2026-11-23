@@ -1,4 +1,7 @@
 #include "types.h"
+#ifdef PBW2_N3DS
+#include "log.h"
+#endif
 #include "app/townmap/townmap_util.h"
 #include "app/unity_tower/unity_tower.h"
 #include "battle/btl_main.h"
@@ -209,13 +212,22 @@ static const GameBeaconTypeInfo sGameBeaconTypeInfo[GAME_BEACON_TYPE_MAX] = {
 GameBeaconSystem *GameBeaconSys;
 
 void GameBeaconSys_Create(HeapID heapId) {
+#ifdef PBW2_N3DS
+    Log_Line("game", "GameBeaconSys_Create enter");
+#endif
     GFL_ASSERT(GameBeaconSys == NULL);
     GameBeaconSys = GFL_HeapAllocate(heapId, sizeof(GameBeaconSystem), TRUE, "game_beacon.c", 169);
     GameBeaconSys->logNewest = -1;
     GameBeaconSys->b2w2Only = FALSE;
     GameBeaconSys->nameBuf = GFL_StrBufCreate(16, heapId);
+#ifdef PBW2_N3DS
+    Log_Line("game", "GameBeaconSys_Create JoinAvenueVisitor_Create");
+#endif
     GameBeaconSys->avenueWork = JoinAvenueVisitor_Create(heapId);
     GameBeaconSys_SetEnabled(TRUE);
+#ifdef PBW2_N3DS
+    Log_Line("game", "GameBeaconSys_Create return");
+#endif
 }
 
 void GameBeaconSys_SetGameSystem(GameSystem *gsys) {

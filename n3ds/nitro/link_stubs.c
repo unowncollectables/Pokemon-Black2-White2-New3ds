@@ -49,7 +49,6 @@ void GFL_NetExit(void) { PBW2_STUB_LOG("link", "GFL_NetExit"); }
 void GFL_NetFreeAligned32(void) { PBW2_STUB_LOG("link", "GFL_NetFreeAligned32"); }
 void GFL_NetGetBeaconData(void) { PBW2_STUB_LOG("link", "GFL_NetGetBeaconData"); }
 void GFL_NetGetBeaconMac(void) { PBW2_STUB_LOG("link", "GFL_NetGetBeaconMac"); }
-void GFL_NetGetGameCommandBase(void) { PBW2_STUB_LOG("link", "GFL_NetGetGameCommandBase"); }
 void GFL_NetGetHandleNetId(void) { PBW2_STUB_LOG("link", "GFL_NetGetHandleNetId"); }
 void GFL_NetGetInitData(void) { PBW2_STUB_LOG("link", "GFL_NetGetInitData"); }
 void GFL_NetGetMaxConnectNum(void) { PBW2_STUB_LOG("link", "GFL_NetGetMaxConnectNum"); }
@@ -59,12 +58,7 @@ void GFL_NetGetSys(void) { PBW2_STUB_LOG("link", "GFL_NetGetSys"); }
 void GFL_NetGetWork(void) { PBW2_STUB_LOG("link", "GFL_NetGetWork"); }
 void GFL_NetHoldScan(void) { PBW2_STUB_LOG("link", "GFL_NetHoldScan"); }
 void GFL_NetInit(void) { PBW2_STUB_LOG("link", "GFL_NetInit"); }
-void GFL_NetIsEnded(void) { PBW2_STUB_LOG("link", "GFL_NetIsEnded"); }
 void GFL_NetIsHandleNegotiated(void) { PBW2_STUB_LOG("link", "GFL_NetIsHandleNegotiated"); }
-void GFL_NetIsInfrared(void) { PBW2_STUB_LOG("link", "GFL_NetIsInfrared"); }
-void GFL_NetIsInitialized(void) { PBW2_STUB_LOG("link", "GFL_NetIsInitialized"); }
-void GFL_NetIsNotInitialized(void) { PBW2_STUB_LOG("link", "GFL_NetIsNotInitialized"); }
-void GFL_NetIsParent(void) { PBW2_STUB_LOG("link", "GFL_NetIsParent"); }
 void GFL_NetIwFree(void) { PBW2_STUB_LOG("link", "GFL_NetIwFree"); }
 void GFL_NetMainWhileWaiting(void) { PBW2_STUB_LOG("link", "GFL_NetMainWhileWaiting"); }
 void GFL_NetNotifyChildConnect(void) { PBW2_STUB_LOG("link", "GFL_NetNotifyChildConnect"); }
@@ -316,7 +310,6 @@ void NetDevWifi_GetTable(void) { PBW2_STUB_LOG("link", "NetDevWifi_GetTable"); }
 void NetDevWireless_GetTable(void) { PBW2_STUB_LOG("link", "NetDevWireless_GetTable"); }
 void NetWhpipe_GetBeaconCommandBase(void) { PBW2_STUB_LOG("link", "NetWhpipe_GetBeaconCommandBase"); }
 void NetWhpipe_GetBeaconService(void) { PBW2_STUB_LOG("link", "NetWhpipe_GetBeaconService"); }
-void NetWhpipe_IsScanning(void) { PBW2_STUB_LOG("link", "NetWhpipe_IsScanning"); }
 void NetWhpipe_UpdateGameBeacon(void) { PBW2_STUB_LOG("link", "NetWhpipe_UpdateGameBeacon"); }
 void OS_DestroyThread(void) { PBW2_STUB_LOG("link", "OS_DestroyThread"); }
 void OS_DisableIrqMask(void) { PBW2_STUB_LOG("link", "OS_DisableIrqMask"); }

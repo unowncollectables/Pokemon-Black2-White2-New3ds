@@ -4,10 +4,6 @@
 #include "nitro/gx.h"
 #include "nitro/os.h"
 
-#ifdef PBW2_N3DS
-extern u32 SDK_AUTOLOAD_DTCM_START[];
-#endif
-
 // NitroSDK's OS_GetLowEntropyData
 void OS_GetLowEntropyData(u32 buffer[8]) {
     const OSSystemWork *work = OS_GetSystemWork();
@@ -21,11 +17,5 @@ void OS_GetLowEntropyData(u32 buffer[8]) {
     buffer[4] = work->real_time_clock[1];
     buffer[5] = (work->mic_sampling_data << 16) ^ work->mic_last_address;
     buffer[6] = (work->touchPanelX << 16) | work->touchPanelY;
-#ifdef PBW2_N3DS
-    buffer[7] = reg_PAD_KEYINPUT |
-                (*(vu16 *)((u8 *)SDK_AUTOLOAD_DTCM_START + (0x02ffffa8u - 0x02ff8000u))) |
-                (work->wm_rssi_pool << 16);
-#else
     buffer[7] = reg_PAD_KEYINPUT | *(vu16 *)HW_BUTTON_XY_BUF | (work->wm_rssi_pool << 16);
-#endif
 }
