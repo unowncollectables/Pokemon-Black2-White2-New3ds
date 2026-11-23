@@ -1,0 +1,271 @@
+#include "types.h"
+#include "constants/zones.h"
+#include "field/effect/field_effect.h"
+#include "field/field.h"
+#include "field/gimmick/field_gimmick_bsubway.h"
+#include "field/map/field_g3d_mapper.h"
+#include "field/map/fieldmap.h"
+#include "gfl/heap.h"
+#include "nitro/fx.h"
+#include "system/game_data.h"
+#include "system/game_system.h"
+
+// field_gimmick_bsubway.c, named by the string it passes to GFL_HeapAllocate. Each of the Battle Subway's zones 67
+// to 76 keeps this in its gimmick state's user data. Zone 75's train shakes the map now and then; the others load
+// the field effect of the train, which script plugin 1 starts and drives
+
+// The zone's work in the gimmick state, which the save block keeps; the reserved bytes are part of that layout and
+// this gimmick does not use them
+typedef struct {
+    u16 reserved00;
+    // The zone's entry in sGimmickFuncs
+    u16 handlerIndex;
+    u16 gimmickId;
+    u8 reserved06[2];
+    u32 zoneId;
+    u16 heapId;
+    u8 reserved0E[14];
+    GameSystem *gsys;
+    Field *field;
+    // A TrainWork, or zone 75's ShakeWork
+    void *data;
+} BSubwayGimmickWork;
+
+typedef struct {
+    FieldEffectTask *effect;
+} TrainWork;
+
+typedef struct {
+    // Set by script to stop the shaking
+    u8 stop;
+    u8 state;
+    u8 waitIndex;
+    s32 wait;
+    // How far the map is moved up, alternating in sign as it dies down
+    s32 shake;
+} ShakeWork;
+
+typedef struct {
+    u32 zoneId;
+    u32 gimmickId;
+} BSubwayZoneGimmick;
+
+typedef void (*BSubwayGimmickFunc)(BSubwayGimmickWork *work, Field *field);
+
+typedef struct {
+    BSubwayGimmickFunc setup;
+    BSubwayGimmickFunc end;
+    BSubwayGimmickFunc move;
+} BSubwayGimmickFuncs;
+
+static void TrainSetup(BSubwayGimmickWork *work, Field *field);
+static void TrainEnd(BSubwayGimmickWork *work, Field *field);
+static void ShakeSetup(BSubwayGimmickWork *work, Field *field);
+static void ShakeEnd(BSubwayGimmickWork *work, Field *field);
+enum {
+    SHAKE_STEP_IDLE,
+    SHAKE_STEP_WAIT,
+    SHAKE_STEP_MOVE,
+};
+
+static void ShakeMove(BSubwayGimmickWork *work, Field *field);
+static void GetZoneGimmick(u32 zoneId, u32 *gimmickId, u32 *index);
+
+static const BSubwayZoneGimmick sZoneGimmicks[10] = {
+    { ZONE_GEAR_STATION_2, 0x10 }, { ZONE_GEAR_STATION_3, 0x11 }, { ZONE_GEAR_STATION_4, 0x12 },
+    { ZONE_GEAR_STATION_5, 0x13 }, { ZONE_GEAR_STATION_6, 0x14 }, { ZONE_GEAR_STATION_7, 0x15 },
+    { ZONE_GEAR_STATION_8, 0x16 }, { ZONE_BATTLE_SUBWAY, 0x17 },  { ZONE_BATTLE_SUBWAY_2, 0x18 },
+    { ZONE_GEAR_STATION_9, 0x1f },
+};
+
+// clang-format off
+static const BSubwayGimmickFuncs sGimmickFuncs[10] = {
+    { TrainSetup, TrainEnd, NULL },
+    { TrainSetup, TrainEnd, NULL },
+    { TrainSetup, TrainEnd, NULL },
+    { TrainSetup, TrainEnd, NULL },
+    { TrainSetup, TrainEnd, NULL },
+    { TrainSetup, TrainEnd, NULL },
+    { TrainSetup, TrainEnd, NULL },
+    { ShakeSetup, ShakeEnd, ShakeMove },
+    { TrainSetup, TrainEnd, NULL },
+    { TrainSetup, TrainEnd, NULL },
+};
+
+// clang-format on
+
+void FieldGimmickBSubway_Setup(Field *field) {
+    u16 heapId;
+    GameSystem *gsys;
+    GimmickState *state;
+    u32 zoneId;
+    u32 index;
+    u32 gimmickId;
+    BSubwayGimmickWork *work;
+
+    heapId = Field_GetHeapID(field);
+    gsys = Field_GetGameSystem(field);
+    state = GameData_GetGimmickState(GSYS_GetGameData(gsys));
+    zoneId = Field_GetPlayerStateZoneID(field);
+    GetZoneGimmick(zoneId, &gimmickId, &index);
+    work = GimmickState_GetUserData(state, gimmickId);
+    work->handlerIndex = index;
+    work->gimmickId = gimmickId;
+    work->zoneId = zoneId;
+    work->heapId = heapId;
+    work->gsys = gsys;
+    work->field = field;
+    if (sGimmickFuncs[work->handlerIndex].setup != NULL) {
+        sGimmickFuncs[work->handlerIndex].setup(work, field);
+    }
+}
+
+void FieldGimmickBSubway_End(Field *field) {
+    u16 heapId;
+    GimmickState *state;
+    u32 index;
+    u32 gimmickId;
+    BSubwayGimmickWork *work;
+
+    heapId = Field_GetHeapID(field);
+    state = GameData_GetGimmickState(GSYS_GetGameData(Field_GetGameSystem(field)));
+    GetZoneGimmick(Field_GetPlayerStateZoneID(field), &gimmickId, &index);
+    work = GimmickState_GetUserData(state, gimmickId);
+    if (sGimmickFuncs[work->handlerIndex].end != NULL) {
+        sGimmickFuncs[work->handlerIndex].end(work, field);
+    }
+}
+
+void FieldGimmickBSubway_Move(Field *field) {
+    GimmickState *state;
+    u32 index;
+    u32 gimmickId;
+
+    state = GameData_GetGimmickState(GSYS_GetGameData(Field_GetGameSystem(field)));
+    GetZoneGimmick(Field_GetPlayerStateZoneID(field), &gimmickId, &index);
+    if (sGimmickFuncs[index].move != NULL) {
+        sGimmickFuncs[index].move(GimmickState_GetUserData(state, gimmickId), field);
+    }
+}
+
+void FieldGimmickBSubway_StartTrainEffect(Field *field, u32 trainIdx, const VecFx32 *pos) {
+    u16 heapId;
+    GimmickState *state;
+    u32 index;
+    u32 gimmickId;
+    TrainWork *train;
+
+    heapId = Field_GetHeapID(field);
+    state = GameData_GetGimmickState(GSYS_GetGameData(Field_GetGameSystem(field)));
+    GetZoneGimmick(Field_GetPlayerStateZoneID(field), &gimmickId, &index);
+    train = ((BSubwayGimmickWork *)GimmickState_GetUserData(state, gimmickId))->data;
+    train->effect = FldeffBtrain_Start(Field_GetFieldEffects(field), trainIdx, pos);
+}
+
+FieldEffectTask *FieldGimmickBSubway_GetTrainEffect(Field *field) {
+    u16 heapId;
+    GimmickState *state;
+    u32 index;
+    u32 gimmickId;
+    TrainWork *train;
+
+    heapId = Field_GetHeapID(field);
+    state = GameData_GetGimmickState(GSYS_GetGameData(Field_GetGameSystem(field)));
+    GetZoneGimmick(Field_GetPlayerStateZoneID(field), &gimmickId, &index);
+    train = ((BSubwayGimmickWork *)GimmickState_GetUserData(state, gimmickId))->data;
+    return train->effect;
+}
+
+static void TrainSetup(BSubwayGimmickWork *work, Field *field) {
+    FieldEffects *effects;
+    u32 id;
+
+    effects = Field_GetFieldEffects(field);
+    work->data = GFL_HeapAllocate(work->heapId, sizeof(TrainWork), TRUE, "field_gimmick_bsubway.c", 274);
+    id = FLDEFF_BTRAIN;
+    FieldEffects_Load(effects, &id, 1);
+}
+
+static void TrainEnd(BSubwayGimmickWork *work, Field *field) {
+    GFL_HeapFree(work->data);
+}
+
+void FieldGimmickBSubway_StopShake(Field *field) {
+    GimmickState *state;
+    BSubwayGimmickWork *work;
+    ShakeWork *shake;
+
+    state = GameData_GetGimmickState(GSYS_GetGameData(Field_GetGameSystem(field)));
+    if (Field_GetPlayerStateZoneID(field) == ZONE_BATTLE_SUBWAY) {
+        work = GimmickState_GetUserData(state, 0x17);
+        if (work != NULL) {
+            shake = work->data;
+            if (shake != NULL) {
+                shake->stop = TRUE;
+            }
+        }
+    }
+}
+
+static void ShakeSetup(BSubwayGimmickWork *work, Field *field) {
+    work->data = GFL_HeapAllocate(work->heapId, sizeof(ShakeWork), TRUE, "field_gimmick_bsubway.c", 356);
+}
+
+static void ShakeEnd(BSubwayGimmickWork *work, Field *field) {
+    GFL_HeapFree(work->data);
+}
+
+static void ShakeMove(BSubwayGimmickWork *work, Field *field) {
+    VecFx32 pos = { 0, 0, 0 };
+    s32 waits[] = { 60, 10, 60, 10 };
+    ShakeWork *shake;
+    FieldG3DMapper *mapper;
+
+    shake = work->data;
+    mapper = Field_GetG3DMapper(field);
+    switch (shake->state) {
+    case SHAKE_STEP_IDLE:
+        if (shake->stop == TRUE) {
+            break;
+        }
+        shake->wait = waits[shake->waitIndex];
+        shake->waitIndex++;
+        shake->waitIndex %= NELEMS(waits);
+        shake->state++;
+    case SHAKE_STEP_WAIT:
+        if (--shake->wait > 0) {
+            break;
+        }
+        shake->shake = 1;
+        shake->state++;
+        break;
+    case SHAKE_STEP_MOVE:
+        pos.y = shake->shake * FX32_ONE;
+        FieldG3DMapper_SetOriginOffset(mapper, &pos);
+        if (shake->shake == 0) {
+            shake->state = SHAKE_STEP_IDLE;
+        }
+        if (shake->shake < 0) {
+            shake->shake += 2;
+            if (shake->shake > 0) {
+                shake->shake = 0;
+            }
+        }
+        shake->shake = -shake->shake;
+        break;
+    }
+}
+
+static void GetZoneGimmick(u32 zoneId, u32 *gimmickId, u32 *index) {
+    s32 i;
+
+    for (i = 0; i < 10; i++) {
+        if (zoneId == sZoneGimmicks[i].zoneId) {
+            *gimmickId = sZoneGimmicks[i].gimmickId;
+            *index = i;
+            return;
+        }
+    }
+    *gimmickId = 0;
+    *index = 0;
+}

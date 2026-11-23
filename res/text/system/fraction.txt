@@ -1,0 +1,3 @@
+Fraction_Text_Slash = /
+Fraction_Text_Numerator = {0207:0}
+Fraction_Text_Denominator = {0207:0}

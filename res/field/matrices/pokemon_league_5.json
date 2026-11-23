@@ -1,0 +1,6 @@
+{
+    "$schema": "map_matrix.schema.json",
+    "maps": [
+        [ "MAP_MODEL_POKEMON_LEAGUE_5_M_SITEN01_00_00" ]
+    ]
+}

@@ -1,0 +1,7 @@
+{
+    "$schema": "map_matrix.schema.json",
+    "maps": [
+        [ "MAP_MODEL_UNDERGROUND_RUINS_2_M_DUN2905_00_00" ],
+        [ "MAP_MODEL_UNDERGROUND_RUINS_2_M_DUN2905_00_01" ]
+    ]
+}

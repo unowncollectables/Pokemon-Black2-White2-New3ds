@@ -1,0 +1,631 @@
+#include "battle/select/b_plist_obj.h"
+#include "battle/select/b_app_tool.h"
+#include "battle/select/b_plist_main.h"
+#include "constants/arc.h"
+#include "gfl/arc.h"
+#include "gfl/arc_util.h"
+#include "gfl/clact.h"
+#include "gfl/gx_layers.h"
+#include "gfl/heap.h"
+#include "gfl/net.h"
+#include "nitro/fx.h"
+#include "nitro/gx.h"
+#include "pml/item.h"
+#include "pml/move.h"
+#include "pml/poke_party.h"
+#include "system/app_menu_common.h"
+#include "system/hp_gauge.h"
+#include "system/palanm.h"
+
+// The battle party list's OBJ resources and cell actors: the Pokémon icons with their status and item icons, the
+// type and category icons of the summary pages, and overlay 285's cursor. The file name is our guess, after the
+// ROM's b_plist_main.c and b_plist_anm.c and the b_plist_* files of the earlier games.
+
+// How BPlistObj_CreateActor creates each of the list's actors, by index into the work's resources
+typedef struct {
+    u32 chars;
+    u32 palette;
+    u32 cellAnims;
+    u32 bgPriority;
+    u32 priority;
+} BPlistActorSetup;
+
+static void BPlistObj_ClearResources(BPlistWork *wk);
+static void BPlistObj_LoadPokeIconRes(BPlistWork *wk);
+static void BPlistObj_LoadStatusIconRes(BPlistWork *wk);
+static void BPlistObj_LoadTypeIconRes(BPlistWork *wk);
+static void BPlistObj_LoadItemIconRes(BPlistWork *wk);
+static void BPlistObj_LoadCursorRes(BPlistWork *wk);
+static void BPlistObj_LoadHpBarRes(BPlistWork *wk);
+static ClActor *BPlistObj_CreateActor(BPlistWork *wk, const BPlistActorSetup *data);
+static void BPlistObj_CreateActors(BPlistWork *wk);
+static void BPlistObj_ShowAt(ClActor *actor, const ClActorPos *pos);
+static void BPlistObj_SetPokeIconPalettes(BPlistWork *wk);
+static void BPlistObj_LoadTypeIcon(BPlistWork *wk, ClActor *actor, u32 chars, u32 type);
+static void BPlistObj_LoadCategoryIcon(BPlistWork *wk, u32 actor, u32 chars, u32 category);
+static void BPlistObj_ShowStatusIcon(u8 status, ClActor *actor, const ClActorPos *pos);
+static void BPlistObj_ShowPokeTypes(BPlistWork *wk, BPlistPokemon *pkm, const ClActorPos *pos);
+static void BPlistObj_ShowItemIcon(u16 item, ClActor *actor, const ClActorPos *pos);
+static void BPlistObj_ShowList(BPlistWork *wk);
+static void BPlistObj_ShowSelectedPage(BPlistWork *wk);
+static void BPlistObj_ShowSummaryPage(BPlistWork *wk);
+static void BPlistObj_ShowMovesPage(BPlistWork *wk);
+static void BPlistObj_ShowMoveInfoPage(BPlistWork *wk);
+static void BPlistObj_ShowForgetMovePage(BPlistWork *wk);
+static void BPlistObj_ShowConfirmForgetPage(BPlistWork *wk);
+static void BPlistObj_ShowPPRestorePage(BPlistWork *wk);
+static void BPlistObj_ChangeAnim(ClActor *actor, u16 sequence);
+static u16 BPlistObj_GetPokeIconAnim(BPlistPokemon *pkm);
+static void BPlistObj_InitCursor(BPlistWork *wk);
+
+// Declared in the order that MWCC's sort by size lays out in address order (rodata_order.py)
+static const ClActorPos sBPlistForgetAndPPRestoreStatusPos = { 0xc6, 0x14 };
+static const ClActorPos sBPlistConfirmForgetPokemonPos = { 0x18, 0x0c };
+static const ClActorPos sBPlistSummaryPokemonPos = { 0x18, 0x0c };
+static const ClActorPos sBPlistForgetAndPPRestorePokemonPos = { 0x18, 0x0c };
+static const ClActorPos sBPlistConfirmForgetStatusPos = { 0xc6, 0x14 };
+static const ClActorPos sBPlistConfirmForgetMoveTypePos = { 0x88, 0x28 };
+static const ClActorPos sBPlistSelectedPokemonPos = { 0x80, 0x48 };
+static const ClActorPos sBPlistMoveInfoCategoryPos = { 0x18, 0x50 };
+static const ClActorPos sBPlistSummaryHeldItemPos = { 0x14, 0x84 };
+static const ClActorPos sBPlistSummaryHpBarPos = { 0xdf, 0x34 };
+static const ClActorPos sBPlistMovesPokemonPos = { 0x18, 0x0c };
+static const ClActorPos sBPlistMovesStatusPos = { 0xc6, 0x14 };
+static const ClActorPos sBPlistSummaryStatusPos = { 0xc6, 0x14 };
+static const ClActorPos sBPlistMoveInfoPokemonPos = { 0x18, 0x0c };
+static const ClActorPos sBPlistMoveInfoStatusPos = { 0xc6, 0x14 };
+static const ClActorPos sBPlistConfirmForgetCategoryPos = { 0x18, 0x50 };
+static const ClActorPos sBPlistMoveInfoMoveTypePos = { 0x88, 0x28 };
+static const ClActorPos sBPlistMoveInfoPokemonTypePositions[2] = { { 0x82, 0x10 }, { 0xa4, 0x10 } };
+static const ClActorPos sBPlistConfirmForgetPokemonTypePositions[2] = { { 0x82, 0x10 }, { 0xa4, 0x10 } };
+static const ClActorPos sBPlistSummaryPokemonTypePositions[2] = { { 0x82, 0x10 }, { 0xa4, 0x10 } };
+static const ClActorPos sBPlistMovesPokemonTypePositions[2] = { { 0x82, 0x10 }, { 0xa4, 0x10 } };
+static const ClActorPos sBPlistForgetAndPPRestorePokemonTypePositions[2] = { { 0x82, 0x10 }, { 0xa4, 0x10 } };
+static const ClActorPos sBPlistMoveListTypePositions[5] = {
+    { 0x1e, 0x50 }, { 0x9e, 0x50 }, { 0x1e, 0x80 }, { 0x9e, 0x80 }, { 0x5e, 0xb0 }
+};
+static const ClActorPos sBPlistPartyStatusPositions[6] = { { 0x1c, 0x28 }, { 0x9c, 0x30 }, { 0x1c, 0x58 },
+                                                           { 0x9c, 0x60 }, { 0x1c, 0x88 }, { 0x9c, 0x90 } };
+static const ClActorPos sBPlistPartyPokemonPositions[6] = { { 0x10, 0x10 }, { 0x90, 0x18 }, { 0x10, 0x40 },
+                                                            { 0x90, 0x48 }, { 0x10, 0x70 }, { 0x90, 0x78 } };
+static const ClActorPos sBPlistPartyHpBarPositions[6] = { { 0x57, 0x1c }, { 0xd7, 0x24 }, { 0x57, 0x4c },
+                                                          { 0xd7, 0x54 }, { 0x57, 0x7c }, { 0xd7, 0x84 } };
+
+static const BPlistActorSetup sBPlistActorSetups[41] = {
+    { 7, 2, 2, 1, 0 },  { 7, 2, 2, 1, 0 },  { 7, 2, 2, 1, 0 },  { 7, 2, 2, 1, 0 },  { 7, 2, 2, 1, 0 },
+    { 7, 2, 2, 1, 0 },  { 7, 2, 2, 1, 0 },  { 0, 0, 0, 1, 1 },  { 1, 0, 0, 1, 1 },  { 2, 0, 0, 1, 1 },
+    { 3, 0, 0, 1, 1 },  { 4, 0, 0, 1, 1 },  { 5, 0, 0, 1, 1 },  { 6, 1, 1, 1, 1 },  { 6, 1, 1, 1, 1 },
+    { 6, 1, 1, 1, 1 },  { 6, 1, 1, 1, 1 },  { 6, 1, 1, 1, 1 },  { 6, 1, 1, 1, 1 },  { 25, 5, 5, 2, 0 },
+    { 25, 5, 5, 2, 0 }, { 25, 5, 5, 2, 0 }, { 25, 5, 5, 2, 0 }, { 25, 5, 5, 2, 0 }, { 25, 5, 5, 2, 0 },
+    { 8, 3, 3, 1, 0 },  { 9, 3, 3, 1, 0 },  { 10, 3, 3, 1, 0 }, { 11, 3, 3, 1, 0 }, { 12, 3, 3, 1, 0 },
+    { 13, 3, 3, 1, 0 }, { 14, 3, 3, 1, 0 }, { 15, 3, 3, 1, 0 }, { 16, 3, 3, 1, 0 }, { 17, 3, 3, 1, 0 },
+    { 18, 3, 3, 1, 0 }, { 19, 3, 3, 1, 0 }, { 20, 3, 3, 1, 0 }, { 21, 3, 3, 1, 0 }, { 22, 3, 3, 1, 0 },
+    { 23, 3, 3, 1, 0 },
+};
+
+void BPlistObj_Init(BPlistWork *wk) {
+    BPlistObj_ClearResources(wk);
+    BPlistObj_LoadPokeIconRes(wk);
+    BPlistObj_LoadStatusIconRes(wk);
+    BPlistObj_LoadItemIconRes(wk);
+    BPlistObj_LoadTypeIconRes(wk);
+    BPlistObj_LoadCursorRes(wk);
+    BPlistObj_LoadHpBarRes(wk);
+    BPlistObj_CreateActors(wk);
+    BPlistObj_InitCursor(wk);
+    GFL_BGSysSetBGEnabledB(GX_PLANEMASK_OBJ, TRUE);
+}
+
+static void BPlistObj_ClearResources(BPlistWork *wk) {
+    u32 i;
+
+    for (i = 0; i < NELEMS(wk->charRes); i++) {
+        wk->charRes[i] = -1;
+    }
+    for (i = 0; i < NELEMS(wk->plttRes); i++) {
+        wk->plttRes[i] = -1;
+    }
+    for (i = 0; i < NELEMS(wk->cellRes); i++) {
+        wk->cellRes[i] = -1;
+    }
+}
+
+static void BPlistObj_LoadPokeIconRes(BPlistWork *wk) {
+    ArcTool *arc = GFL_ArcSysCreateFileHandle(ARCID_POKEICON, HEAPID_TAIL(wk->param->heapId));
+    u32 *res = wk->charRes;
+    u16 i;
+
+    for (i = 0; i < 6; i++) {
+        if (wk->pokemon[i].species != 0) {
+            res[i] = ClActSys_LoadChars(arc, PokeIcon_GetFileOfPkm(PokeParty_ToBoxPkm(wk->pokemon[i].pkm)), FALSE,
+                                        CLACT_VRAM_SUB, wk->param->heapId);
+        } else {
+            res[i] = ClActSys_LoadChars(arc, PokeParty_GetIconIndex(0, 0, 0, FALSE), FALSE, CLACT_VRAM_SUB,
+                                        wk->param->heapId);
+        }
+    }
+    wk->plttRes[0] = ClActSys_LoadPlttEx(arc, PokeIcon_GetPaletteFile(), CLACT_VRAM_SUB, 0, wk->param->heapId);
+    wk->cellRes[0] =
+        ClActSys_LoadCellAnims(arc, PokeIcon_GetCellFile_Sub(), getOBJTileMapping_SubEng(), wk->param->heapId);
+    GFL_ArcToolFree(arc);
+}
+
+static void BPlistObj_LoadStatusIconRes(BPlistWork *wk) {
+    ArcTool *arc = GFL_ArcSysCreateFileHandle(ARCID_APP_MENU_COMMON, HEAPID_TAIL(wk->param->heapId));
+
+    wk->charRes[6] = ClActSys_LoadChars(arc, 12, FALSE, CLACT_VRAM_SUB, wk->param->heapId);
+    wk->plttRes[1] = ClActSys_LoadPltt(arc, 11, CLACT_VRAM_SUB, 0x60, wk->param->heapId);
+    wk->cellRes[1] = ClActSys_LoadCellAnims(arc, 13, 16, wk->param->heapId);
+    GFL_ArcToolFree(arc);
+}
+
+static void BPlistObj_LoadTypeIconRes(BPlistWork *wk) {
+    ArcTool *arc = GFL_ArcSysCreateFileHandle(ARCID_APP_MENU_COMMON, HEAPID_TAIL(wk->param->heapId));
+    u32 i;
+
+    wk->plttRes[3] = ClActSys_LoadPltt(arc, 33, CLACT_VRAM_SUB, 0xa0, wk->param->heapId);
+    wk->cellRes[3] = ClActSys_LoadCellAnims(arc, 59, 62, wk->param->heapId);
+    for (i = 8; i <= 21; i++) {
+        wk->charRes[i] =
+            ClActSys_LoadChars(arc, AppMenuCommon_GetTypeIconCharFile(0), FALSE, CLACT_VRAM_SUB, wk->param->heapId);
+    }
+    wk->charRes[22] =
+        ClActSys_LoadChars(arc, AppMenuCommon_GetCategoryIconCharFile(0), FALSE, CLACT_VRAM_SUB, wk->param->heapId);
+    wk->charRes[23] =
+        ClActSys_LoadChars(arc, AppMenuCommon_GetCategoryIconCharFile(0), FALSE, CLACT_VRAM_SUB, wk->param->heapId);
+    GFL_ArcToolFree(arc);
+}
+
+static void BPlistObj_LoadItemIconRes(BPlistWork *wk) {
+    ArcTool *arc = GFL_ArcSysCreateFileHandle(ARCID_APP_MENU_COMMON, HEAPID_TAIL(wk->param->heapId));
+
+    wk->charRes[7] = ClActSys_LoadChars(arc, 65, FALSE, CLACT_VRAM_SUB, wk->param->heapId);
+    wk->plttRes[2] = ClActSys_LoadPltt(arc, 66, CLACT_VRAM_SUB, 0x80, wk->param->heapId);
+    wk->cellRes[2] = ClActSys_LoadCellAnims(arc, 67, 70, wk->param->heapId);
+    GFL_ArcToolFree(arc);
+}
+
+static void BPlistObj_LoadCursorRes(BPlistWork *wk) {
+    ArcTool *arc = GFL_ArcSysCreateFileHandle(ARCID_BTLV, HEAPID_TAIL(wk->param->heapId));
+
+    wk->charRes[24] = ClActSys_LoadChars(arc, 424, FALSE, CLACT_VRAM_SUB, wk->param->heapId);
+    wk->plttRes[4] = ClActSys_LoadPlttRange(arc, 421, CLACT_VRAM_SUB, 0x100, 4, 1, wk->param->heapId);
+    wk->cellRes[4] = ClActSys_LoadCellAnims(arc, 425, 426, wk->param->heapId);
+    GFL_ArcToolFree(arc);
+}
+
+static void BPlistObj_LoadHpBarRes(BPlistWork *wk) {
+    ArcTool *arc = GFL_ArcSysCreateFileHandle(getUINarcIdx(), HEAPID_TAIL(wk->param->heapId));
+
+    wk->charRes[25] =
+        ClActSys_LoadChars(arc, AppMenuCommon_GetHpBarCharFile(0), FALSE, CLACT_VRAM_SUB, wk->param->heapId);
+    wk->plttRes[5] =
+        ClActSys_LoadPltt(arc, AppMenuCommon_GetHpBarPaletteFile(), CLACT_VRAM_SUB, 0x120, wk->param->heapId);
+    wk->cellRes[5] = ClActSys_LoadCellAnims(arc, AppMenuCommon_GetHpBarCellFile(0), AppMenuCommon_GetHpBarAnimFile(0),
+                                            wk->param->heapId);
+    GFL_ArcToolFree(arc);
+}
+
+static ClActor *BPlistObj_CreateActor(BPlistWork *wk, const BPlistActorSetup *data) {
+    ClActorSetup setup;
+
+    setup.x = 0;
+    setup.y = 0;
+    setup.sequence = 0;
+    setup.priority = data->priority;
+    setup.bgPriority = data->bgPriority;
+    return ClActor_Create(wk->actorUnit, wk->charRes[data->chars], wk->plttRes[data->palette],
+                          wk->cellRes[data->cellAnims], &setup, CLACT_SURFACE_SUB, wk->param->heapId);
+}
+
+static void BPlistObj_CreateActors(BPlistWork *wk) {
+    u32 i;
+
+    wk->actorUnit = ClActUnit_Create(45, 0, HEAPID_TAIL(wk->param->heapId));
+    for (i = 0; i < NELEMS(wk->actors); i++) {
+        wk->actors[i] = BPlistObj_CreateActor(wk, &sBPlistActorSetups[i]);
+    }
+    GFL_NetSetIconScreen(FALSE, wk->param->heapId);
+    PaletteFade_LoadFromVRAM(wk->paletteFade, PALFADE_VRAM_SUB_OBJ, 0, 0x1e0);
+    BPlistObj_SetPokeIconPalettes(wk);
+}
+
+void BPlistObj_Exit(BPlistWork *wk) {
+    u32 i;
+
+    for (i = 0; i < NELEMS(wk->actors); i++) {
+        ClActor_Delete(wk->actors[i]);
+    }
+    BAppCursor_DeleteActors(wk->cursor);
+    for (i = 0; i < NELEMS(wk->charRes); i++) {
+        ClActSys_FreeChars(wk->charRes[i]);
+    }
+    for (i = 0; i < NELEMS(wk->plttRes); i++) {
+        ClActSys_FreePltt(wk->plttRes[i]);
+    }
+    for (i = 0; i < NELEMS(wk->cellRes); i++) {
+        ClActSys_FreeCellAnims(wk->cellRes[i]);
+    }
+    ClActUnit_Delete(wk->actorUnit);
+}
+
+static void BPlistObj_ShowAt(ClActor *actor, const ClActorPos *pos) {
+    ClActor_SetVisible(actor, TRUE);
+    ClActor_SetSurfacePos(actor, pos, CLACT_SURFACE_SUB);
+}
+
+static void BPlistObj_SetPokeIconPalettes(BPlistWork *wk) {
+    s16 i;
+
+    for (i = 0; i < 6; i++) {
+        if (wk->pokemon[i].species != 0) {
+            ClActor_SetPalette(wk->pokeIcons[i],
+                               PokeIcon_GetPalette(wk->pokemon[i].species, wk->pokemon[i].form, wk->pokemon[i].sex,
+                                                   wk->pokemon[i].isEgg),
+                               1);
+        }
+    }
+}
+
+static void BPlistObj_LoadTypeIcon(BPlistWork *wk, ClActor *actor, u32 chars, u32 type) {
+    NNSG2dCharacterData *charData;
+    ArcTool *arc = GFL_ArcSysCreateFileHandle(ARCID_APP_MENU_COMMON, HEAPID_TAIL(wk->param->heapId));
+    void *file = GFL_G2DIOReadOBJNCGRArc(arc, AppMenuCommon_GetTypeIconCharFile(type), FALSE, &charData,
+                                         HEAPID_TAIL(wk->param->heapId));
+
+    ClActSys_ReplaceCharData(wk->charRes[chars], charData);
+    GFL_HeapFree(file);
+    GFL_ArcToolFree(arc);
+    ClActor_SetPalette(actor, AppMenuCommon_GetTypeIconPaletteIndex(type), 1);
+}
+
+static void BPlistObj_LoadCategoryIcon(BPlistWork *wk, u32 actor, u32 chars, u32 category) {
+    NNSG2dCharacterData *charData;
+    ArcTool *arc;
+    void *file;
+
+    actor += wk->categoryIconBuf;
+    chars += wk->categoryIconBuf;
+    arc = GFL_ArcSysCreateFileHandle(ARCID_APP_MENU_COMMON, HEAPID_TAIL(wk->param->heapId));
+    file = GFL_G2DIOReadOBJNCGRArc(arc, AppMenuCommon_GetCategoryIconCharFile(category), FALSE, &charData,
+                                   HEAPID_TAIL(wk->param->heapId));
+    ClActSys_ReplaceCharData(wk->charRes[chars], charData);
+    GFL_HeapFree(file);
+    GFL_ArcToolFree(arc);
+    ClActor_SetPalette(wk->actors[actor], AppMenuCommon_GetCategoryIconPaletteIndex(category), 1);
+    wk->categoryIconBuf ^= 1;
+}
+
+static void BPlistObj_ShowStatusIcon(u8 status, ClActor *actor, const ClActorPos *pos) {
+    if (status == APP_STATUS_ICON_NONE) {
+        ClActor_SetSurfacePos(actor, pos, CLACT_SURFACE_SUB);
+        return;
+    }
+    ClActor_SetSequence(actor, status);
+    BPlistObj_ShowAt(actor, pos);
+}
+
+static void BPlistObj_ShowPokeTypes(BPlistWork *wk, BPlistPokemon *pkm, const ClActorPos *pos) {
+    unsigned int actor;
+    u32 chars;
+
+    if (wk->pokeTypeIconBuf == 0) {
+        actor = BPLIST_ACTOR_POKE_TYPE;
+        chars = 8;
+    } else {
+        actor = BPLIST_ACTOR_POKE_TYPE + 2;
+        chars = 10;
+    }
+    BPlistObj_LoadTypeIcon(wk, wk->actors[actor], chars, pkm->type1);
+    BPlistObj_ShowAt(wk->actors[actor], &pos[0]);
+    if (pkm->type1 != pkm->type2) {
+        BPlistObj_LoadTypeIcon(wk, wk->actors[actor + 1], chars + 1, pkm->type2);
+        BPlistObj_ShowAt(wk->actors[actor + 1], &pos[1]);
+    }
+    wk->pokeTypeIconBuf ^= 1;
+}
+
+static void BPlistObj_ShowItemIcon(u16 item, ClActor *actor, const ClActorPos *pos) {
+    if (item == 0) {
+        ClActor_SetSurfacePos(actor, pos, CLACT_SURFACE_SUB);
+        return;
+    }
+    if (PML_ItemIsMail(item) == TRUE) {
+        ClActor_SetSequence(actor, 1);
+    } else {
+        ClActor_SetSequence(actor, 0);
+    }
+    BPlistObj_ShowAt(actor, pos);
+}
+
+void BPlistObj_SetPage(BPlistWork *wk, u8 page) {
+    u32 i;
+
+    for (i = 0; i < NELEMS(wk->actors); i++) {
+        ClActor_SetVisible(wk->actors[i], FALSE);
+    }
+    switch (page) {
+    case BPLIST_PAGE_PARTY:
+    case BPLIST_PAGE_SWITCH_POSITION:
+        BPlistObj_ShowList(wk);
+        break;
+    case BPLIST_PAGE_SELECTED:
+        BPlistObj_ShowSelectedPage(wk);
+        break;
+    case BPLIST_PAGE_SUMMARY:
+        BPlistObj_ShowSummaryPage(wk);
+        break;
+    case BPLIST_PAGE_MOVES:
+        BPlistObj_ShowMovesPage(wk);
+        break;
+    case BPLIST_PAGE_MOVE_INFO:
+        BPlistObj_ShowMoveInfoPage(wk);
+        break;
+    case BPLIST_PAGE_PP_RESTORE:
+        BPlistObj_ShowPPRestorePage(wk);
+        break;
+    case BPLIST_PAGE_FORGET_MOVE:
+        BPlistObj_ShowForgetMovePage(wk);
+        break;
+    case BPLIST_PAGE_CONFIRM_FORGET:
+        BPlistObj_ShowConfirmForgetPage(wk);
+        break;
+    }
+}
+
+static void BPlistObj_ShowList(BPlistWork *wk) {
+    s16 i;
+
+    for (i = 0; i < 6; i++) {
+        u8 slot = BPlistMain_GetPartySlot(wk, i);
+        if (wk->pokemon[slot].species != 0) {
+            ClActorPos pos;
+            BPlistObj_ShowAt(wk->actors[BPLIST_ACTOR_POKE + slot], &sBPlistPartyPokemonPositions[i]);
+            BPlistObj_ShowStatusIcon(wk->pokemon[slot].status, wk->actors[BPLIST_ACTOR_STATUS + slot],
+                                     &sBPlistPartyStatusPositions[i]);
+            if (!wk->pokemon[slot].isEgg) {
+                BPlistObj_ShowAt(wk->actors[BPLIST_ACTOR_HP_BAR + slot], &sBPlistPartyHpBarPositions[i]);
+            }
+            pos = sBPlistPartyPokemonPositions[i];
+            pos.x += 8;
+            pos.y += 8;
+            BPlistObj_ShowItemIcon(wk->pokemon[slot].item, wk->actors[BPLIST_ACTOR_ITEM + slot], &pos);
+        }
+    }
+}
+
+static void BPlistObj_ShowSelectedPage(BPlistWork *wk) {
+    u8 slot = BPlistMain_GetPartySlot(wk, wk->param->partyIndex);
+    ClActorPos pos = sBPlistSelectedPokemonPos;
+
+    BPlistObj_ShowAt(wk->pokeIcons[slot], &pos);
+    pos.x += 8;
+    pos.y += 8;
+    BPlistObj_ShowItemIcon(wk->pokemon[slot].item, wk->itemIcons[slot], &pos);
+}
+
+static void BPlistObj_ShowSummaryPage(BPlistWork *wk) {
+    u8 slot = BPlistMain_GetPartySlot(wk, wk->param->partyIndex);
+    BPlistPokemon *pkm = &wk->pokemon[slot];
+    ClActorPos pos = sBPlistSummaryPokemonPos;
+
+    BPlistObj_ShowAt(wk->pokeIcons[slot], &pos);
+    BPlistObj_ShowStatusIcon(pkm->status, wk->statusIcons[slot], &sBPlistSummaryStatusPos);
+    BPlistObj_ShowPokeTypes(wk, pkm, sBPlistSummaryPokemonTypePositions);
+    pos.x += 8;
+    pos.y += 8;
+    BPlistObj_ShowItemIcon(pkm->item, wk->itemIcons[slot], &pos);
+    BPlistObj_ShowItemIcon(pkm->item, wk->itemIcons[6], &sBPlistSummaryHeldItemPos);
+    BPlistObj_ShowAt(wk->hpBarActors[0], &sBPlistSummaryHpBarPos);
+}
+
+static void BPlistObj_ShowMovesPage(BPlistWork *wk) {
+    u8 slot = BPlistMain_GetPartySlot(wk, wk->param->partyIndex);
+    BPlistPokemon *pkm = &wk->pokemon[slot];
+    ClActorPos pos = sBPlistMovesPokemonPos;
+
+    BPlistObj_ShowAt(wk->pokeIcons[slot], &pos);
+    BPlistObj_ShowStatusIcon(pkm->status, wk->statusIcons[slot], &sBPlistMovesStatusPos);
+    BPlistObj_ShowPokeTypes(wk, pkm, sBPlistMovesPokemonTypePositions);
+    pos.x += 8;
+    pos.y += 8;
+    BPlistObj_ShowItemIcon(pkm->item, wk->itemIcons[slot], &pos);
+    BPlistObj_ShowMoveTypes(wk);
+}
+
+static void BPlistObj_ShowMoveInfoPage(BPlistWork *wk) {
+    u8 slot = BPlistMain_GetPartySlot(wk, wk->param->partyIndex);
+    BPlistPokemon *pkm = &wk->pokemon[slot];
+    ClActorPos pos = sBPlistMoveInfoPokemonPos;
+
+    BPlistObj_ShowAt(wk->pokeIcons[slot], &pos);
+    BPlistObj_ShowStatusIcon(pkm->status, wk->statusIcons[slot], &sBPlistMoveInfoStatusPos);
+    BPlistObj_ShowPokeTypes(wk, pkm, sBPlistMoveInfoPokemonTypePositions);
+    pos.x += 8;
+    pos.y += 8;
+    BPlistObj_ShowItemIcon(pkm->item, wk->itemIcons[slot], &pos);
+    if (wk->typeIconBuf == 0) {
+        BPlistObj_ShowAt(wk->actors[BPLIST_ACTOR_MOVE_TYPE + 5 + wk->param->slot], &sBPlistMoveInfoMoveTypePos);
+    } else {
+        BPlistObj_ShowAt(wk->actors[BPLIST_ACTOR_MOVE_TYPE + wk->param->slot], &sBPlistMoveInfoMoveTypePos);
+    }
+    if (wk->categoryIconBuf == 0) {
+        BPlistObj_ShowAt(wk->categoryIcons[0], &sBPlistMoveInfoCategoryPos);
+    } else {
+        BPlistObj_ShowAt(wk->categoryIcons[1], &sBPlistMoveInfoCategoryPos);
+    }
+    BPlistObj_LoadCategoryIcon(wk, BPLIST_ACTOR_CATEGORY, 22, pkm->moves[wk->param->slot].category);
+}
+
+static void BPlistObj_ShowForgetMovePage(BPlistWork *wk) {
+    u8 slot = BPlistMain_GetPartySlot(wk, wk->param->partyIndex);
+    BPlistPokemon *pkm = &wk->pokemon[slot];
+    ClActorPos pos = sBPlistForgetAndPPRestorePokemonPos;
+
+    BPlistObj_ShowAt(wk->pokeIcons[slot], &pos);
+    BPlistObj_ShowStatusIcon(pkm->status, wk->statusIcons[slot], &sBPlistForgetAndPPRestoreStatusPos);
+    BPlistObj_ShowPokeTypes(wk, pkm, sBPlistForgetAndPPRestorePokemonTypePositions);
+    pos.x += 8;
+    pos.y += 8;
+    BPlistObj_ShowItemIcon(pkm->item, wk->itemIcons[slot], &pos);
+    BPlistObj_ShowMoveTypes(wk);
+}
+
+static void BPlistObj_ShowConfirmForgetPage(BPlistWork *wk) {
+    u8 slot = BPlistMain_GetPartySlot(wk, wk->param->partyIndex);
+    BPlistPokemon *pkm = &wk->pokemon[slot];
+    ClActorPos pos = sBPlistConfirmForgetPokemonPos;
+
+    BPlistObj_ShowAt(wk->pokeIcons[slot], &pos);
+    BPlistObj_ShowStatusIcon(pkm->status, wk->statusIcons[slot], &sBPlistConfirmForgetStatusPos);
+    BPlistObj_ShowPokeTypes(wk, pkm, sBPlistConfirmForgetPokemonTypePositions);
+    pos.x += 8;
+    pos.y += 8;
+    BPlistObj_ShowItemIcon(pkm->item, wk->itemIcons[slot], &pos);
+    if (wk->typeIconBuf == 0) {
+        BPlistObj_ShowAt(wk->actors[BPLIST_ACTOR_MOVE_TYPE + 5 + wk->param->slot], &sBPlistConfirmForgetMoveTypePos);
+    } else {
+        BPlistObj_ShowAt(wk->actors[BPLIST_ACTOR_MOVE_TYPE + wk->param->slot], &sBPlistConfirmForgetMoveTypePos);
+    }
+    if (wk->categoryIconBuf == 0) {
+        BPlistObj_ShowAt(wk->categoryIcons[0], &sBPlistConfirmForgetCategoryPos);
+    } else {
+        BPlistObj_ShowAt(wk->categoryIcons[1], &sBPlistConfirmForgetCategoryPos);
+    }
+    if (wk->param->slot < 4) {
+        BPlistObj_LoadCategoryIcon(wk, BPLIST_ACTOR_CATEGORY, 22, pkm->moves[wk->param->slot].category);
+    } else {
+        BPlistObj_LoadCategoryIcon(wk, BPLIST_ACTOR_CATEGORY, 22,
+                                   PML_MoveGetParam(wk->param->move, MOVE_PARAM_CATEGORY));
+    }
+}
+
+static void BPlistObj_ShowPPRestorePage(BPlistWork *wk) {
+    u8 slot = BPlistMain_GetPartySlot(wk, wk->param->partyIndex);
+    BPlistPokemon *pkm = &wk->pokemon[slot];
+    ClActorPos pos = sBPlistForgetAndPPRestorePokemonPos;
+
+    BPlistObj_ShowAt(wk->pokeIcons[slot], &pos);
+    BPlistObj_ShowStatusIcon(pkm->status, wk->statusIcons[slot], &sBPlistForgetAndPPRestoreStatusPos);
+    BPlistObj_ShowPokeTypes(wk, pkm, sBPlistForgetAndPPRestorePokemonTypePositions);
+    pos.x += 8;
+    pos.y += 8;
+    BPlistObj_ShowItemIcon(pkm->item, wk->itemIcons[slot], &pos);
+    BPlistObj_ShowMoveTypes(wk);
+}
+
+void BPlistObj_ShowMoveTypes(BPlistWork *wk) {
+    BPlistPokemon *pkm;
+    u8 chars;
+    u8 actor;
+    u32 i;
+
+    pkm = &wk->pokemon[BPlistMain_GetPartySlot(wk, wk->param->partyIndex)];
+    if (wk->typeIconBuf == 0) {
+        actor = BPLIST_ACTOR_MOVE_TYPE;
+        chars = 12;
+    } else {
+        actor = BPLIST_ACTOR_MOVE_TYPE + 5;
+        chars = 17;
+    }
+    for (i = 0; i < 4; i++) {
+        if (pkm->moves[i].move != 0) {
+            BPlistObj_LoadTypeIcon(wk, wk->actors[actor + i], chars + i, pkm->moves[i].type);
+            BPlistObj_ShowAt(wk->actors[actor + i], &sBPlistMoveListTypePositions[i]);
+        }
+    }
+    if (wk->param->move != 0 && wk->param->mode == BPLIST_MODE_FORGET_MOVE) {
+        BPlistObj_LoadTypeIcon(wk, wk->actors[actor + i], chars + i,
+                               PML_MoveGetParam(wk->param->move, MOVE_PARAM_TYPE));
+        BPlistObj_ShowAt(wk->actors[actor + i], &sBPlistMoveListTypePositions[i]);
+    }
+    wk->typeIconBuf ^= 1;
+}
+
+static void BPlistObj_ChangeAnim(ClActor *actor, u16 sequence) {
+    if (sequence != ClActor_GetSequence(actor)) {
+        ClActor_SetAnimTime(actor, 0);
+        ClActor_SetSequence(actor, sequence);
+    }
+}
+
+static u16 BPlistObj_GetPokeIconAnim(BPlistPokemon *pkm) {
+    if (pkm->hp == 0) {
+        return 0;
+    }
+    if (pkm->status != APP_STATUS_ICON_NONE && pkm->status != APP_STATUS_ICON_FAINTED) {
+        return 5;
+    }
+    if (pkm->hp == pkm->maxHp) {
+        return 1;
+    }
+    switch (HPGauge_GetColor(pkm->hp, pkm->maxHp)) {
+    case HP_GAUGE_COLOR_GREEN:
+        return 2;
+    case HP_GAUGE_COLOR_YELLOW:
+        return 3;
+    case HP_GAUGE_COLOR_RED:
+        return 4;
+    }
+    return 0;
+}
+
+void BPlistObj_UpdatePokeIconAnims(BPlistWork *wk) {
+    u16 i;
+
+    for (i = 0; i < 6; i++) {
+        u8 slot = BPlistMain_GetPartySlot(wk, i);
+        if (wk->pokemon[slot].species != 0) {
+            u16 seq = BPlistObj_GetPokeIconAnim(&wk->pokemon[slot]);
+            BPlistObj_ChangeAnim(wk->pokeIcons[slot], seq);
+            ClActor_SetAnimSpeed(wk->pokeIcons[slot], FX32_ONE);
+        }
+    }
+}
+
+static void BPlistObj_InitCursor(BPlistWork *wk) {
+    BAppCursor_CreateActors(wk->cursor, wk->actorUnit, wk->charRes[24], wk->plttRes[4], wk->cellRes[4]);
+    BAppCursor_SetVisible(wk->cursor, FALSE);
+}
+
+void BPlistObj_MovePlate(BPlistWork *wk, int pos, s16 dx) {
+    u8 slot = BPlistMain_GetPartySlot(wk, pos);
+    ClActorPos p;
+
+    ClActor_GetSurfacePos(wk->itemIcons[slot], &p, CLACT_SURFACE_SUB);
+    p.x += dx;
+    ClActor_SetSurfacePos(wk->itemIcons[slot], &p, CLACT_SURFACE_SUB);
+    ClActor_GetSurfacePos(wk->pokeIcons[slot], &p, CLACT_SURFACE_SUB);
+    p.x += dx;
+    ClActor_SetSurfacePos(wk->pokeIcons[slot], &p, CLACT_SURFACE_SUB);
+    ClActor_GetSurfacePos(wk->statusIcons[slot], &p, CLACT_SURFACE_SUB);
+    p.x += dx;
+    ClActor_SetSurfacePos(wk->statusIcons[slot], &p, CLACT_SURFACE_SUB);
+    ClActor_GetSurfacePos(wk->hpBarActors[slot], &p, CLACT_SURFACE_SUB);
+    p.x += dx;
+    ClActor_SetSurfacePos(wk->hpBarActors[slot], &p, CLACT_SURFACE_SUB);
+}
+
+void BPlistObj_SwapPlates(BPlistWork *wk, int posA, int posB) {
+    u8 slotA = BPlistMain_GetPartySlot(wk, posA);
+    u8 slotB = BPlistMain_GetPartySlot(wk, posB);
+    ClActorPos a;
+    ClActorPos b;
+
+    ClActor_GetSurfacePos(wk->itemIcons[slotA], &a, CLACT_SURFACE_SUB);
+    ClActor_GetSurfacePos(wk->itemIcons[slotB], &b, CLACT_SURFACE_SUB);
+    ClActor_SetSurfacePos(wk->itemIcons[slotA], &b, CLACT_SURFACE_SUB);
+    ClActor_SetSurfacePos(wk->itemIcons[slotB], &a, CLACT_SURFACE_SUB);
+    ClActor_GetSurfacePos(wk->pokeIcons[slotA], &a, CLACT_SURFACE_SUB);
+    ClActor_GetSurfacePos(wk->pokeIcons[slotB], &b, CLACT_SURFACE_SUB);
+    ClActor_SetSurfacePos(wk->pokeIcons[slotA], &b, CLACT_SURFACE_SUB);
+    ClActor_SetSurfacePos(wk->pokeIcons[slotB], &a, CLACT_SURFACE_SUB);
+    ClActor_GetSurfacePos(wk->statusIcons[slotA], &a, CLACT_SURFACE_SUB);
+    ClActor_GetSurfacePos(wk->statusIcons[slotB], &b, CLACT_SURFACE_SUB);
+    ClActor_SetSurfacePos(wk->statusIcons[slotA], &b, CLACT_SURFACE_SUB);
+    ClActor_SetSurfacePos(wk->statusIcons[slotB], &a, CLACT_SURFACE_SUB);
+    ClActor_GetSurfacePos(wk->hpBarActors[slotA], &a, CLACT_SURFACE_SUB);
+    ClActor_GetSurfacePos(wk->hpBarActors[slotB], &b, CLACT_SURFACE_SUB);
+    ClActor_SetSurfacePos(wk->hpBarActors[slotA], &b, CLACT_SURFACE_SUB);
+    ClActor_SetSurfacePos(wk->hpBarActors[slotB], &a, CLACT_SURFACE_SUB);
+}

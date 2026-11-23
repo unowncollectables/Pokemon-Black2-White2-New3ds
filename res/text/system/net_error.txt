@@ -1,0 +1,3 @@
+NetError_Text_CommunicationError = Communication error.
+NetError_Text_CommunicationErrorPleaseTurn = Communication error.\nPlease turn off the power.
+\pad{3e}

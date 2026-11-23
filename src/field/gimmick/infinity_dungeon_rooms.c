@@ -1,0 +1,1739 @@
+// The Black Tower and White Treehollow's dungeon, its tables and its layout: the templates of the 19 kinds of rooms and
+// of the NPCs in them, the 640 trainers and the tables by rank, the shuffles of the generator, the seeds, the trainer
+// slots of a room, and the maze that digs the passages of each floor and puts the rooms in it. The ROM has no name for
+// this file, which is the one after infinity_dungeon.c: named after what it holds
+#include "field/gimmick/infinity_dungeon_rooms.h"
+#include "types.h"
+#include "constants/version.h"
+#include "constants/zones.h"
+#include "field/gimmick/infinity_dungeon.h"
+#include "gfl/std.h"
+#include "nitro/math.h"
+
+// The grid a floor's rooms are in is 4 rooms wide, and a walk can go back at most this many rooms
+#define INFINITY_DUNGEON_GRID_WIDTH 4
+#define INFINITY_DUNGEON_WALK_DEPTH 100
+
+typedef struct {
+    u32 width;
+    u32 height;
+} InfinityDungeonSize;
+
+typedef struct {
+    u32 objCode;
+    u8 scriptIndex;
+    u8 npcIndex;
+} InfinityDungeonObjScript;
+
+// A room of a floor's grid
+typedef struct {
+    int x;
+    int y;
+} InfinityDungeonGridPos;
+
+// A walk through the grid that digs the passages, with the rooms it can go back to
+typedef struct {
+    int top;
+    InfinityDungeonGridPos cur;
+    InfinityDungeonGridPos stack[INFINITY_DUNGEON_WALK_DEPTH];
+} InfinityDungeonWalk;
+
+static void InfinityDungeon_ShuffleU8(u8 *array, int count, MATHRandContext32 *rand);
+static const u8 *InfinityDungeon_GetRoomCounts(u16 rank, u8 floor, u8 version);
+static u8 InfinityDungeon_ListRoomTypes(u32 rank, u8 floor, u8 version, u8 *types);
+static u8 InfinityDungeon_ListGoalRoomTypes(u32 rank, u8 floor, u8 version, u8 *types);
+static int InfinityDungeon_ListGoalCandidates(InfinityDungeonRoom *rooms, int *list, int width, int height);
+static InfinityDungeonRoom *InfinityDungeon_GetGridRoom(const InfinityDungeonGridPos *pos, InfinityDungeonRoom *rooms);
+static const InfinityDungeonRoom *InfinityDungeon_GetGridRoomConst(const InfinityDungeonGridPos *pos,
+                                                                   const InfinityDungeonRoom *rooms);
+static void InfinityDungeonWalk_Dig(u8 direction, InfinityDungeonWalk *walk, InfinityDungeonRoom *rooms);
+static int InfinityDungeonWalk_GetDirections(const InfinityDungeonGridPos *pos, const InfinityDungeonRoom *rooms,
+                                             int *directions, int width, int height, BOOL allowVisited);
+static BOOL InfinityDungeon_IsRoomUndug(const InfinityDungeonGridPos *pos, const InfinityDungeonRoom *rooms);
+static void InfinityDungeonWalk_Push(InfinityDungeonWalk *walk, const InfinityDungeonGridPos *pos);
+static void InfinityDungeonWalk_Pop(InfinityDungeonWalk *walk);
+static BOOL InfinityDungeon_AreAllRoomsDug(const InfinityDungeonRoom *rooms, int width, int height);
+
+static const u8 sIvs[INFINITY_DUNGEON_AREA_COUNT] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+
+static const u16 sBlack2Zones[6] = { ZONE_BLACK_TOWER_2, ZONE_BLACK_TOWER_3, ZONE_BLACK_TOWER_5,
+                                     ZONE_BLACK_TOWER_4, ZONE_BLACK_TOWER_6, ZONE_BLACK_TOWER };
+
+static const u16 sWhite2Zones[6] = { ZONE_WHITE_TREEHOLLOW_2, ZONE_WHITE_TREEHOLLOW_3, ZONE_WHITE_TREEHOLLOW_4,
+                                     ZONE_WHITE_TREEHOLLOW_5, ZONE_WHITE_TREEHOLLOW_6, ZONE_WHITE_TREEHOLLOW };
+
+// clang-format off
+static const InfinityDungeonLevelRange sLevelRanges[INFINITY_DUNGEON_AREA_COUNT] = {
+    { 47, 50 },
+    { 50, 53 },
+    { 53, 56 },
+    { 56, 59 },
+    { 59, 62 },
+    { 62, 65 },
+    { 65, 68 },
+    { 68, 71 },
+    { 71, 74 },
+    { 74, 77 },
+};
+
+// clang-format on
+
+static const InfinityDungeonPos sWhite2FloorPosition = { 6, 0, 0 };
+
+static const InfinityDungeonPos sArrivalPositions[2] = {
+    { 7, 0, 2 },
+    { 11, 0, 2 },
+};
+
+static const InfinityDungeonPos sBlack2FloorPosition = { 6, 0, 0 };
+
+// clang-format off
+static const InfinityDungeonSize sSizes[INFINITY_DUNGEON_AREA_COUNT] = {
+    { 3, 3 },
+    { 3, 3 },
+    { 3, 3 },
+    { 4, 4 },
+    { 4, 4 },
+    { 3, 3 },
+    { 3, 3 },
+    { 4, 4 },
+    { 4, 4 },
+    { 4, 4 },
+};
+
+// clang-format on
+
+// clang-format off
+static const InfinityDungeonObjScript sObjScripts[30] = {
+    { 0x18, 2, 4 },
+    { 0x1a, 4, 5 },
+    { 0x42, 3, 5 },
+    { 0x17, 4, 3 },
+    { 0x2e, 0, 2 },
+    { 0x2f, 3, 3 },
+    { 0x3d, 1, 2 },
+    { 0x48, 0, 4 },
+    { 0x40, 2, 4 },
+    { 0x45, 2, 6 },
+    { 0x43, 1, 2 },
+    { 0x9b, 0, 2 },
+    { 0xb7, 0, 2 },
+    { 0xb8, 4, 1 },
+    { 0x49, 1, 2 },
+    { 0x4a, 3, 3 },
+    { 0xc, 2, 0 },
+    { 0x10, 3, 1 },
+    { 0x2a, 1, 2 },
+    { 0x2b, 4, 3 },
+    { 0xb, 2, 0 },
+    { 0xf, 3, 1 },
+    { 0x30, 0, 2 },
+    { 0x31, 4, 3 },
+    { 0xd, 5, 0 },
+    { 0x11, 6, 1 },
+    { 0x2d, 6, 7 },
+    { 0x2c, 5, 6 },
+    { 0x22, 5, 2 },
+    { 0x23, 6, 3 },
+};
+
+// clang-format on
+
+static const u8 sTrainerClassSharesWhite2[INFINITY_DUNGEON_AREA_COUNT][30] = {
+    { 0, 2, 1, 0, 2, 0, 1, 2, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0 },
+    { 2, 1, 1, 1, 2, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 },
+    { 0, 2, 3, 1, 0, 0, 0, 1, 1, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0 },
+    { 1, 2, 2, 2, 2, 0, 2, 2, 1, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1 },
+    { 1, 2, 2, 2, 2, 0, 1, 2, 1, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1 },
+    { 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1 },
+    { 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1 },
+    { 1, 2, 2, 2, 3, 2, 1, 2, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1 },
+    { 1, 2, 3, 3, 2, 2, 2, 2, 2, 3, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1 },
+    { 1, 3, 3, 2, 2, 3, 1, 2, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1 },
+};
+
+static const u8 sTrainerClassSharesBlack2[INFINITY_DUNGEON_AREA_COUNT][30] = {
+    { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 2, 2, 0, 0, 1, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0 },
+    { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 2, 0, 0, 0, 0, 2, 1, 1, 1, 0, 1, 0, 0, 0, 0 },
+    { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 0, 2, 0, 1, 2, 1, 1, 0, 0, 0, 0, 0 },
+    { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 2, 0, 1, 2, 1, 0, 1, 2, 2, 1, 1, 1, 1, 0, 0, 0, 0 },
+    { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 1, 0, 1, 2, 2, 0, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0 },
+    { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 0, 0, 1, 1, 0, 0 },
+    { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 1, 1, 1, 2, 1, 1, 1, 1, 0, 1, 1, 0, 0, 1, 1, 0, 0 },
+    { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 1, 2, 2, 2, 1, 3, 2, 3, 1, 0, 0, 1, 1, 0, 0 },
+    { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 2, 2, 2, 3, 1, 3, 2, 2, 2, 2, 1, 0, 0, 1, 1, 0, 0 },
+    { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 1, 3, 2, 2, 1, 2, 2, 3, 2, 3, 2, 0, 0, 1, 1, 0, 0 },
+};
+
+static const InfinityDungeonPos sBlack2TrainerPositions[6][5] = {
+    {
+        { 6, 0, 2 },
+        { 6, 0, 13 },
+        { 1, 0, 7 },
+        { 11, 0, 7 },
+        { 0, 0, 0 },
+    },
+    {
+        { 6, 0, 14 },
+        { 6, 0, 14 },
+        { 6, 0, 14 },
+        { 6, 0, 14 },
+        { 0, 0, 0 },
+    },
+    {
+        { 6, 0, 2 },
+        { 6, 0, 13 },
+        { 1, 0, 7 },
+        { 11, 0, 7 },
+        { 0, 0, 0 },
+    },
+    {
+        { 6, 0, 2 },
+        { 6, 0, 13 },
+        { 1, 0, 7 },
+        { 11, 0, 7 },
+        { 0, 0, 0 },
+    },
+    {
+        { 6, 0, 2 },
+        { 6, 0, 13 },
+        { 1, 0, 7 },
+        { 11, 0, 7 },
+        { 0, 0, 0 },
+    },
+    {
+        { 0, 0, 0 },
+        { 0, 0, 0 },
+        { 0, 0, 0 },
+        { 0, 0, 0 },
+        { 0, 0, 0 },
+    },
+};
+
+static const InfinityDungeonPos sWhite2TrainerPositions[6][5] = {
+    {
+        { 6, 0, 2 },
+        { 6, 0, 13 },
+        { 1, 0, 7 },
+        { 11, 0, 7 },
+        { 0, 0, 0 },
+    },
+    {
+        { 6, 0, 14 },
+        { 6, 0, 14 },
+        { 6, 0, 14 },
+        { 6, 0, 14 },
+        { 0, 0, 0 },
+    },
+    {
+        { 6, 0, 2 },
+        { 6, 0, 13 },
+        { 1, 0, 7 },
+        { 11, 0, 7 },
+        { 0, 0, 0 },
+    },
+    {
+        { 6, 0, 2 },
+        { 6, 0, 13 },
+        { 1, 0, 7 },
+        { 11, 0, 7 },
+        { 0, 0, 0 },
+    },
+    {
+        { 6, 0, 2 },
+        { 6, 0, 13 },
+        { 1, 0, 7 },
+        { 11, 0, 7 },
+        { 0, 0, 0 },
+    },
+    {
+        { 0, 0, 0 },
+        { 0, 0, 0 },
+        { 0, 0, 0 },
+        { 0, 0, 0 },
+        { 0, 0, 0 },
+    },
+};
+
+static const InfinityDungeonPos sBlack2RoomEntryPositions[6][5] = {
+    {
+        { 6, 0, 14 },
+        { 6, 0, 1 },
+        { 12, 0, 7 },
+        { 0, 0, 7 },
+        { 0, 0, 0 },
+    },
+    {
+        { 6, 0, 14 },
+        { 6, 0, 13 },
+        { 6, 0, 13 },
+        { 6, 0, 13 },
+        { 0, 0, 0 },
+    },
+    {
+        { 6, 0, 14 },
+        { 6, 0, 1 },
+        { 12, 0, 7 },
+        { 0, 0, 7 },
+        { 0, 0, 0 },
+    },
+    {
+        { 6, 0, 14 },
+        { 6, 0, 1 },
+        { 12, 0, 7 },
+        { 0, 0, 7 },
+        { 0, 0, 0 },
+    },
+    {
+        { 6, 0, 14 },
+        { 6, 0, 1 },
+        { 12, 0, 7 },
+        { 0, 0, 7 },
+        { 0, 0, 0 },
+    },
+    {
+        { 0, 0, 0 },
+        { 0, 0, 0 },
+        { 0, 0, 0 },
+        { 0, 0, 0 },
+        { 0, 0, 0 },
+    },
+};
+
+static const InfinityDungeonPos sWhite2RoomEntryPositions[6][5] = {
+    {
+        { 6, 0, 14 },
+        { 6, 0, 1 },
+        { 12, 0, 7 },
+        { 0, 0, 7 },
+        { 0, 0, 0 },
+    },
+    {
+        { 6, 0, 14 },
+        { 6, 0, 13 },
+        { 6, 0, 13 },
+        { 6, 0, 13 },
+        { 0, 0, 0 },
+    },
+    {
+        { 6, 0, 14 },
+        { 6, 0, 1 },
+        { 12, 0, 7 },
+        { 0, 0, 7 },
+        { 0, 0, 0 },
+    },
+    {
+        { 6, 0, 14 },
+        { 6, 0, 1 },
+        { 12, 0, 7 },
+        { 0, 0, 7 },
+        { 0, 0, 0 },
+    },
+    {
+        { 6, 0, 14 },
+        { 6, 0, 1 },
+        { 12, 0, 7 },
+        { 0, 0, 7 },
+        { 0, 0, 0 },
+    },
+    {
+        { 0, 0, 0 },
+        { 0, 0, 0 },
+        { 0, 0, 0 },
+        { 0, 0, 0 },
+        { 0, 0, 0 },
+    },
+};
+
+// clang-format off
+static const InfinityDungeonNpc sNpcs[21] = {
+    { 2, 1, 1, 1, 0, 0, 0, 0x130 },
+    { 3, 1, 1, 2, 2, 2, 2, 0x138 },
+    { 3, 4, 1, 2, 2, 2, 2, 0x148 },
+    { 3, 5, 1, 2, 2, 2, 2, 0x140 },
+    { 0x2c, 1, 3, 2, 0, 4, 4, 0x138 },
+    { 0x2b, 1, 2, 2, 0, 4, 4, 0x138 },
+    { 0x2a, 1, 1, 2, 0, 4, 4, 0x138 },
+    { 0x2b, 1, 0, 2, 0, 4, 4, 0x138 },
+    { 0x2c, 4, 3, 2, 2, 4, 4, 0x148 },
+    { 0x2b, 4, 2, 2, 2, 4, 4, 0x148 },
+    { 0x2a, 4, 1, 2, 2, 4, 4, 0x148 },
+    { 0x2b, 4, 0, 2, 2, 4, 4, 0x148 },
+    { 0x2c, 5, 3, 2, 2, 4, 4, 0x140 },
+    { 0x2b, 6, 2, 2, 2, 4, 4, 0x140 },
+    { 0x2a, 5, 1, 2, 2, 4, 4, 0x140 },
+    { 0x2b, 6, 0, 2, 2, 4, 4, 0x140 },
+    { 0x2b, 1, 2, 2, 0, 2, 2, 0x138 },
+    { 0x2b, 4, 2, 2, 2, 2, 2, 0x148 },
+    { 0x2b, 5, 2, 2, 2, 2, 2, 0x140 },
+    { 0x2b, 6, 2, 2, 2, 2, 2, 0x140 },
+    { 0x2c, 4, 3, 2, 2, 6, 6, 0x148 },
+};
+
+// clang-format on
+
+static const u8 sRoomCountsWhite2[INFINITY_DUNGEON_AREA_COUNT][5][20] = {
+    {
+        { 2, 2, 0, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    },
+    {
+        { 1, 2, 0, 3, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    },
+    {
+        { 0, 3, 0, 0, 1, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    },
+    {
+        { 0, 3, 0, 0, 3, 3, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 2 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    },
+    {
+        { 0, 2, 0, 0, 0, 3, 3, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 2 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    },
+    {
+        { 0, 2, 0, 0, 2, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0 },
+        { 0, 0, 0, 2, 0, 0, 0, 0, 0, 2, 0, 2, 0, 0, 0, 0, 0, 0, 2, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    },
+    {
+        { 0, 0, 2, 2, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0 },
+        { 0, 0, 0, 0, 2, 0, 0, 2, 0, 0, 0, 0, 0, 2, 0, 0, 0, 1, 1, 0 },
+        { 2, 0, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    },
+    {
+        { 0, 0, 2, 0, 4, 0, 0, 3, 0, 0, 0, 0, 1, 0, 0, 0, 0, 2, 1, 2 },
+        { 0, 3, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 1, 2, 0, 0, 2, 1, 2 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    },
+    {
+        { 0, 0, 2, 0, 3, 0, 0, 3, 0, 0, 0, 0, 0, 2, 0, 0, 0, 1, 2, 2 },
+        { 0, 0, 2, 3, 0, 0, 0, 0, 0, 0, 0, 3, 2, 0, 0, 0, 0, 1, 2, 2 },
+        { 0, 0, 2, 0, 0, 0, 0, 0, 0, 3, 3, 0, 0, 0, 2, 0, 0, 1, 2, 2 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    },
+    {
+        { 0, 0, 2, 0, 0, 0, 0, 0, 0, 3, 3, 0, 0, 2, 0, 0, 0, 2, 1, 2 },
+        { 3, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 2, 0, 0, 2, 1, 2 },
+        { 0, 0, 2, 0, 0, 0, 3, 0, 0, 3, 0, 0, 0, 0, 2, 0, 0, 2, 1, 2 },
+        { 0, 0, 2, 0, 0, 0, 0, 3, 0, 0, 3, 0, 2, 0, 0, 0, 0, 2, 1, 2 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    },
+};
+
+static const u8 sRoomCountsBlack2[INFINITY_DUNGEON_AREA_COUNT][5][20] = {
+    {
+        { 2, 2, 0, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    },
+    {
+        { 1, 2, 0, 3, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    },
+    {
+        { 0, 3, 0, 0, 1, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    },
+    {
+        { 0, 3, 0, 0, 3, 3, 2, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 2 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    },
+    {
+        { 0, 2, 0, 0, 0, 3, 3, 0, 3, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 2 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    },
+    {
+        { 0, 2, 0, 0, 2, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0 },
+        { 0, 0, 0, 2, 0, 0, 0, 0, 0, 2, 0, 2, 0, 0, 0, 0, 2, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    },
+    {
+        { 0, 0, 2, 2, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0 },
+        { 0, 0, 0, 0, 2, 0, 0, 2, 0, 0, 0, 0, 0, 2, 0, 1, 1, 0, 0, 0 },
+        { 2, 0, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    },
+    {
+        { 0, 0, 2, 0, 4, 0, 0, 3, 0, 0, 0, 0, 1, 0, 0, 2, 1, 0, 0, 2 },
+        { 0, 3, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 1, 2, 2, 1, 0, 0, 2 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    },
+    {
+        { 0, 0, 2, 0, 3, 0, 0, 3, 0, 0, 0, 0, 0, 2, 0, 1, 2, 0, 0, 2 },
+        { 0, 0, 2, 3, 0, 0, 0, 0, 0, 0, 0, 3, 2, 0, 0, 1, 2, 0, 0, 2 },
+        { 0, 0, 2, 0, 0, 0, 0, 0, 0, 3, 3, 0, 0, 0, 2, 1, 2, 0, 0, 2 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    },
+    {
+        { 0, 0, 2, 0, 0, 0, 0, 0, 0, 3, 3, 0, 0, 2, 0, 2, 1, 0, 0, 2 },
+        { 3, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 2, 2, 1, 0, 0, 2 },
+        { 0, 0, 2, 0, 0, 0, 3, 0, 0, 3, 0, 0, 0, 0, 2, 2, 1, 0, 0, 2 },
+        { 0, 0, 2, 0, 0, 0, 0, 3, 0, 0, 3, 0, 2, 0, 0, 2, 1, 0, 0, 2 },
+        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    },
+};
+
+static const InfinityDungeonRoomTemplate sRoomTemplates[19] = {
+    { 0, 1, ROOM_KIND_ORDINARY, { { 0, 6, 7 }, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 } } },
+    { 0, 2, ROOM_KIND_ORDINARY, { { 0, 8, 5 }, { 0, 4, 9 }, { 0, 0, 0 }, { 0, 0, 0 } } },
+    { 0, 3, ROOM_KIND_ORDINARY, { { 0, 6, 5 }, { 0, 4, 8 }, { 0, 8, 8 }, { 0, 0, 0 } } },
+    { 0, 1, ROOM_KIND_ORDINARY, { { 1, 6, 7 }, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 } } },
+    { 0, 1, ROOM_KIND_ORDINARY, { { 2, 6, 7 }, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 } } },
+    { 0, 1, ROOM_KIND_ORDINARY, { { 3, 6, 7 }, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 } } },
+    { 0, 1, ROOM_KIND_ORDINARY, { { 4, 4, 5 }, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 } } },
+    { 0, 2, ROOM_KIND_ORDINARY, { { 4, 4, 5 }, { 5, 8, 9 }, { 0, 0, 0 }, { 0, 0, 0 } } },
+    { 0, 1, ROOM_KIND_ORDINARY, { { 8, 4, 5 }, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 } } },
+    { 0, 2, ROOM_KIND_ORDINARY, { { 8, 4, 5 }, { 9, 8, 9 }, { 0, 0, 0 }, { 0, 0, 0 } } },
+    { 0, 1, ROOM_KIND_ORDINARY, { { 0xc, 4, 5 }, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 } } },
+    { 0, 2, ROOM_KIND_ORDINARY, { { 0xc, 4, 5 }, { 0xd, 8, 9 }, { 0, 0, 0 }, { 0, 0, 0 } } },
+    { 0, 3, ROOM_KIND_ORDINARY, { { 0x10, 7, 6 }, { 0x10, 9, 0xa }, { 0x10, 5, 0xa }, { 0, 0, 0 } } },
+    { 0, 3, ROOM_KIND_ORDINARY, { { 0x11, 7, 6 }, { 0x11, 9, 0xa }, { 0x11, 5, 0xa }, { 0, 0, 0 } } },
+    { 0, 3, ROOM_KIND_ORDINARY, { { 0x12, 7, 6 }, { 0x13, 9, 0xa }, { 0x13, 5, 0xa }, { 0, 0, 0 } } },
+    { 1, 1, 2, { { 0x14, 3, 4 }, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 } } },
+    { 1, 1, 3, { { 0, 6, 7 }, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 } } },
+    { 2, 1, 2, { { 0, 6, 7 }, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 } } },
+    { 2, 1, 3, { { 0, 6, 7 }, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 } } },
+};
+
+// clang-format off
+static const InfinityDungeonTrainer sTrainers[640] = {
+    { 0, 0, VERSION_WHITE2, 0 },
+    { 0, 0, VERSION_WHITE2, 0 },
+    { 0, 0, VERSION_WHITE2, 0 },
+    { 0, 0, VERSION_WHITE2, 1 },
+    { 0, 0, VERSION_WHITE2, 1 },
+    { 0, 0, VERSION_WHITE2, 1 },
+    { 0, 0, VERSION_WHITE2, 2 },
+    { 0, 0, VERSION_WHITE2, 2 },
+    { 0, 0, VERSION_WHITE2, 3 },
+    { 0, 0, VERSION_WHITE2, 3 },
+    { 0, 0, VERSION_WHITE2, 11 },
+    { 0, 0, VERSION_WHITE2, 11 },
+    { 0, 0, VERSION_WHITE2, 11 },
+    { 0, 0, VERSION_WHITE2, 4 },
+    { 0, 0, VERSION_WHITE2, 4 },
+    { 0, 0, VERSION_WHITE2, 4 },
+    { 0, 0, VERSION_WHITE2, 5 },
+    { 0, 0, VERSION_WHITE2, 5 },
+    { 0, 0, VERSION_WHITE2, 6 },
+    { 0, 0, VERSION_WHITE2, 6 },
+    { 0, 0, VERSION_WHITE2, 7 },
+    { 0, 0, VERSION_WHITE2, 7 },
+    { 0, 0, VERSION_WHITE2, 7 },
+    { 0, 0, VERSION_WHITE2, 10 },
+    { 0, 0, VERSION_WHITE2, 10 },
+    { 0, 0, VERSION_WHITE2, 10 },
+    { 0, 0, VERSION_WHITE2, 8 },
+    { 0, 0, VERSION_WHITE2, 8 },
+    { 0, 0, VERSION_WHITE2, 9 },
+    { 0, 0, VERSION_WHITE2, 9 },
+    { 0, 0, VERSION_BLACK2, 12 },
+    { 0, 0, VERSION_BLACK2, 12 },
+    { 0, 0, VERSION_BLACK2, 12 },
+    { 0, 0, VERSION_BLACK2, 13 },
+    { 0, 0, VERSION_BLACK2, 13 },
+    { 0, 0, VERSION_BLACK2, 13 },
+    { 0, 0, VERSION_BLACK2, 14 },
+    { 0, 0, VERSION_BLACK2, 14 },
+    { 0, 0, VERSION_BLACK2, 15 },
+    { 0, 0, VERSION_BLACK2, 15 },
+    { 0, 0, VERSION_BLACK2, 16 },
+    { 0, 0, VERSION_BLACK2, 16 },
+    { 0, 0, VERSION_BLACK2, 16 },
+    { 0, 0, VERSION_BLACK2, 17 },
+    { 0, 0, VERSION_BLACK2, 17 },
+    { 0, 0, VERSION_BLACK2, 17 },
+    { 0, 0, VERSION_BLACK2, 18 },
+    { 0, 0, VERSION_BLACK2, 18 },
+    { 0, 0, VERSION_BLACK2, 19 },
+    { 0, 0, VERSION_BLACK2, 19 },
+    { 0, 0, VERSION_BLACK2, 20 },
+    { 0, 0, VERSION_BLACK2, 20 },
+    { 0, 0, VERSION_BLACK2, 20 },
+    { 0, 0, VERSION_BLACK2, 21 },
+    { 0, 0, VERSION_BLACK2, 21 },
+    { 0, 0, VERSION_BLACK2, 21 },
+    { 0, 0, VERSION_BLACK2, 22 },
+    { 0, 0, VERSION_BLACK2, 22 },
+    { 0, 0, VERSION_BLACK2, 23 },
+    { 0, 0, VERSION_BLACK2, 23 },
+    { 1, 1, VERSION_WHITE2, 0 },
+    { 1, 1, VERSION_WHITE2, 0 },
+    { 1, 1, VERSION_WHITE2, 0 },
+    { 1, 1, VERSION_WHITE2, 1 },
+    { 1, 1, VERSION_WHITE2, 1 },
+    { 1, 1, VERSION_WHITE2, 1 },
+    { 1, 1, VERSION_WHITE2, 2 },
+    { 1, 1, VERSION_WHITE2, 2 },
+    { 1, 1, VERSION_WHITE2, 3 },
+    { 1, 1, VERSION_WHITE2, 3 },
+    { 1, 1, VERSION_WHITE2, 11 },
+    { 1, 1, VERSION_WHITE2, 11 },
+    { 1, 1, VERSION_WHITE2, 11 },
+    { 1, 1, VERSION_WHITE2, 4 },
+    { 1, 1, VERSION_WHITE2, 4 },
+    { 1, 1, VERSION_WHITE2, 4 },
+    { 1, 1, VERSION_WHITE2, 5 },
+    { 1, 1, VERSION_WHITE2, 5 },
+    { 1, 1, VERSION_WHITE2, 6 },
+    { 1, 1, VERSION_WHITE2, 6 },
+    { 1, 1, VERSION_WHITE2, 7 },
+    { 1, 1, VERSION_WHITE2, 7 },
+    { 1, 1, VERSION_WHITE2, 7 },
+    { 1, 1, VERSION_WHITE2, 10 },
+    { 1, 1, VERSION_WHITE2, 10 },
+    { 1, 1, VERSION_WHITE2, 10 },
+    { 1, 1, VERSION_WHITE2, 8 },
+    { 1, 1, VERSION_WHITE2, 8 },
+    { 1, 1, VERSION_WHITE2, 9 },
+    { 1, 1, VERSION_WHITE2, 9 },
+    { 1, 1, VERSION_BLACK2, 12 },
+    { 1, 1, VERSION_BLACK2, 12 },
+    { 1, 1, VERSION_BLACK2, 12 },
+    { 1, 1, VERSION_BLACK2, 13 },
+    { 1, 1, VERSION_BLACK2, 13 },
+    { 1, 1, VERSION_BLACK2, 13 },
+    { 1, 1, VERSION_BLACK2, 14 },
+    { 1, 1, VERSION_BLACK2, 14 },
+    { 1, 1, VERSION_BLACK2, 15 },
+    { 1, 1, VERSION_BLACK2, 15 },
+    { 1, 1, VERSION_BLACK2, 16 },
+    { 1, 1, VERSION_BLACK2, 16 },
+    { 1, 1, VERSION_BLACK2, 16 },
+    { 1, 1, VERSION_BLACK2, 17 },
+    { 1, 1, VERSION_BLACK2, 17 },
+    { 1, 1, VERSION_BLACK2, 17 },
+    { 1, 1, VERSION_BLACK2, 18 },
+    { 1, 1, VERSION_BLACK2, 18 },
+    { 1, 1, VERSION_BLACK2, 19 },
+    { 1, 1, VERSION_BLACK2, 19 },
+    { 1, 1, VERSION_BLACK2, 20 },
+    { 1, 1, VERSION_BLACK2, 20 },
+    { 1, 1, VERSION_BLACK2, 20 },
+    { 1, 1, VERSION_BLACK2, 21 },
+    { 1, 1, VERSION_BLACK2, 21 },
+    { 1, 1, VERSION_BLACK2, 21 },
+    { 1, 1, VERSION_BLACK2, 22 },
+    { 1, 1, VERSION_BLACK2, 22 },
+    { 1, 1, VERSION_BLACK2, 23 },
+    { 1, 1, VERSION_BLACK2, 23 },
+    { 2, 3, VERSION_WHITE2, 0 },
+    { 2, 3, VERSION_WHITE2, 0 },
+    { 2, 3, VERSION_WHITE2, 0 },
+    { 2, 3, VERSION_WHITE2, 1 },
+    { 2, 3, VERSION_WHITE2, 1 },
+    { 2, 3, VERSION_WHITE2, 1 },
+    { 2, 3, VERSION_WHITE2, 2 },
+    { 2, 3, VERSION_WHITE2, 2 },
+    { 2, 3, VERSION_WHITE2, 3 },
+    { 2, 3, VERSION_WHITE2, 3 },
+    { 2, 3, VERSION_WHITE2, 11 },
+    { 2, 3, VERSION_WHITE2, 11 },
+    { 2, 3, VERSION_WHITE2, 11 },
+    { 2, 3, VERSION_WHITE2, 4 },
+    { 2, 3, VERSION_WHITE2, 4 },
+    { 2, 3, VERSION_WHITE2, 4 },
+    { 2, 3, VERSION_WHITE2, 5 },
+    { 2, 3, VERSION_WHITE2, 5 },
+    { 2, 3, VERSION_WHITE2, 6 },
+    { 2, 3, VERSION_WHITE2, 6 },
+    { 2, 3, VERSION_WHITE2, 7 },
+    { 2, 3, VERSION_WHITE2, 7 },
+    { 2, 3, VERSION_WHITE2, 7 },
+    { 2, 3, VERSION_WHITE2, 10 },
+    { 2, 3, VERSION_WHITE2, 10 },
+    { 2, 3, VERSION_WHITE2, 10 },
+    { 2, 3, VERSION_WHITE2, 8 },
+    { 2, 3, VERSION_WHITE2, 8 },
+    { 2, 3, VERSION_WHITE2, 9 },
+    { 2, 3, VERSION_WHITE2, 9 },
+    { 2, 3, VERSION_BLACK2, 12 },
+    { 2, 3, VERSION_BLACK2, 12 },
+    { 2, 3, VERSION_BLACK2, 12 },
+    { 2, 3, VERSION_BLACK2, 13 },
+    { 2, 3, VERSION_BLACK2, 13 },
+    { 2, 3, VERSION_BLACK2, 13 },
+    { 2, 3, VERSION_BLACK2, 14 },
+    { 2, 3, VERSION_BLACK2, 14 },
+    { 2, 3, VERSION_BLACK2, 15 },
+    { 2, 3, VERSION_BLACK2, 15 },
+    { 2, 3, VERSION_BLACK2, 16 },
+    { 2, 3, VERSION_BLACK2, 16 },
+    { 2, 3, VERSION_BLACK2, 16 },
+    { 2, 3, VERSION_BLACK2, 17 },
+    { 2, 3, VERSION_BLACK2, 17 },
+    { 2, 3, VERSION_BLACK2, 17 },
+    { 2, 3, VERSION_BLACK2, 18 },
+    { 2, 3, VERSION_BLACK2, 18 },
+    { 2, 3, VERSION_BLACK2, 19 },
+    { 2, 3, VERSION_BLACK2, 19 },
+    { 2, 3, VERSION_BLACK2, 20 },
+    { 2, 3, VERSION_BLACK2, 20 },
+    { 2, 3, VERSION_BLACK2, 20 },
+    { 2, 3, VERSION_BLACK2, 21 },
+    { 2, 3, VERSION_BLACK2, 21 },
+    { 2, 3, VERSION_BLACK2, 21 },
+    { 2, 3, VERSION_BLACK2, 22 },
+    { 2, 3, VERSION_BLACK2, 22 },
+    { 2, 3, VERSION_BLACK2, 23 },
+    { 2, 3, VERSION_BLACK2, 23 },
+    { 2, 3, VERSION_WHITE2, 0 },
+    { 2, 3, VERSION_WHITE2, 0 },
+    { 2, 3, VERSION_WHITE2, 0 },
+    { 2, 3, VERSION_WHITE2, 1 },
+    { 2, 3, VERSION_WHITE2, 1 },
+    { 2, 3, VERSION_WHITE2, 1 },
+    { 2, 3, VERSION_WHITE2, 2 },
+    { 2, 3, VERSION_WHITE2, 2 },
+    { 2, 3, VERSION_WHITE2, 3 },
+    { 2, 3, VERSION_WHITE2, 3 },
+    { 2, 3, VERSION_WHITE2, 11 },
+    { 2, 3, VERSION_WHITE2, 11 },
+    { 2, 3, VERSION_WHITE2, 11 },
+    { 2, 3, VERSION_WHITE2, 4 },
+    { 2, 3, VERSION_WHITE2, 4 },
+    { 2, 3, VERSION_WHITE2, 4 },
+    { 2, 3, VERSION_WHITE2, 5 },
+    { 2, 3, VERSION_WHITE2, 5 },
+    { 2, 3, VERSION_WHITE2, 6 },
+    { 2, 3, VERSION_WHITE2, 6 },
+    { 2, 3, VERSION_WHITE2, 7 },
+    { 2, 3, VERSION_WHITE2, 7 },
+    { 2, 3, VERSION_WHITE2, 7 },
+    { 2, 3, VERSION_WHITE2, 10 },
+    { 2, 3, VERSION_WHITE2, 10 },
+    { 2, 3, VERSION_WHITE2, 10 },
+    { 2, 3, VERSION_WHITE2, 8 },
+    { 2, 3, VERSION_WHITE2, 8 },
+    { 2, 3, VERSION_WHITE2, 9 },
+    { 2, 3, VERSION_WHITE2, 9 },
+    { 2, 3, VERSION_BLACK2, 12 },
+    { 2, 3, VERSION_BLACK2, 12 },
+    { 2, 3, VERSION_BLACK2, 12 },
+    { 2, 3, VERSION_BLACK2, 13 },
+    { 2, 3, VERSION_BLACK2, 13 },
+    { 2, 3, VERSION_BLACK2, 13 },
+    { 2, 3, VERSION_BLACK2, 14 },
+    { 2, 3, VERSION_BLACK2, 14 },
+    { 2, 3, VERSION_BLACK2, 15 },
+    { 2, 3, VERSION_BLACK2, 15 },
+    { 2, 3, VERSION_BLACK2, 16 },
+    { 2, 3, VERSION_BLACK2, 16 },
+    { 2, 3, VERSION_BLACK2, 16 },
+    { 2, 3, VERSION_BLACK2, 17 },
+    { 2, 3, VERSION_BLACK2, 17 },
+    { 2, 3, VERSION_BLACK2, 17 },
+    { 2, 3, VERSION_BLACK2, 18 },
+    { 2, 3, VERSION_BLACK2, 18 },
+    { 2, 3, VERSION_BLACK2, 19 },
+    { 2, 3, VERSION_BLACK2, 19 },
+    { 2, 3, VERSION_BLACK2, 20 },
+    { 2, 3, VERSION_BLACK2, 20 },
+    { 2, 3, VERSION_BLACK2, 20 },
+    { 2, 3, VERSION_BLACK2, 21 },
+    { 2, 3, VERSION_BLACK2, 21 },
+    { 2, 3, VERSION_BLACK2, 21 },
+    { 2, 3, VERSION_BLACK2, 22 },
+    { 2, 3, VERSION_BLACK2, 22 },
+    { 2, 3, VERSION_BLACK2, 23 },
+    { 2, 3, VERSION_BLACK2, 23 },
+    { 4, 5, VERSION_WHITE2, 0 },
+    { 4, 5, VERSION_WHITE2, 0 },
+    { 4, 5, VERSION_WHITE2, 0 },
+    { 4, 5, VERSION_WHITE2, 1 },
+    { 4, 5, VERSION_WHITE2, 1 },
+    { 4, 5, VERSION_WHITE2, 1 },
+    { 4, 5, VERSION_WHITE2, 2 },
+    { 4, 5, VERSION_WHITE2, 2 },
+    { 4, 5, VERSION_WHITE2, 3 },
+    { 4, 5, VERSION_WHITE2, 3 },
+    { 4, 5, VERSION_WHITE2, 11 },
+    { 4, 5, VERSION_WHITE2, 11 },
+    { 4, 5, VERSION_WHITE2, 11 },
+    { 4, 5, VERSION_WHITE2, 4 },
+    { 4, 5, VERSION_WHITE2, 4 },
+    { 4, 5, VERSION_WHITE2, 4 },
+    { 4, 5, VERSION_WHITE2, 5 },
+    { 4, 5, VERSION_WHITE2, 5 },
+    { 4, 5, VERSION_WHITE2, 6 },
+    { 4, 5, VERSION_WHITE2, 6 },
+    { 4, 5, VERSION_WHITE2, 7 },
+    { 4, 5, VERSION_WHITE2, 7 },
+    { 4, 5, VERSION_WHITE2, 7 },
+    { 4, 5, VERSION_WHITE2, 10 },
+    { 4, 5, VERSION_WHITE2, 10 },
+    { 4, 5, VERSION_WHITE2, 10 },
+    { 4, 5, VERSION_WHITE2, 8 },
+    { 4, 5, VERSION_WHITE2, 8 },
+    { 4, 5, VERSION_WHITE2, 9 },
+    { 4, 5, VERSION_WHITE2, 9 },
+    { 4, 5, VERSION_BLACK2, 12 },
+    { 4, 5, VERSION_BLACK2, 12 },
+    { 4, 5, VERSION_BLACK2, 12 },
+    { 4, 5, VERSION_BLACK2, 13 },
+    { 4, 5, VERSION_BLACK2, 13 },
+    { 4, 5, VERSION_BLACK2, 13 },
+    { 4, 5, VERSION_BLACK2, 14 },
+    { 4, 5, VERSION_BLACK2, 14 },
+    { 4, 5, VERSION_BLACK2, 15 },
+    { 4, 5, VERSION_BLACK2, 15 },
+    { 4, 5, VERSION_BLACK2, 16 },
+    { 4, 5, VERSION_BLACK2, 16 },
+    { 4, 5, VERSION_BLACK2, 16 },
+    { 4, 5, VERSION_BLACK2, 17 },
+    { 4, 5, VERSION_BLACK2, 17 },
+    { 4, 5, VERSION_BLACK2, 17 },
+    { 4, 5, VERSION_BLACK2, 18 },
+    { 4, 5, VERSION_BLACK2, 18 },
+    { 4, 5, VERSION_BLACK2, 19 },
+    { 4, 5, VERSION_BLACK2, 19 },
+    { 4, 5, VERSION_BLACK2, 20 },
+    { 4, 5, VERSION_BLACK2, 20 },
+    { 4, 5, VERSION_BLACK2, 20 },
+    { 4, 5, VERSION_BLACK2, 21 },
+    { 4, 5, VERSION_BLACK2, 21 },
+    { 4, 5, VERSION_BLACK2, 21 },
+    { 4, 5, VERSION_BLACK2, 22 },
+    { 4, 5, VERSION_BLACK2, 22 },
+    { 4, 5, VERSION_BLACK2, 23 },
+    { 4, 5, VERSION_BLACK2, 23 },
+    { 4, 5, VERSION_WHITE2, 0 },
+    { 4, 5, VERSION_WHITE2, 0 },
+    { 4, 5, VERSION_WHITE2, 0 },
+    { 4, 5, VERSION_WHITE2, 1 },
+    { 4, 5, VERSION_WHITE2, 1 },
+    { 4, 5, VERSION_WHITE2, 1 },
+    { 4, 5, VERSION_WHITE2, 2 },
+    { 4, 5, VERSION_WHITE2, 2 },
+    { 4, 5, VERSION_WHITE2, 3 },
+    { 4, 5, VERSION_WHITE2, 3 },
+    { 4, 5, VERSION_WHITE2, 11 },
+    { 4, 5, VERSION_WHITE2, 11 },
+    { 4, 5, VERSION_WHITE2, 11 },
+    { 4, 5, VERSION_WHITE2, 4 },
+    { 4, 5, VERSION_WHITE2, 4 },
+    { 4, 5, VERSION_WHITE2, 4 },
+    { 4, 5, VERSION_WHITE2, 5 },
+    { 4, 5, VERSION_WHITE2, 5 },
+    { 4, 5, VERSION_WHITE2, 6 },
+    { 4, 5, VERSION_WHITE2, 6 },
+    { 4, 5, VERSION_WHITE2, 7 },
+    { 4, 5, VERSION_WHITE2, 7 },
+    { 4, 5, VERSION_WHITE2, 7 },
+    { 4, 5, VERSION_WHITE2, 10 },
+    { 4, 5, VERSION_WHITE2, 10 },
+    { 4, 5, VERSION_WHITE2, 10 },
+    { 4, 5, VERSION_WHITE2, 8 },
+    { 4, 5, VERSION_WHITE2, 8 },
+    { 4, 5, VERSION_WHITE2, 9 },
+    { 4, 5, VERSION_WHITE2, 9 },
+    { 4, 5, VERSION_BLACK2, 12 },
+    { 4, 5, VERSION_BLACK2, 12 },
+    { 4, 5, VERSION_BLACK2, 12 },
+    { 4, 5, VERSION_BLACK2, 13 },
+    { 4, 5, VERSION_BLACK2, 13 },
+    { 4, 5, VERSION_BLACK2, 13 },
+    { 4, 5, VERSION_BLACK2, 14 },
+    { 4, 5, VERSION_BLACK2, 14 },
+    { 4, 5, VERSION_BLACK2, 15 },
+    { 4, 5, VERSION_BLACK2, 15 },
+    { 4, 5, VERSION_BLACK2, 16 },
+    { 4, 5, VERSION_BLACK2, 16 },
+    { 4, 5, VERSION_BLACK2, 16 },
+    { 4, 5, VERSION_BLACK2, 17 },
+    { 4, 5, VERSION_BLACK2, 17 },
+    { 4, 5, VERSION_BLACK2, 17 },
+    { 4, 5, VERSION_BLACK2, 18 },
+    { 4, 5, VERSION_BLACK2, 18 },
+    { 4, 5, VERSION_BLACK2, 19 },
+    { 4, 5, VERSION_BLACK2, 19 },
+    { 4, 5, VERSION_BLACK2, 20 },
+    { 4, 5, VERSION_BLACK2, 20 },
+    { 4, 5, VERSION_BLACK2, 20 },
+    { 4, 5, VERSION_BLACK2, 21 },
+    { 4, 5, VERSION_BLACK2, 21 },
+    { 4, 5, VERSION_BLACK2, 21 },
+    { 4, 5, VERSION_BLACK2, 22 },
+    { 4, 5, VERSION_BLACK2, 22 },
+    { 4, 5, VERSION_BLACK2, 23 },
+    { 4, 5, VERSION_BLACK2, 23 },
+    { 6, 7, VERSION_WHITE2, 0 },
+    { 6, 7, VERSION_WHITE2, 0 },
+    { 6, 7, VERSION_WHITE2, 0 },
+    { 6, 7, VERSION_WHITE2, 1 },
+    { 6, 7, VERSION_WHITE2, 1 },
+    { 6, 7, VERSION_WHITE2, 23 },
+    { 6, 7, VERSION_WHITE2, 2 },
+    { 6, 7, VERSION_WHITE2, 2 },
+    { 6, 7, VERSION_WHITE2, 3 },
+    { 6, 7, VERSION_WHITE2, 3 },
+    { 6, 7, VERSION_WHITE2, 11 },
+    { 6, 7, VERSION_WHITE2, 11 },
+    { 6, 7, VERSION_WHITE2, 11 },
+    { 6, 7, VERSION_WHITE2, 4 },
+    { 6, 7, VERSION_WHITE2, 4 },
+    { 6, 7, VERSION_WHITE2, 4 },
+    { 6, 7, VERSION_WHITE2, 5 },
+    { 6, 7, VERSION_WHITE2, 5 },
+    { 6, 7, VERSION_WHITE2, 6 },
+    { 6, 7, VERSION_WHITE2, 6 },
+    { 6, 7, VERSION_WHITE2, 7 },
+    { 6, 7, VERSION_WHITE2, 7 },
+    { 6, 7, VERSION_WHITE2, 7 },
+    { 6, 7, VERSION_WHITE2, 10 },
+    { 6, 7, VERSION_WHITE2, 10 },
+    { 6, 7, VERSION_WHITE2, 10 },
+    { 6, 7, VERSION_WHITE2, 8 },
+    { 6, 7, VERSION_WHITE2, 8 },
+    { 6, 7, VERSION_WHITE2, 9 },
+    { 6, 7, VERSION_WHITE2, 9 },
+    { 6, 7, VERSION_BLACK2, 12 },
+    { 6, 7, VERSION_BLACK2, 12 },
+    { 6, 7, VERSION_BLACK2, 12 },
+    { 6, 7, VERSION_BLACK2, 13 },
+    { 6, 7, VERSION_BLACK2, 13 },
+    { 6, 7, VERSION_BLACK2, 13 },
+    { 6, 7, VERSION_BLACK2, 14 },
+    { 6, 7, VERSION_BLACK2, 14 },
+    { 6, 7, VERSION_BLACK2, 15 },
+    { 6, 7, VERSION_BLACK2, 15 },
+    { 6, 7, VERSION_BLACK2, 16 },
+    { 6, 7, VERSION_BLACK2, 16 },
+    { 6, 7, VERSION_BLACK2, 16 },
+    { 6, 7, VERSION_BLACK2, 17 },
+    { 6, 7, VERSION_BLACK2, 17 },
+    { 6, 7, VERSION_BLACK2, 17 },
+    { 6, 7, VERSION_BLACK2, 18 },
+    { 6, 7, VERSION_BLACK2, 18 },
+    { 6, 7, VERSION_BLACK2, 19 },
+    { 6, 7, VERSION_BLACK2, 19 },
+    { 6, 7, VERSION_BLACK2, 20 },
+    { 6, 7, VERSION_BLACK2, 20 },
+    { 6, 7, VERSION_BLACK2, 20 },
+    { 6, 7, VERSION_BLACK2, 21 },
+    { 6, 7, VERSION_BLACK2, 21 },
+    { 6, 7, VERSION_BLACK2, 21 },
+    { 6, 7, VERSION_BLACK2, 22 },
+    { 6, 7, VERSION_BLACK2, 22 },
+    { 6, 7, VERSION_BLACK2, 23 },
+    { 6, 7, VERSION_BLACK2, 23 },
+    { 6, 7, VERSION_WHITE2, 0 },
+    { 6, 7, VERSION_WHITE2, 0 },
+    { 6, 7, VERSION_WHITE2, 0 },
+    { 6, 7, VERSION_WHITE2, 1 },
+    { 6, 7, VERSION_WHITE2, 1 },
+    { 6, 7, VERSION_WHITE2, 1 },
+    { 6, 7, VERSION_WHITE2, 2 },
+    { 6, 7, VERSION_WHITE2, 2 },
+    { 6, 7, VERSION_WHITE2, 3 },
+    { 6, 7, VERSION_WHITE2, 3 },
+    { 6, 7, VERSION_WHITE2, 11 },
+    { 6, 7, VERSION_WHITE2, 11 },
+    { 6, 7, VERSION_WHITE2, 11 },
+    { 6, 7, VERSION_WHITE2, 4 },
+    { 6, 7, VERSION_WHITE2, 4 },
+    { 6, 7, VERSION_WHITE2, 4 },
+    { 6, 7, VERSION_WHITE2, 5 },
+    { 6, 7, VERSION_WHITE2, 5 },
+    { 6, 7, VERSION_WHITE2, 6 },
+    { 6, 7, VERSION_WHITE2, 6 },
+    { 6, 7, VERSION_WHITE2, 7 },
+    { 6, 7, VERSION_WHITE2, 7 },
+    { 6, 7, VERSION_WHITE2, 7 },
+    { 6, 7, VERSION_WHITE2, 10 },
+    { 6, 7, VERSION_WHITE2, 10 },
+    { 6, 7, VERSION_WHITE2, 10 },
+    { 6, 7, VERSION_WHITE2, 8 },
+    { 6, 7, VERSION_WHITE2, 8 },
+    { 6, 7, VERSION_WHITE2, 9 },
+    { 6, 7, VERSION_WHITE2, 9 },
+    { 6, 7, VERSION_BLACK2, 12 },
+    { 6, 7, VERSION_BLACK2, 12 },
+    { 6, 7, VERSION_BLACK2, 12 },
+    { 6, 7, VERSION_BLACK2, 13 },
+    { 6, 7, VERSION_BLACK2, 13 },
+    { 6, 7, VERSION_BLACK2, 13 },
+    { 6, 7, VERSION_BLACK2, 14 },
+    { 6, 7, VERSION_BLACK2, 14 },
+    { 6, 7, VERSION_BLACK2, 15 },
+    { 6, 7, VERSION_BLACK2, 15 },
+    { 6, 7, VERSION_BLACK2, 16 },
+    { 6, 7, VERSION_BLACK2, 16 },
+    { 6, 7, VERSION_BLACK2, 16 },
+    { 6, 7, VERSION_BLACK2, 17 },
+    { 6, 7, VERSION_BLACK2, 17 },
+    { 6, 7, VERSION_BLACK2, 17 },
+    { 6, 7, VERSION_BLACK2, 18 },
+    { 6, 7, VERSION_BLACK2, 18 },
+    { 6, 7, VERSION_BLACK2, 19 },
+    { 6, 7, VERSION_BLACK2, 19 },
+    { 6, 7, VERSION_BLACK2, 20 },
+    { 6, 7, VERSION_BLACK2, 20 },
+    { 6, 7, VERSION_BLACK2, 20 },
+    { 6, 7, VERSION_BLACK2, 21 },
+    { 6, 7, VERSION_BLACK2, 21 },
+    { 6, 7, VERSION_BLACK2, 21 },
+    { 6, 7, VERSION_BLACK2, 22 },
+    { 6, 7, VERSION_BLACK2, 22 },
+    { 6, 7, VERSION_BLACK2, 23 },
+    { 6, 7, VERSION_BLACK2, 23 },
+    { 8, 9, VERSION_WHITE2, 0 },
+    { 8, 9, VERSION_WHITE2, 0 },
+    { 8, 9, VERSION_WHITE2, 0 },
+    { 8, 9, VERSION_WHITE2, 1 },
+    { 8, 9, VERSION_WHITE2, 1 },
+    { 8, 9, VERSION_WHITE2, 1 },
+    { 8, 9, VERSION_WHITE2, 2 },
+    { 8, 9, VERSION_WHITE2, 2 },
+    { 8, 9, VERSION_WHITE2, 3 },
+    { 8, 9, VERSION_WHITE2, 3 },
+    { 8, 9, VERSION_WHITE2, 11 },
+    { 8, 9, VERSION_WHITE2, 11 },
+    { 8, 9, VERSION_WHITE2, 11 },
+    { 8, 9, VERSION_WHITE2, 4 },
+    { 8, 9, VERSION_WHITE2, 4 },
+    { 8, 9, VERSION_WHITE2, 4 },
+    { 8, 9, VERSION_WHITE2, 5 },
+    { 8, 9, VERSION_WHITE2, 5 },
+    { 8, 9, VERSION_WHITE2, 6 },
+    { 8, 9, VERSION_WHITE2, 6 },
+    { 8, 9, VERSION_WHITE2, 7 },
+    { 8, 9, VERSION_WHITE2, 7 },
+    { 8, 9, VERSION_WHITE2, 7 },
+    { 8, 9, VERSION_WHITE2, 10 },
+    { 8, 9, VERSION_WHITE2, 10 },
+    { 8, 9, VERSION_WHITE2, 10 },
+    { 8, 9, VERSION_WHITE2, 8 },
+    { 8, 9, VERSION_WHITE2, 8 },
+    { 8, 9, VERSION_WHITE2, 9 },
+    { 8, 9, VERSION_WHITE2, 9 },
+    { 8, 9, VERSION_BLACK2, 12 },
+    { 8, 9, VERSION_BLACK2, 12 },
+    { 8, 9, VERSION_BLACK2, 12 },
+    { 8, 9, VERSION_BLACK2, 13 },
+    { 8, 9, VERSION_BLACK2, 13 },
+    { 8, 9, VERSION_BLACK2, 13 },
+    { 8, 9, VERSION_BLACK2, 14 },
+    { 8, 9, VERSION_BLACK2, 14 },
+    { 8, 9, VERSION_BLACK2, 15 },
+    { 8, 9, VERSION_BLACK2, 15 },
+    { 8, 9, VERSION_BLACK2, 16 },
+    { 8, 9, VERSION_BLACK2, 16 },
+    { 8, 9, VERSION_BLACK2, 16 },
+    { 8, 9, VERSION_BLACK2, 17 },
+    { 8, 9, VERSION_BLACK2, 17 },
+    { 8, 9, VERSION_BLACK2, 17 },
+    { 8, 9, VERSION_BLACK2, 18 },
+    { 8, 9, VERSION_BLACK2, 18 },
+    { 8, 9, VERSION_BLACK2, 19 },
+    { 8, 9, VERSION_BLACK2, 19 },
+    { 8, 9, VERSION_BLACK2, 20 },
+    { 8, 9, VERSION_BLACK2, 20 },
+    { 8, 9, VERSION_BLACK2, 20 },
+    { 8, 9, VERSION_BLACK2, 21 },
+    { 8, 9, VERSION_BLACK2, 21 },
+    { 8, 9, VERSION_BLACK2, 21 },
+    { 8, 9, VERSION_BLACK2, 22 },
+    { 8, 9, VERSION_BLACK2, 22 },
+    { 8, 9, VERSION_BLACK2, 23 },
+    { 8, 9, VERSION_BLACK2, 23 },
+    { 8, 9, VERSION_WHITE2, 0 },
+    { 8, 9, VERSION_WHITE2, 0 },
+    { 8, 9, VERSION_WHITE2, 0 },
+    { 8, 9, VERSION_WHITE2, 1 },
+    { 8, 9, VERSION_WHITE2, 1 },
+    { 8, 9, VERSION_WHITE2, 1 },
+    { 8, 9, VERSION_WHITE2, 2 },
+    { 8, 9, VERSION_WHITE2, 2 },
+    { 8, 9, VERSION_WHITE2, 3 },
+    { 8, 9, VERSION_WHITE2, 3 },
+    { 8, 9, VERSION_WHITE2, 11 },
+    { 8, 9, VERSION_WHITE2, 11 },
+    { 8, 9, VERSION_WHITE2, 11 },
+    { 8, 9, VERSION_WHITE2, 4 },
+    { 8, 9, VERSION_WHITE2, 4 },
+    { 8, 9, VERSION_WHITE2, 4 },
+    { 8, 9, VERSION_WHITE2, 5 },
+    { 8, 9, VERSION_WHITE2, 5 },
+    { 8, 9, VERSION_WHITE2, 6 },
+    { 8, 9, VERSION_WHITE2, 6 },
+    { 8, 9, VERSION_WHITE2, 7 },
+    { 8, 9, VERSION_WHITE2, 7 },
+    { 8, 9, VERSION_WHITE2, 7 },
+    { 8, 9, VERSION_WHITE2, 10 },
+    { 8, 9, VERSION_WHITE2, 10 },
+    { 8, 9, VERSION_WHITE2, 10 },
+    { 8, 9, VERSION_WHITE2, 8 },
+    { 8, 9, VERSION_WHITE2, 8 },
+    { 8, 9, VERSION_WHITE2, 9 },
+    { 8, 9, VERSION_WHITE2, 9 },
+    { 8, 9, VERSION_BLACK2, 12 },
+    { 8, 9, VERSION_BLACK2, 12 },
+    { 8, 9, VERSION_BLACK2, 12 },
+    { 8, 9, VERSION_BLACK2, 13 },
+    { 8, 9, VERSION_BLACK2, 13 },
+    { 8, 9, VERSION_BLACK2, 13 },
+    { 8, 9, VERSION_BLACK2, 14 },
+    { 8, 9, VERSION_BLACK2, 14 },
+    { 8, 9, VERSION_BLACK2, 15 },
+    { 8, 9, VERSION_BLACK2, 15 },
+    { 8, 9, VERSION_BLACK2, 16 },
+    { 8, 9, VERSION_BLACK2, 16 },
+    { 8, 9, VERSION_BLACK2, 16 },
+    { 8, 9, VERSION_BLACK2, 17 },
+    { 8, 9, VERSION_BLACK2, 17 },
+    { 8, 9, VERSION_BLACK2, 17 },
+    { 8, 9, VERSION_BLACK2, 18 },
+    { 8, 9, VERSION_BLACK2, 18 },
+    { 8, 9, VERSION_BLACK2, 19 },
+    { 8, 9, VERSION_BLACK2, 19 },
+    { 8, 9, VERSION_BLACK2, 20 },
+    { 8, 9, VERSION_BLACK2, 20 },
+    { 8, 9, VERSION_BLACK2, 20 },
+    { 8, 9, VERSION_BLACK2, 21 },
+    { 8, 9, VERSION_BLACK2, 21 },
+    { 8, 9, VERSION_BLACK2, 21 },
+    { 8, 9, VERSION_BLACK2, 22 },
+    { 8, 9, VERSION_BLACK2, 22 },
+    { 8, 9, VERSION_BLACK2, 23 },
+    { 8, 9, VERSION_BLACK2, 23 },
+    { 0, 2, VERSION_WHITE2, 28 },
+    { 0, 2, VERSION_WHITE2, 28 },
+    { 0, 2, VERSION_WHITE2, 28 },
+    { 3, 5, VERSION_WHITE2, 28 },
+    { 3, 5, VERSION_WHITE2, 28 },
+    { 3, 5, VERSION_WHITE2, 28 },
+    { 6, 9, VERSION_WHITE2, 28 },
+    { 6, 9, VERSION_WHITE2, 28 },
+    { 6, 9, VERSION_WHITE2, 28 },
+    { 6, 9, VERSION_WHITE2, 28 },
+    { 0, 2, VERSION_WHITE2, 29 },
+    { 0, 2, VERSION_WHITE2, 29 },
+    { 0, 2, VERSION_WHITE2, 29 },
+    { 3, 5, VERSION_WHITE2, 29 },
+    { 3, 5, VERSION_WHITE2, 29 },
+    { 3, 5, VERSION_WHITE2, 29 },
+    { 6, 9, VERSION_WHITE2, 29 },
+    { 6, 9, VERSION_WHITE2, 29 },
+    { 6, 9, VERSION_WHITE2, 29 },
+    { 6, 9, VERSION_WHITE2, 29 },
+    { 0, 2, VERSION_BLACK2, 24 },
+    { 0, 2, VERSION_BLACK2, 24 },
+    { 0, 2, VERSION_BLACK2, 24 },
+    { 3, 5, VERSION_BLACK2, 24 },
+    { 3, 5, VERSION_BLACK2, 24 },
+    { 0, 2, VERSION_BLACK2, 25 },
+    { 0, 2, VERSION_BLACK2, 25 },
+    { 0, 2, VERSION_BLACK2, 25 },
+    { 3, 5, VERSION_BLACK2, 25 },
+    { 3, 5, VERSION_BLACK2, 25 },
+    { 3, 5, VERSION_BLACK2, 27 },
+    { 6, 9, VERSION_BLACK2, 27 },
+    { 6, 9, VERSION_BLACK2, 27 },
+    { 6, 9, VERSION_BLACK2, 27 },
+    { 6, 9, VERSION_BLACK2, 27 },
+    { 3, 5, VERSION_BLACK2, 26 },
+    { 6, 9, VERSION_BLACK2, 26 },
+    { 6, 9, VERSION_BLACK2, 26 },
+    { 6, 9, VERSION_BLACK2, 26 },
+    { 6, 9, VERSION_BLACK2, 26 },
+};
+
+// clang-format on
+
+static inline u32 InfinityDungeonRandom_Next(InfinityDungeonRandom *rnd, u32 max) {
+    rnd->state = rnd->multiplier * rnd->state + rnd->increment;
+    if (max == 0) {
+        return rnd->state >> 32;
+    }
+    return ((rnd->state >> 32) * max) >> 32;
+}
+
+const InfinityDungeonNpc *InfinityDungeon_GetNpc(u16 npc) {
+    return &sNpcs[npc];
+}
+
+const InfinityDungeonRoomTemplate *InfinityDungeon_GetRoomTemplate(u16 type) {
+    return &sRoomTemplates[type];
+}
+
+const InfinityDungeonTrainer *InfinityDungeon_GetTrainer(u16 trainer) {
+    return &sTrainers[trainer];
+}
+
+u8 InfinityDungeon_GetTrainerClass(u16 trainer) {
+    return sTrainers[trainer].trainerClass;
+}
+
+u8 InfinityDungeon_GetRoomNpcCount(u8 type) {
+    if (type != INFINITY_DUNGEON_ROOM_TYPE_NONE) {
+        return sRoomTemplates[type].npcCount;
+    }
+    return 0;
+}
+
+void InfinityDungeon_GetFloorSize(u32 rank, u32 *width, u32 *height) {
+    *width = sSizes[rank].width;
+    *height = sSizes[rank].height;
+}
+
+const u16 *InfinityDungeon_GetRoomZones(u8 version) {
+    if (version == VERSION_BLACK2) {
+        return sBlack2Zones;
+    }
+    return sWhite2Zones;
+}
+
+const InfinityDungeonPos *InfinityDungeon_GetFloorPos(u8 version) {
+    if (version == VERSION_BLACK2) {
+        return &sBlack2FloorPosition;
+    }
+    return &sWhite2FloorPosition;
+}
+
+const InfinityDungeonPos *InfinityDungeon_GetArrivalPos(u32 index) {
+    return &sArrivalPositions[index];
+}
+
+const InfinityDungeonPos *InfinityDungeon_GetRoomEntryPos(u8 version, u8 kind, u16 direction) {
+    if (version == VERSION_BLACK2) {
+        return &sBlack2RoomEntryPositions[kind][direction];
+    }
+    return &sWhite2RoomEntryPositions[kind][direction];
+}
+
+const InfinityDungeonPos *InfinityDungeon_GetTrainerPos(u8 version, u8 kind, u8 index) {
+    if (version == VERSION_BLACK2) {
+        return &sBlack2TrainerPositions[kind][index];
+    }
+    return &sWhite2TrainerPositions[kind][index];
+}
+
+const InfinityDungeonLevelRange *InfinityDungeon_GetLevelRange(u16 mode) {
+    return &sLevelRanges[mode];
+}
+
+u8 InfinityDungeon_GetIvs(u16 mode) {
+    return sIvs[mode];
+}
+
+const u8 *InfinityDungeon_GetTrainerClassShares(u16 rank, u8 version) {
+    if (version == VERSION_BLACK2) {
+        return sTrainerClassSharesBlack2[rank];
+    }
+    return sTrainerClassSharesWhite2[rank];
+}
+
+u32 InfinityDungeon_GetNpcScriptIndex(InfinityDungeon *dungeon, u32 objCode, u8 floor, u8 slot) {
+    int i;
+
+    if (!InfinityDungeon_IsTargetSlot(dungeon, floor, slot)) {
+        for (i = 0; i < 30; i++) {
+            if (objCode == sObjScripts[i].objCode) {
+                return sObjScripts[i].scriptIndex;
+            }
+        }
+    } else {
+        return 7;
+    }
+    return 0;
+}
+
+u8 InfinityDungeon_GetNpcIndex(u32 objCode) {
+    int i;
+
+    for (i = 0; i < 30; i++) {
+        if (objCode == sObjScripts[i].objCode) {
+            return sObjScripts[i].npcIndex;
+        }
+    }
+    return 0;
+}
+
+void InfinityDungeon_ShuffleU32(u32 *array, int count, InfinityDungeonRandom *rnd) {
+    int i;
+
+    for (i = 0; i < count; i++) {
+        u32 j = InfinityDungeonRandom_Next(rnd, count);
+        u32 temp = array[j];
+
+        array[j] = array[i];
+        array[i] = temp;
+    }
+}
+
+static void InfinityDungeon_ShuffleU8(u8 *array, int count, MATHRandContext32 *rand) {
+    int i;
+
+    for (i = 0; i < count; i++) {
+        u32 j = MATH_Rand32(rand, count);
+        u8 temp = array[j];
+
+        array[j] = array[i];
+        array[i] = temp;
+    }
+}
+
+void InfinityDungeon_ShuffleU16(u16 *array, int count, InfinityDungeonRandom *rnd) {
+    int i;
+
+    for (i = 0; i < count; i++) {
+        u32 j = InfinityDungeonRandom_Next(rnd, count);
+        u16 temp = array[j];
+
+        array[j] = array[i];
+        array[i] = temp;
+    }
+}
+
+void InfinityDungeon_Seed(InfinityDungeon *dungeon, s32 seed) {
+    MATHRandContext32 rand;
+    int floor;
+    int i;
+
+    dungeon->seed = seed;
+    MATH_InitRand32(&rand, seed);
+    dungeon->trainerSeed = MATH_Rand32(&rand, 0);
+    dungeon->layoutSeed = MATH_Rand32(&rand, 0);
+    dungeon->rewardSeed = MATH_Rand32(&rand, 0);
+    for (floor = 0; floor < INFINITY_DUNGEON_FLOOR_COUNT; floor++) {
+        for (i = 0; i < INFINITY_DUNGEON_FLOOR_TRAINER_MAX; i++) {
+            dungeon->battleSeeds[floor][i] = MATH_Rand32(&rand, 0);
+        }
+    }
+}
+
+static const u8 *InfinityDungeon_GetRoomCounts(u16 rank, u8 floor, u8 version) {
+    if (version == VERSION_BLACK2) {
+        return sRoomCountsBlack2[rank][floor];
+    }
+    return sRoomCountsWhite2[rank][floor];
+}
+
+u16 InfinityDungeon_IsTargetSlot(InfinityDungeon *dungeon, u8 floor, u8 slot) {
+    if (dungeon->targetSlot == slot && dungeon->targetFloor == floor) {
+        return 1;
+    }
+    return 0;
+}
+
+u8 InfinityDungeon_GetVersion(InfinityDungeon *dungeon) {
+    return dungeon->version;
+}
+
+u32 InfinityDungeon_GetSlotRoom(InfinityDungeon *dungeon, u32 floor, int slot) {
+    int i;
+    int total = 0;
+
+    for (i = 0; i < INFINITY_DUNGEON_ROOM_COUNT; i++) {
+        u8 count = InfinityDungeon_GetRoomNpcCount(dungeon->floors[floor].rooms[i].type);
+
+        if (count != 0) {
+            total += count;
+            if (slot < total) {
+                return i;
+            }
+        }
+    }
+    return 0;
+}
+
+u32 InfinityDungeon_GetTrainerSlot(InfinityDungeon *dungeon, unsigned int floor, unsigned int room, u8 trainer) {
+    int total = 0;
+    int i;
+
+    for (i = 0; i < INFINITY_DUNGEON_ROOM_COUNT; i++) {
+        u32 type = dungeon->floors[floor].rooms[i].type;
+
+        if (room <= i) {
+            break;
+        }
+        if (InfinityDungeon_GetRoomNpcCount(type) != 0) {
+            total += InfinityDungeon_GetRoomNpcCount(type);
+        }
+    }
+    return total + trainer;
+}
+
+u16 InfinityDungeon_GetTrainerId(InfinityDungeon *dungeon, u8 floor, u8 slot) {
+    return dungeon->trainerIds[floor][slot];
+}
+
+void InfinityDungeon_LayoutFloors(InfinityDungeon *dungeon, u32 rank, u32 seed, int width, int height, u8 floorCount) {
+    InfinityDungeonWalk walk;
+    InfinityDungeonWalk extraWalk;
+    InfinityDungeonGridPos starts[INFINITY_DUNGEON_FLOOR_COUNT];
+    MATHRandContext32 rand;
+    int rooms[INFINITY_DUNGEON_ROOM_COUNT];
+    int directions[INFINITY_DUNGEON_PASSAGE_COUNT];
+    int extraDirections[INFINITY_DUNGEON_PASSAGE_COUNT];
+    u8 types[INFINITY_DUNGEON_ROOM_COUNT];
+    u8 goalTypes[INFINITY_DUNGEON_ROOM_COUNT];
+    InfinityDungeonGridPos goal;
+    InfinityDungeonGridPos pos;
+    int goalFloor;
+    u8 goalRoom;
+    int count;
+    int floor;
+    int kind;
+    int i;
+    int j;
+
+    MATH_InitRand32(&rand, seed);
+    for (floor = 0; floor < INFINITY_DUNGEON_FLOOR_COUNT; floor++) {
+        for (i = 0; i < INFINITY_DUNGEON_ROOM_COUNT; i++) {
+            dungeon->floors[floor].rooms[i].index = i;
+            dungeon->floors[floor].rooms[i].kind = ROOM_KIND_ORDINARY;
+            dungeon->floors[floor].rooms[i].type = INFINITY_DUNGEON_ROOM_TYPE_NONE;
+            for (j = 0; j < INFINITY_DUNGEON_PASSAGE_COUNT; j++) {
+                dungeon->floors[floor].rooms[i].open[j] = 0;
+            }
+        }
+    }
+    for (floor = 0; floor < INFINITY_DUNGEON_FLOOR_COUNT; floor++) {
+        InfinityDungeonRoom *first = dungeon->floors[floor].rooms;
+
+        first->kind = ROOM_KIND_START;
+        first->type = INFINITY_DUNGEON_ROOM_TYPE_NONE;
+        starts[floor].x = 0;
+        starts[floor].y = 0;
+    }
+
+    // The floor of the goal, and its room among those that have another below them
+    goalFloor = MATH_Rand32(&rand, floorCount);
+    {
+        InfinityDungeonRoom *goalRooms = dungeon->floors[goalFloor].rooms;
+        InfinityDungeonRoom *room;
+
+        count = InfinityDungeon_ListGoalCandidates(goalRooms, rooms, width, height);
+        goalRoom = rooms[MATH_Rand32(&rand, count)];
+        room = &goalRooms[goalRoom];
+        room->kind = ROOM_KIND_GOAL;
+        room->type = INFINITY_DUNGEON_ROOM_TYPE_NONE;
+    }
+    goal.x = goalRoom % INFINITY_DUNGEON_GRID_WIDTH;
+    goal.y = goalRoom / INFINITY_DUNGEON_GRID_WIDTH;
+
+    for (floor = 0; floor < floorCount; floor++) {
+        InfinityDungeonRoom *floorRooms = dungeon->floors[floor].rooms;
+
+        walk.cur = starts[floor];
+        walk.top = -1;
+        for (i = 0; i < INFINITY_DUNGEON_WALK_DEPTH; i++) {
+            count = InfinityDungeonWalk_GetDirections(&walk.cur, floorRooms, directions, width, height, FALSE);
+            if (count > 0) {
+                InfinityDungeonWalk_Dig(directions[(u8)MATH_Rand32(&rand, count)], &walk, floorRooms);
+            } else {
+                InfinityDungeonWalk_Pop(&walk);
+                if (InfinityDungeon_AreAllRoomsDug(floorRooms, width, height) == TRUE) {
+                    break;
+                }
+            }
+        }
+        if (goalFloor == floor) {
+            walk.cur = goal;
+            InfinityDungeonWalk_Dig(INFINITY_DUNGEON_PASSAGE_SOUTH, &walk, floorRooms);
+        }
+
+        extraWalk.top = -1;
+        for (pos.y = 0; pos.y < height; pos.y++) {
+            for (pos.x = 0; pos.x < width; pos.x++) {
+                extraWalk.cur = pos;
+                kind = InfinityDungeon_GetGridRoom(&pos, floorRooms)->kind;
+                if (kind != ROOM_KIND_START && kind != ROOM_KIND_GOAL) {
+                    count = InfinityDungeonWalk_GetDirections(&pos, floorRooms, extraDirections, width, height, TRUE);
+                    InfinityDungeonWalk_Dig(extraDirections[(u8)MATH_Rand32(&rand, count)], &extraWalk, floorRooms);
+                }
+            }
+        }
+    }
+
+    for (i = 0; i < floorCount; i++) {
+        int placed = 0;
+
+        count = InfinityDungeon_ListRoomTypes(rank, i, dungeon->version, types);
+        InfinityDungeon_ShuffleU8(types, count, &rand);
+        for (j = 0; j < INFINITY_DUNGEON_ROOM_COUNT; j++) {
+            if (dungeon->floors[i].rooms[j].kind == ROOM_KIND_ORDINARY) {
+                int x = j % INFINITY_DUNGEON_GRID_WIDTH;
+                int y = j / INFINITY_DUNGEON_GRID_WIDTH;
+
+                if (x < width && y < height) {
+                    if (goal.x == x && goal.y + 1 == y && i == goalFloor) {
+                        const InfinityDungeonRoomTemplate *roomTemplate;
+                        u8 type;
+
+                        count = InfinityDungeon_ListGoalRoomTypes(rank, i, dungeon->version, goalTypes);
+                        type = goalTypes[MATH_Rand32(&rand, count)];
+                        roomTemplate = InfinityDungeon_GetRoomTemplate(type);
+                        dungeon->floors[i].rooms[j].type = type;
+                        dungeon->floors[i].rooms[j].kind = roomTemplate->kind;
+                    } else {
+                        u8 type = types[placed];
+
+                        if (type != INFINITY_DUNGEON_ROOM_TYPE_NONE) {
+                            const InfinityDungeonRoomTemplate *roomTemplate = InfinityDungeon_GetRoomTemplate(type);
+
+                            dungeon->floors[i].rooms[j].type = type;
+                            dungeon->floors[i].rooms[j].kind = roomTemplate->kind;
+                        }
+                        placed++;
+                    }
+                }
+            }
+        }
+    }
+}
+
+static u8 InfinityDungeon_ListRoomTypes(u32 rank, u8 floor, u8 version, u8 *types) {
+    int count = 0;
+    const u8 *counts = InfinityDungeon_GetRoomCounts(rank, floor, version);
+    int i;
+
+    MI_CpuFill8(types, INFINITY_DUNGEON_ROOM_TYPE_NONE, INFINITY_DUNGEON_ROOM_COUNT);
+    for (i = 0; i < 20; i++) {
+        u8 n = counts[i];
+
+        if (n != 0) {
+            do {
+                types[count++] = i;
+            } while (--n != 0);
+        }
+    }
+    return count;
+}
+
+static u8 InfinityDungeon_ListGoalRoomTypes(u32 rank, u8 floor, u8 version, u8 *types) {
+    int count = 0;
+    const u8 *counts = InfinityDungeon_GetRoomCounts(rank, floor, version);
+    int i;
+
+    MI_CpuFill8(types, INFINITY_DUNGEON_ROOM_TYPE_NONE, INFINITY_DUNGEON_ROOM_COUNT);
+    for (i = 0; i < INFINITY_DUNGEON_ROOM_TYPE_NONE; i++) {
+        if (counts[i] != 0 && InfinityDungeon_GetRoomTemplate(i)->kind == ROOM_KIND_ORDINARY) {
+            types[count++] = i;
+        }
+    }
+    return count;
+}
+
+// The rooms of the floor but its last row that have been set apart, by their number
+static int InfinityDungeon_ListGoalCandidates(InfinityDungeonRoom *rooms, int *list, int width, int height) {
+    int count = 0;
+    int x;
+    int y;
+    InfinityDungeonGridPos pos;
+
+    MI_CpuFill8(list, 16, 16 * sizeof(int));
+    for (y = 0; y < height - 1; y++) {
+        for (x = 0; x < width; x++) {
+            pos.x = x;
+            pos.y = y;
+            if (InfinityDungeon_GetGridRoom(&pos, rooms)->kind != ROOM_KIND_START) {
+                list[count] = x + y * INFINITY_DUNGEON_GRID_WIDTH;
+                count++;
+            }
+        }
+    }
+    return count;
+}
+
+static InfinityDungeonRoom *InfinityDungeon_GetGridRoom(const InfinityDungeonGridPos *pos, InfinityDungeonRoom *rooms) {
+    return &rooms[pos->x + pos->y * INFINITY_DUNGEON_GRID_WIDTH];
+}
+
+static const InfinityDungeonRoom *InfinityDungeon_GetGridRoomConst(const InfinityDungeonGridPos *pos,
+                                                                   const InfinityDungeonRoom *rooms) {
+    return &rooms[pos->x + pos->y * INFINITY_DUNGEON_GRID_WIDTH];
+}
+
+// Opens a passage from the walk's room in the direction (up, down, left or right) and moves into the room beyond
+static void InfinityDungeonWalk_Dig(u8 direction, InfinityDungeonWalk *walk, InfinityDungeonRoom *rooms) {
+    switch (direction) {
+    case INFINITY_DUNGEON_PASSAGE_NORTH:
+        InfinityDungeon_GetGridRoom(&walk->cur, rooms)->open[INFINITY_DUNGEON_PASSAGE_NORTH] = 1;
+        InfinityDungeonWalk_Push(walk, &walk->cur);
+        walk->cur.y--;
+        InfinityDungeon_GetGridRoom(&walk->cur, rooms)->open[INFINITY_DUNGEON_PASSAGE_SOUTH] = 1;
+        break;
+    case INFINITY_DUNGEON_PASSAGE_SOUTH:
+        InfinityDungeon_GetGridRoom(&walk->cur, rooms)->open[INFINITY_DUNGEON_PASSAGE_SOUTH] = 1;
+        InfinityDungeonWalk_Push(walk, &walk->cur);
+        walk->cur.y++;
+        InfinityDungeon_GetGridRoom(&walk->cur, rooms)->open[INFINITY_DUNGEON_PASSAGE_NORTH] = 1;
+        break;
+    case INFINITY_DUNGEON_PASSAGE_WEST:
+        InfinityDungeon_GetGridRoom(&walk->cur, rooms)->open[INFINITY_DUNGEON_PASSAGE_WEST] = 1;
+        InfinityDungeonWalk_Push(walk, &walk->cur);
+        walk->cur.x--;
+        InfinityDungeon_GetGridRoom(&walk->cur, rooms)->open[INFINITY_DUNGEON_PASSAGE_EAST] = 1;
+        break;
+    case INFINITY_DUNGEON_PASSAGE_EAST:
+        InfinityDungeon_GetGridRoom(&walk->cur, rooms)->open[INFINITY_DUNGEON_PASSAGE_EAST] = 1;
+        InfinityDungeonWalk_Push(walk, &walk->cur);
+        walk->cur.x++;
+        InfinityDungeon_GetGridRoom(&walk->cur, rooms)->open[INFINITY_DUNGEON_PASSAGE_WEST] = 1;
+        break;
+    }
+}
+
+// The directions that the walk can dig into from a room, which are rooms nobody has dug into yet unless allowVisited
+static int InfinityDungeonWalk_GetDirections(const InfinityDungeonGridPos *pos, const InfinityDungeonRoom *rooms,
+                                             int *directions, int width, int height, BOOL allowVisited) {
+    int count = 0;
+    InfinityDungeonGridPos east;
+    InfinityDungeonGridPos west;
+    InfinityDungeonGridPos south;
+    InfinityDungeonGridPos north;
+    u8 kind;
+
+    MI_CpuFill8(directions, 4, INFINITY_DUNGEON_PASSAGE_COUNT * sizeof(int));
+    east = *pos;
+    east.x++;
+    if (east.x < width && InfinityDungeon_GetGridRoomConst(&east, rooms)->kind != ROOM_KIND_GOAL) {
+        if (allowVisited == 0) {
+            if (InfinityDungeon_IsRoomUndug(&east, rooms)) {
+                directions[count] = INFINITY_DUNGEON_PASSAGE_EAST;
+                count++;
+            }
+        } else {
+            directions[count] = INFINITY_DUNGEON_PASSAGE_EAST;
+            count++;
+        }
+    }
+    west = *pos;
+    west.x--;
+    if (west.x >= 0 && InfinityDungeon_GetGridRoomConst(&west, rooms)->kind != ROOM_KIND_GOAL) {
+        if (allowVisited == 0) {
+            if (InfinityDungeon_IsRoomUndug(&west, rooms)) {
+                directions[count] = INFINITY_DUNGEON_PASSAGE_WEST;
+                count++;
+            }
+        } else {
+            directions[count] = INFINITY_DUNGEON_PASSAGE_WEST;
+            count++;
+        }
+    }
+    south = *pos;
+    south.y++;
+    if (south.y < height) {
+        kind = InfinityDungeon_GetGridRoomConst(&south, rooms)->kind;
+        if (kind != ROOM_KIND_GOAL && kind != ROOM_KIND_START) {
+            if (allowVisited == 0) {
+                if (InfinityDungeon_IsRoomUndug(&south, rooms)) {
+                    directions[count] = INFINITY_DUNGEON_PASSAGE_SOUTH;
+                    count++;
+                }
+            } else {
+                directions[count] = INFINITY_DUNGEON_PASSAGE_SOUTH;
+                count++;
+            }
+        }
+    }
+    north = *pos;
+    if (InfinityDungeon_GetGridRoomConst(&north, rooms)->kind != ROOM_KIND_START) {
+        north.y--;
+        if (InfinityDungeon_GetGridRoomConst(&north, rooms)->kind != ROOM_KIND_GOAL && north.y >= 0) {
+            if (allowVisited == 0) {
+                if (InfinityDungeon_IsRoomUndug(&north, rooms)) {
+                    directions[count] = INFINITY_DUNGEON_PASSAGE_NORTH;
+                    count++;
+                }
+            } else {
+                directions[count] = INFINITY_DUNGEON_PASSAGE_NORTH;
+                count++;
+            }
+        }
+    }
+    return count;
+}
+
+// Whether no passage has been opened into or out of the room
+static BOOL InfinityDungeon_IsRoomUndug(const InfinityDungeonGridPos *pos, const InfinityDungeonRoom *rooms) {
+    const InfinityDungeonRoom *room = InfinityDungeon_GetGridRoomConst(pos, rooms);
+    int i;
+
+    for (i = 0; i < INFINITY_DUNGEON_PASSAGE_COUNT; i++) {
+        if (room->open[i] == 1) {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+static void InfinityDungeonWalk_Push(InfinityDungeonWalk *walk, const InfinityDungeonGridPos *pos) {
+    walk->top++;
+    walk->stack[walk->top] = *pos;
+}
+
+static void InfinityDungeonWalk_Pop(InfinityDungeonWalk *walk) {
+    if (walk->top >= 0) {
+        walk->cur = walk->stack[walk->top];
+        walk->stack[walk->top].x = 0;
+        walk->stack[walk->top].y = 0;
+        walk->top--;
+    }
+}
+
+// Whether every room that isn't the goal has been dug into
+static BOOL InfinityDungeon_AreAllRoomsDug(const InfinityDungeonRoom *rooms, int width, int height) {
+    int x;
+    int y;
+
+    for (y = 0; y < height; y++) {
+        for (x = 0; x < width; x++) {
+            InfinityDungeonGridPos pos = { x, y };
+
+            if (InfinityDungeon_GetGridRoomConst(&pos, rooms)->kind != ROOM_KIND_GOAL &&
+                InfinityDungeon_IsRoomUndug(&pos, rooms) == TRUE) {
+                return FALSE;
+            }
+        }
+    }
+    return TRUE;
+}

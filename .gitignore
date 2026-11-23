@@ -1,0 +1,26 @@
+# Base ROMs and anything extracted from them are never committed
+orig/*.nds
+*.nds
+extract/
+/build/
+
+# Tools downloaded or built by configure
+tools/dsd
+tools/dsd.rev
+tools/src/
+tools/objdiff-cli
+tools/wibo
+tools/sjiswrap.exe
+tools/mwccarm
+
+.venv
+__pycache__/
+build.ninja
+.ninja_*
+objdiff.json
+
+# Claude Code: per-session state; the project's skills, agents, hooks and settings.json are committed
+.claude/worktrees/
+.claude/settings.local.json
+.claude/audit-state.json
+!.claude/settings.json

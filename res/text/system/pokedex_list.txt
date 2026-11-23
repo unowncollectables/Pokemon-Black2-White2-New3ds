@@ -1,0 +1,13 @@
+PokedexList_Text_UnovaPokedex = UNOVA POKÉDEX
+PokedexList_Text_NationalPokedex = NATIONAL POKÉDEX
+PokedexList_Text_Seen = SEEN
+PokedexList_Text_Obtained = OBTAINED
+PokedexList_Text_SearchResults = SEARCH RESULTS
+PokedexList_Text_Empty = {0202:0}
+PokedexList_Text_Empty_2 =     \x{ffff}
+PokedexList_Text_Empty_3 = ?????
+PokedexList_Text_Empty_4 = {0202:0}
+PokedexList_Text_National = NATIONAL
+PokedexList_Text_Unova = UNOVA
+PokedexList_Text_Habitat = HABITAT
+\pad{26}

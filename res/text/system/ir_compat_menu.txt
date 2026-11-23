@@ -1,0 +1,13 @@
+IrCompatMenu_Text_Empty =                                \x{ffff}
+IrCompatMenu_Text_Empty_2 =                             \x{ffff}
+IrCompatMenu_Text_YouveCreatedInfraredConnection = You've created an Infrared Connection!
+IrCompatMenu_Text_CreateInfraredConnectionStart = Create an Infrared Connection to start\nthe Feeling Check with someone.
+IrCompatMenu_Text_CheckingPleaseMaintainInfrared = Checking...\nPlease maintain the Infrared Connection.
+IrCompatMenu_Text_TapMenuTouchScreen = Tap the menu in the Touch Screen\nto begin!
+IrCompatMenu_Text_BeginCheck = BEGIN CHECK
+IrCompatMenu_Text_Ranking = RANKING
+IrCompatMenu_Text_Cancel = CANCEL
+IrCompatMenu_Text_Back = BACK
+IrCompatMenu_Text_FeelingCheck = FEELING CHECK
+IrCompatMenu_Text_Empty_3 =                     \x{ffff}
+\pad{da}

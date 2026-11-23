@@ -1,0 +1,30 @@
+# The user interface of Nintendo's DWC utility (libdwcutil), the Wi-Fi Connection settings in overlay 182: its entry
+# point and main loop, its screens, keyboard and keypad, its row of selectable objects and their effects, and the
+# helpers under them (its resource archive, message files, heap, OAM allocator and buffers, sprite cells, fades, text,
+# input, interrupts, lists, OBJ characters, strings, VRAM banks, tasks and display registers). The library's name is
+# ours; its files are named after the objects of libdwcutil.TWL.HYB.a that they are, as aletheia's map of Black 1's SDK
+# code to that library's objects (layout/symbols_sdk.txt) shows them. These files were built with the game's compiler
+# and flags, not with the 2.0 that the rest of the utility (lib/dwcutil: apc.c and the AOSS files) needs: button.c
+# matches 15 of 15 functions with them against 10 of 15 under 2.0/sp2p2, and -ipa file is what gives button.c's
+# taskEnd1 its second literal of the object's address. The one difference is that char is unsigned, the compiler's
+# default: DWCi_Char loads a path's sixth character with ldrb and no sign extension.
+compiler = "dsi/1.1p1"
+flags = [
+    "-O4,p",               # Optimize for speed
+    "-proc arm946e",       # ARM9 processor
+    "-thumb",              # Thumb code
+    "-interworking",       # ARM/Thumb interworking
+    "-enum int",           # Enums are int-sized
+    "-char unsigned",      # char is unsigned
+    "-fp soft",            # Software floating point
+    "-lang=c99",
+    "-Cpp_exceptions off", # No exception tables
+    "-gccext,on",          # GCC extensions
+    "-gccinc",             # #include "..." and <...> search the same paths
+    "-inline on,noauto",   # Only inline functions marked inline
+    "-ipa file",           # Interprocedural analysis within each file
+    "-sym on",             # Debug info for objdiff
+    "-requireprotos",      # Calling an undeclared function is an error
+    "-nolink",
+    "-msgstyle gcc",
+]

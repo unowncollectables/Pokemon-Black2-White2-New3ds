@@ -1,0 +1,30 @@
+# The SDK's libirc, from TwlSDK's add-ins: the infrared link, overlay 31's last two files. In the SDK they are irc.c
+# (the frames between two machines, here irc_link.c) and irc_internal.c (the card's infrared chip on the backup SPI
+# bus, here irc_spi.c); lib/irc is this project's directory name. Black 1's decompilation
+# (https://github.com/Project-Holon/aletheia) recovered the SDK's own function and data names from libirc.a, and these files
+# use them. They are built with the game's compiler and flags, and both match whole, their text, pools,
+# .data and .bss, in both versions. Each aligns one object (IrcSpi, IrcFrame): at -O4,p MWCC rotates the loops of a
+# function and drops its empty loops unless the function reads an object with an explicit alignment, and the
+# original's functions that read those two objects keep theirs. -O2,p, which rotates no loop and keeps empty ones
+# everywhere, gives those without the attribute, but not IRCi_CalcSum's loop, which the original rotates (it reads no
+# object): there it matches only as a guarded do/while, and IRCi_CheckLength's test of 2 or 3 as a switch.
+compiler = "dsi/1.1p1"
+flags = [
+    "-O4,p",               # Optimize for speed
+    "-proc arm946e",       # ARM9 processor
+    "-thumb",              # Thumb code
+    "-interworking",       # ARM/Thumb interworking
+    "-enum int",           # Enums are int-sized
+    "-char signed",        # char is signed
+    "-fp soft",            # Software floating point
+    "-lang=c99",
+    "-Cpp_exceptions off", # No exception tables
+    "-gccext,on",          # GCC extensions
+    "-gccinc",             # #include "..." and <...> search the same paths
+    "-inline on,noauto",   # Only inline functions marked inline
+    "-ipa file",           # Interprocedural analysis within each file
+    "-sym on",             # Debug info for objdiff
+    "-requireprotos",      # Calling an undeclared function is an error
+    "-nolink",
+    "-msgstyle gcc",
+]

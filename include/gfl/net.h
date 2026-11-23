@@ -1,0 +1,400 @@
+#ifndef POKEBW2_GFL_NET_H
+#define POKEBW2_GFL_NET_H
+
+#include "types.h"
+#include "gfl/heap.h"
+#include "gfl/net_command.h"
+#include "gfl/net_handle.h"
+#include "struct_decls.h"
+
+// The unnamed functions below are from the network library. Some appear to synchronize with the other player or
+// toggle error checks, but that is not confirmed.
+
+// How the game set up the network: what net.c keeps from GFL_NetInit
+typedef struct {
+    // The game's commands
+    const NetCommand *commandTable;
+    int commandNum;
+    // Called when a machine disconnects
+    void (*disconnectCallback)(void *work, int netId);
+    // Called when a machine's negotiation is accepted
+    void (*negotiationCallback)(void *work, int netId);
+    // The data this machine shares with the others, and its size
+    void *(*getInfo)(void *work);
+    int (*getInfoSize)(void *work);
+    // The data the wireless beacons carry, and its size
+    void *(*getBeaconData)(void *work);
+    int (*getBeaconSize)(void *work);
+    // Whether a beacon's game is one to join, a BOOL (*)(u8 gameCommandBase, u8 beaconCommandBase, void *work) that the
+    // games give with fewer parameters
+    void *beaconFilter;
+    // Called with the wireless library's error when it fails
+    void (*errorCallback)(NetHandle *handle, int error, void *work);
+    // Called when the wireless library's error is fatal (WH_ERRCODE_FATAL)
+    void (*fatalErrorCallback)(NetHandle *handle, int error, void *work);
+    // Called once the network has ended, and when a child connects to the changeover's parent
+    void (*endCallback)(void *work);
+    void (*childConnectCallback)(void *work);
+    // 12 bytes that the games' init data zero, the last four of which are a function that dwc_rap.c calls with each
+    // Wi-Fi library error it queues (its code and its second value), and the game's work
+    union {
+        u8 unk34[0xc];
+        struct {
+            u8 unk34_0[8];
+            void (*callback)(int code, int param, void *work);
+        } wifiError;
+    } wifiHooks;
+    // The Wi-Fi friend list (DWCFriendData) and user data (DWCUserData)
+    int (*getFriendData)(void *work);
+    int (*getUserData)(void *work);
+    // The size of the heap for Wi-Fi
+    u32 wifiHeapSize;
+    // The game's ID in the wireless beacons (gameId, of which the low 16 bits go in them) after four more bytes. The
+    // games' init data give the bytes
+    union {
+        u8 unk4C[8];
+        struct {
+            u32 unk4C_0;
+            u32 gameId;
+        } id;
+    } beaconId;
+    HeapID parentHeapId;
+    HeapID heapId;
+    HeapID wifiHeapId;
+    HeapID ircHeapId;
+    // Where the wireless signal icon is
+    u16 iconX;
+    u16 iconY;
+    u8 maxConnectNum;
+    // The largest packet
+    u8 maxSendSize;
+    // A general count, not one meaning: GflNet_GetFriendListNum returns it as the Wi-Fi friend list's size,
+    // and wih_dwc.c loops over the beacons by it. The games set 2, 4, 8, 10 or 16, so no single name fits
+    u8 unk62;
+    u8 padding63;
+    // Whether the parent relays every machine's data (MP mode)
+    u8 bMPMode;
+    // A GFL_NET_TYPE_*
+    u8 bNetType;
+    // Whether starting a parent takes a new TGID
+    u8 changeTgid;
+    // The high byte of the game's commands
+    u8 gameCommandBase;
+    // The infrared link's timeout in frames (NetIrc_Init), which the games give as bytes and overlay 175 sets as one
+    // word
+    union {
+        u8 bytes[4];
+        u32 frames;
+    } irTimeout;
+    // The parent's packet size in MP mode, 0 for the default
+    u16 parentPacketSize;
+    // A command base that machines of different gameCommandBase negotiate with, 0 for none
+    u16 negotiationCommandBase;
+} GFLNetInitData;
+
+// The most machines that can connect
+#define GFL_NET_MACHINE_MAX 8
+
+// The kinds of connection: the wireless, Wi-Fi through DWC, infrared, infrared that changes to the wireless once linked
+// (net_irc_wireless.c), and the wireless started for listening (WM_InitializeForListening), which is otherwise run as
+// the wireless is
+enum {
+    GFL_NET_TYPE_WIRELESS,
+    GFL_NET_TYPE_WIFI,
+    GFL_NET_TYPE_WIFI_LOBBY,
+    GFL_NET_TYPE_IRC,
+    GFL_NET_TYPE_IRC_WIRELESS,
+    GFL_NET_TYPE_WIRELESS_LISTEN,
+    GFL_NET_TYPE_WIFI_GTS,
+};
+
+// The game-command bases selected by the infrared battle callers; the multi battle continues over wireless
+enum {
+    GFL_NET_GAME_COMMAND_IR_BATTLE = 12,
+    GFL_NET_GAME_COMMAND_LIVE_BATTLE_IR = 31,
+    GFL_NET_GAME_COMMAND_IR_MULTI_BATTLE = 37,
+};
+
+// The statuses that NetState_WifiConnecting tells apart from a device's update: the match is connected, it has
+// ended, it has failed, and 1007 while the connection is ready and nothing has happened yet. Any other value of 10
+// or more, such as the Wi-Fi device's 1003, 1004, 1006 and 1008, is a failure too, and a negative value is an
+// error. The Wi-Fi device (dwc_rap.c, an overlay) keeps the same numbers in its errorCode
+enum {
+    GFL_NET_DEVICE_STATUS_CONNECTED = 1000,
+    GFL_NET_DEVICE_STATUS_MATCH_ENDED = 1001,
+    GFL_NET_DEVICE_STATUS_MATCH_FAILED = 1002,
+    GFL_NET_DEVICE_STATUS_READY = 1007,
+};
+
+// What the network device does, wireless or Wi-Fi; the code calls each through GFLNetSys
+typedef BOOL (*GFLNetRecvFunc)(u16 netId, u8 *data, u16 size);
+// Whether the infrared device links with a machine of the peer's game code
+typedef BOOL (*GFLNetPeerFilter)(int gameCode, int peerGameCode);
+typedef BOOL (*GFLNetSendDoneFunc)(BOOL ok);
+
+typedef struct {
+    // Prepares the device before its heap is made (the Wi-Fi library's start)
+    void (*prepare)(int heapId, int unused);
+    // Starts the device; the callback, which the wireless device calls when its helper ends, is NULL from the net
+    BOOL (*init)(HeapID heapId, GFLNetSys *sys, BOOL (*callback)(BOOL success), void *work);
+    BOOL (*start)(void (*callback)(BOOL ok));
+    // Runs the device each frame with the connected machines, returning a negative error or a status
+    int (*update)(u16 connectBits);
+    // Requests the connection close, FALSE until it is closed; requestClose nonzero closes it and zero only checks
+    BOOL (*disconnect)(int requestClose, int unused);
+    BOOL (*end)(void (*callback)(BOOL ok));
+    BOOL (*clearBeacons)(void);
+    BOOL (*unk1C)(void);
+    BOOL (*unk20)(void);
+    BOOL (*unk24)(void);
+    // A found beacon's data and MAC address, by index
+    void *(*getBeaconData)(int index);
+    u8 *(*getBeaconMac)(int index);
+    BOOL (*unk30)(void);
+    BOOL (*unk34)(void);
+    // Whether beacons were found
+    BOOL (*hasBeacons)(int unused);
+    BOOL (*setDisconnectCallback)(void (*callback)(int netId));
+    // Start the wireless parent, the scan for parents and the child of a parent
+    int (*startParent)(int anyChannel, BOOL (*callback)(void));
+    BOOL (*startScan)(int clearBeacons, int unused);
+    int (*startChild)(BOOL allocBuffers, const u8 *mac, int index, int unused, void (*callback)(void));
+    // Start a Wi-Fi match, and connect to a Wi-Fi friend by index (anybody when negative)
+    BOOL (*startMatch)(int key, int numEntry, int useQuery, int unused);
+    BOOL (*connectFriend)(int friendIndex, int numEntry, int twoEntries);
+    // Closes the connection, FALSE until it is closed; requestClose nonzero closes it and zero only checks
+    BOOL (*close)(BOOL requestClose, int unused);
+    // Whether the wireless device shares data, and its step of the data sharing
+    BOOL (*isDataSharing)(void);
+    BOOL (*stepDataSharing)(u8 *data);
+    u8 *(*getRecvData)(int netId);
+    BOOL (*send)(u8 *data, int size, int unused, GFLNetSendDoneFunc callback);
+    BOOL (*setRecvCallback)(GFLNetRecvFunc callback);
+    BOOL (*isRunning)(void);
+    BOOL (*isConnected)(void);
+    // Whether the device has ended, and whether it is idle, ready to start again
+    BOOL (*isEnded)(void);
+    BOOL (*isIdle)(void);
+    int (*getConnectBits)(void);
+    int (*getNetId)(void);
+    int (*getSignalLevel)(void);
+    int (*isError)(void);
+    // Whether a machine leaving is an error
+    void (*setDisconnectError)(int isError);
+    // Whether the Wi-Fi friend of an index can be connected to
+    int (*canConnectFriend)(int index);
+    int (*isVoiceChatEnabled)(void);
+    int (*getLastNetId)(void);
+    // The infrared device's work each frame, whether it can send, whether it is its turn, whether the other machine
+    // was seen, and whether the two are linked
+    void (*poll)(void);
+    BOOL (*canSend)(void);
+    BOOL (*isSendTurn)(void);
+    BOOL (*isPeerSeen)(void);
+    BOOL (*isLinked)(void);
+    BOOL (*isSendBlocked)(void);
+    void (*startLink)(void);
+    // Whether connections are accepted
+    void (*setAcceptConnect)(int accept);
+    // Start the search for beacons, and hold the scan for some frames
+    BOOL (*startSearch)(void);
+    void (*holdScan)(int unused);
+    // The infrared device's timeout, and its filter of the machines to link with
+    void (*setTimeout)(int frames);
+    void (*setPeerFilter)(GFLNetPeerFilter filter);
+} GFLNetDevTable;
+
+// The network library's state, with a copy of the game's init data
+struct GFLNetSys {
+    GFLNetInitData aNetInit;
+    NetHandle handles[GFL_NET_HANDLE_MAX];
+    const GFLNetDevTable *pDevTable;
+    u8 padding344[4];
+    // Called when the network has ended
+    void (*exitCallback)(void *work);
+    void *devWork;
+    u8 padding350[2];
+    // Whether a handle already negotiated may still be rejected
+    u8 rejectNegotiated;
+    u8 padding353;
+};
+
+// The network error, which NetState_RecordError records
+typedef struct {
+    int code;
+    // The error's type and the error (DWC_GetLastErrorEx's for Wi-Fi)
+    u32 errorType;
+    u32 error;
+    // Nonzero once an error is recorded, the line it was found on for net_system.c's
+    int type;
+} GFLNetErrorInfo;
+
+void NetCommand_UpdateHugeSend(void);
+// Command handlers of the other parts of the library
+void NetCommand_Dispatch(int netId, int sender, int command, int size, void *data, NetHandle *handle);
+BOOL NetCommand_HasCallback(int command);
+BOOL NetCommand_HasBufferFunc(int command);
+void *NetCommand_GetRecvBuffer(int command, int netId, int size);
+BOOL NetCommand_IsForThisMachine(int netId);
+
+// net_err.c: the network error screen. The error's code is its message in TEXT_BANK_WIFI_ERROR
+
+// The files of an error window's graphics, in ARCID_ERROR_WINDOW_GRA (net_err.c's, save_error.c's,
+// wfc_user_info_warning.c's and error_window_screen.c's window) and in ARCID_ASSERT_WINDOW_GRA (net_err.c's for a
+// failed assertion)
+enum {
+    ERROR_WINDOW_GRA_PLTT,
+    ERROR_WINDOW_GRA_CHAR,
+    ERROR_WINDOW_GRA_SCRN,
+};
+
+// Creates the network's heap, and the buffers the error screen saves the display in
+void GFL_NetHeapInit(void);
+void GFL_NetErrInit(u32 heapId);
+// Finds the network's error, each frame
+void GFL_NetErrUpdate(void);
+// What the game is to do about the network's error, if there is one: 1 to go on, 2 to end the connection
+BOOL GFL_NetErrCheck(void);
+void GFL_NetErrMarkShown(void);
+BOOL GFL_NetErrShow(u32 fatal);
+// Shows the fatal error screen for a Wi-Fi error with the message given
+void GFL_NetErrShowWifi(u32 message);
+// GFL_NetErrShow(1)
+void GFL_NetErrShowFatal(void);
+// Records a Wi-Fi error with the message given, to show it
+void GFL_NetErrRecordWifi(u32 message);
+// The server's results that the network error's messages tell apart: 0 is the success that no error screen is shown
+// for, and 6 the service that has been discontinued. The others' messages do not say what they mean, so they stay
+// numbers; ov260's WifiBattleMatchNet_GetHttpResultMessage, the same switch over its own copies, says the same
+enum {
+    NET_ERR_SERVER_RESULT_OK = 0,
+    NET_ERR_SERVER_RESULT_SERVICE_DISCONTINUED = 6,
+};
+
+// The message for a server's result
+u32 GFL_NetErrGetServerMessage(int result);
+// Whether GFL_NetErrShowScreen leaves the screens dark, for the caller to set the brightness with
+// GFL_NetErrApplyBrightness
+void GFL_NetErrSetKeepDark(BOOL keepDark);
+void GFL_NetErrClearKeepDark(void);
+void GFL_NetErrApplyBrightness(void);
+// Shows the error screen until A or B is pressed, with the wireless icon
+void GFL_NetErrShowScreen(void);
+// Whether the error was handled, after shutting the connection down
+BOOL GFL_NetErrShutdown(void);
+void GFL_NetErrClear(void);
+// WihDwc_GetStatus found a friend invitation.
+#define WIHDWC_STATUS_FRIEND_INVITE 0x8
+// The state of the wireless connections, as bits: 0x2 a local wireless one, 0x3c the signal, 0x3c0 Wi-Fi
+u32 WihDwc_GetStatus(WifiList *wifiList);
+WihDwcWork *WihDwc_Create(int num, HeapID heapId);
+void WihDwc_Destroy(WihDwcWork *work);
+void WihDwc_TickTimers(void);
+void GFL_NetErrAbort(void);
+void GFL_NetErrRecord(void);
+// Shows the error screen for an assertion that failed
+void AssertFailErrorDisp(void);
+// The wireless signal level of the DS Download Play, and the record of the best level a scan saw, which it sets and
+// clears
+u16 WihDwc_GetLinkLevel(void);
+void WihDwc_SetBestLinkLevel(u8 linkLevel);
+void WihDwc_OnParentNotFound(void);
+
+// The device table for a GFL_NET_TYPE_*, from outside the library
+const GFLNetDevTable *NetDefine_LoadDevice(int type);
+void NetDefine_UnloadDevice(int type);
+// GFL_SndBGMSetVolume, unless a connection is up and overlay 11's DWCRap_IsVoiceChatEnabled returns TRUE
+void NetBgmVolume_Set(u16 trackMask, s32 volume);
+
+// net.c: starts and ends the network, and passes calls to the device and the other parts of the library
+void GFL_NetBoot(int libraryHeapId, int unused, HeapID parentHeapId, HeapID heapId);
+void GFL_NetInit(const GFLNetInitData *pNetInit, void (*callback)(void *work), void *work);
+BOOL GFL_NetIsInitialized(void);
+// Whether the network has ended
+BOOL GFL_NetIsEnded(void);
+// Ends the network, calling back with the game's work once it has
+BOOL GFL_NetExit(void (*callback)(void *work));
+void GFL_NetCancelEnd(void);
+void *GFL_NetGetBeaconData(int index);
+u8 *GFL_NetGetBeaconMac(int index);
+// Steps the network while the game waits for it, as before a soft reset
+BOOL GFL_NetMainWhileWaiting(void);
+void GFL_NetUpdateDevice(void);
+void GFL_NetStartAsParent(const u8 *mac);
+void GFL_NetStartAsChild(const u8 *mac);
+void GFL_NetStartScan(void);
+void GFL_NetStartServer(void);
+void GFL_NetIwChangeoverConnect(void (*callback)(void *work), void (*linkChanged)(void *work, BOOL linked),
+                                void (*irEnded)(void *work));
+void GFL_NetIwSetGameCommandBase(int gameCommandBase);
+void GFL_NetIwGetCollectedMac(u8 *mac, int index);
+void GFL_NetIwSetPeerFilter(GFLNetPeerFilter filter);
+void GFL_NetIwFree(void);
+void GFL_NetChangeoverConnect(void (*callback)(void *work));
+// The argument is unused
+void GFL_NetStartSearch(int unused);
+void GFL_NetHoldScan(int unused);
+void GFL_NetSetChangeoverMode(int mode, int useParentMac, const u8 *mac);
+BOOL GFL_NetIwFinishCollecting(void);
+void GFL_NetIwOverrideNetId(int netId);
+u8 GFL_NetIwGetLinkedCount(void);
+void GFL_NetSetTimeout(int frames);
+u8 GFL_NetGetHandleNetId(NetHandle *handle);
+int GFL_NetGetNegotiatedCount(void);
+BOOL GFL_NetIsNegotiated(u8 netId);
+void GFL_NetSetAcceptConnect(NetHandle *handle, int accept);
+BOOL GFL_NetIsNotInitialized(void);
+// Whether the network is infrared, or Wi-Fi
+BOOL GFL_NetIsInfrared(void);
+BOOL GFL_NetIsWifi(void);
+// Calls into the functions that show the wireless strength icons
+void GFL_NetSetIconScreen(BOOL top, HeapID heapId);
+BOOL GFL_NetIsParent(void);
+// Whether a machine's negotiation has been accepted
+BOOL GFL_NetIsHandleNegotiated(NetHandle *handle);
+// Send a command to every machine, or to one; the game's commands wait for the negotiation. With noDuplicate, a command
+// that is still queued from this machine isn't sent again
+BOOL GFL_NetSendCommand(NetHandle *handle, int command, u16 size, const void *data);
+BOOL GFL_NetSendCommandToMachine(NetHandle *handle, u8 sendID, u16 command, u32 size, const void *data, u32 unused,
+                                 BOOL noDuplicate, BOOL noCopy);
+BOOL GFL_NetSendCommandToBits(NetHandle *handle, int dest, u16 command, int size, const void *data, u32 unused,
+                              BOOL noDuplicate, BOOL noCopy);
+BOOL GFL_NetIsSendQueueEmpty(NetHandle *handle);
+void GFL_NetSendTiming(NetHandle *handle, u16 timing);
+BOOL GFL_NetIsTimingRecv(NetHandle *handle, u16 timing);
+// The second argument is unused
+void GFL_NetSetGameCommandBase(u8 gameCommandBase, u8 unused);
+u8 GFL_NetGetGameCommandBase(void);
+// Whether the net game command base is one of the battle kinds
+BOOL GflNet_IsWifiGameKind(void);
+int GFL_NetGetUserData(void);
+int GFL_NetGetFriendData(void);
+u8 GflNet_GetFriendListNum(void);
+void GFL_NetSetMPSendEnabled(BOOL enabled);
+// The game's work, which the callbacks get
+void *GFL_NetGetWork(void);
+void GFL_NetSetWork(void *work);
+// The number of machines, and the size of each machine's data in a packet
+int GFL_NetGetMaxConnectNum(void);
+int GFL_NetGetMaxSendSize(void);
+u16 GFL_NetGetParentPacketSize(void);
+void GFL_NetNotifyChildConnect(void);
+void GFL_NetNotifyFatalError(int error);
+void GFL_NetNotifyError(int error);
+GFLNetSys *GFL_NetGetSys(void);
+GFLNetInitData *GFL_NetGetInitData(void);
+void GflNet_SetAutoExit(u8 autoExit);
+void GFL_NetSetDisconnectError(BOOL isError);
+void *allocConfigDSSoftwareFeature(HeapID heapId, u32 size, const char *file, u16 line);
+void GFL_NetFreeAligned32(void *ptr);
+// Record and read back the offset of BG 1 of the main engine, which bg_sys.c sets whenever it changes
+void GFL_NetSetBG1Offset(int x, int y);
+void GFL_NetGetBG1Offset(int *x, int *y);
+void GFL_NetSetInitData(const GFLNetInitData *pNetInit);
+void GFL_NetClearCallbacks(void);
+BOOL GFL_NetHasError(void);
+void GFL_NetMoveIcon(int x, int y);
+void GFL_NetResetIconPos(void);
+void GFL_NetSetRejectNegotiated(BOOL reject);
+
+#endif // POKEBW2_GFL_NET_H

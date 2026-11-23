@@ -1,0 +1,220 @@
+#include "ghttp_internal.h"
+
+// ghttpCommon: the locks, and the reading and writing of a connection's socket, through its encryption if it has one
+
+// How a request's receiving is throttled, in milliseconds and in bytes (ghttpStartup sets them again), and the proxy
+// that the requests go through, which nothing in this build sets
+int ghiThrottleTimeDelay = 250;
+int ghiThrottleBufferSize = 125;
+char *ghiProxyAddress;
+gsi_u16 ghiProxyPort;
+
+// The locks do nothing in this build
+void ghiCreateLock(void) {
+}
+
+void ghiFreeLock(void) {
+}
+
+void ghiLock(void) {
+}
+
+void ghiUnlock(void) {
+}
+
+// Decrypts what was received into the connection's decode buffer, to its receive buffer
+GHTTPBool ghiDecryptReceivedData(GHIConnection *connection) {
+    int inSize = 0;
+    int outSize = 0;
+    int result;
+
+    do {
+        do {
+            const char *in = connection->decodeBuffer.data + connection->decodeBuffer.pos;
+            char *out;
+
+            inSize = connection->decodeBuffer.len - connection->decodeBuffer.pos;
+            out = connection->recvBuffer.data + connection->recvBuffer.len;
+            outSize = connection->recvBuffer.size - connection->recvBuffer.len;
+            result = connection->encryptor.mDecryptFunc(connection, &connection->encryptor, in, &inSize, out, &outSize);
+            if (result == GHIEncryptionResult_BufferTooSmall) {
+                if (!ghiResizeBuffer(&connection->recvBuffer, connection->recvBuffer.sizeIncrement)) {
+                    return gsi_false;
+                }
+            } else if (result == GHIEncryptionResult_Error) {
+                return gsi_false;
+            }
+        } while (result == GHIEncryptionResult_BufferTooSmall && outSize == 0);
+
+        if (inSize > connection->decodeBuffer.len) {
+            gsDebugFormat(GSIDebugCat_HTTP, GSIDebugType_Misc, GSIDebugLevel_HotError,
+                          "ghiDecryptReceivedData read past the end of connection->decodeBuffer! (%d\\%d bytes)\r\n",
+                          inSize, connection->decodeBuffer.len);
+            return gsi_false;
+        }
+        connection->decodeBuffer.pos += inSize;
+        connection->recvBuffer.len += outSize;
+    } while (outSize > 0);
+
+    if (connection->decodeBuffer.pos > 0xff) {
+        int remaining = connection->decodeBuffer.len - connection->decodeBuffer.pos;
+
+        if (remaining == 0) {
+            ghiResetBuffer(&connection->decodeBuffer);
+        } else {
+            memmove(connection->decodeBuffer.data, connection->decodeBuffer.data + connection->decodeBuffer.pos,
+                    remaining);
+            connection->decodeBuffer.pos = 0;
+            connection->decodeBuffer.len = remaining;
+        }
+    }
+    return gsi_true;
+}
+
+// Reads what the socket has, up to size - 1 bytes, into buffer and sets size to the count. Returns 0 for data, 1 for
+// none yet, 2 for the end of the connection and 3 for an error
+GHIRecvResult ghiDoReceive(GHIConnection *connection, char buffer[], int *size) {
+    int max = *size - 1;
+    int received;
+    int error;
+
+    if (connection->throttle != 0) {
+        gsi_u32 now = current_time();
+
+        if (now < connection->lastThrottleRecv + ghiThrottleTimeDelay) {
+            return 1;
+        }
+        connection->lastThrottleRecv = now;
+        if (max >= ghiThrottleBufferSize) {
+            max = ghiThrottleBufferSize;
+        }
+    }
+
+    if (connection->encryptor.mEngine != GHTTPEncryptionEngine_None && connection->encryptor.mSessionEstablished == 1 &&
+        connection->encryptor.mEncryptOnSend == 1) {
+        int length = max;
+
+        if (ghiEncryptorSslDecryptRecv(connection, &connection->encryptor, buffer, &length) == 1) {
+            if (length == -1) {
+                return 1;
+            }
+            received = length;
+        } else {
+            connection->completed = gsi_true;
+            connection->result = GHTTPSocketFailed;
+            connection->socketError = 0;
+            connection->connectionClosed = gsi_true;
+            return 3;
+        }
+    } else {
+        received = recv(connection->socket, buffer, max, 0);
+        if (received == -1) {
+            error = GOAGetLastError(connection->socket);
+            if (error == -56) {
+                connection->connectionClosed = gsi_true;
+                return 2;
+            }
+            if (error == -6 || error == -26 || error == -76) {
+                return 1;
+            }
+            connection->completed = gsi_true;
+            connection->result = GHTTPSocketFailed;
+            connection->socketError = error;
+            connection->connectionClosed = gsi_true;
+            return 3;
+        }
+    }
+
+    if (received == 0) {
+        connection->connectionClosed = gsi_true;
+        return 2;
+    }
+    buffer[received] = '\0';
+    *size = received;
+    gsDebugFormat(GSIDebugCat_HTTP, GSIDebugType_Network, GSIDebugLevel_RawDump, "Received %d bytes\n", received);
+    return 0;
+}
+
+// Writes to the socket. Returns the count sent (0 if it would block), -1 for an error and -2 if the encryption wants
+// the data again later
+int ghiDoSend(GHIConnection *connection, const char *data, int size) {
+    int sent;
+
+    if (data == NULL || size == 0) {
+        return 0;
+    }
+
+    if (connection->encryptor.mEngine != GHTTPEncryptionEngine_None && connection->encryptor.mSessionEstablished == 1 &&
+        connection->encryptor.mEncryptOnSend == 1) {
+        int count = 0;
+
+        if (ghiEncryptorSslEncryptSend(connection, &connection->encryptor, data, size, &count) == 1) {
+            if (count == -1) {
+                return -2;
+            }
+            sent = count;
+        } else {
+            connection->completed = gsi_true;
+            connection->result = GHTTPSocketFailed;
+            connection->socketError = 0;
+            return -1;
+        }
+    } else {
+        sent = send(connection->socket, data, size, 0);
+        if (sent == -1) {
+            int error = GOAGetLastError(connection->socket);
+
+            if (error == -6 || error == -26 || error == -76) {
+                return 0;
+            }
+            connection->completed = gsi_true;
+            connection->result = GHTTPSocketFailed;
+            connection->socketError = error;
+            return -1;
+        }
+    }
+
+    if (connection->state == GHTTPPosting && !connection->postingState.waitPostContinue) {
+        connection->postingState.bytesPosted += sent;
+    }
+    return sent;
+}
+
+// Sends the data if nothing waits to be sent before it, and buffers what could not be. Returns 0 for an error, 1 if
+// all was sent and 2 if some is buffered
+GHITrySendResult ghiTrySendThenBuffer(GHIConnection *connection, const char *data, int size) {
+    int sent = 0;
+
+    if (connection->encryptor.mEngine != GHTTPEncryptionEngine_None && connection->encryptor.mSessionEstablished == 1 &&
+        connection->encryptor.mEncryptOnBuffer == 1) {
+        if (!ghiEncryptDataToBuffer(&connection->sendBuffer, data, size)) {
+            return 0;
+        }
+        if (!ghiSendBufferedData(connection)) {
+            return 0;
+        }
+        if (connection->sendBuffer.pos >= connection->sendBuffer.len) {
+            ghiResetBuffer(&connection->sendBuffer);
+            return 1;
+        }
+        return 2;
+    }
+
+    if (connection->sendBuffer.pos >= connection->sendBuffer.len) {
+        sent = ghiDoSend(connection, data, size);
+        if (sent != -2) {
+            if (sent == -1) {
+                return 0;
+            }
+        } else {
+            return 2;
+        }
+        if (sent == size) {
+            return 1;
+        }
+    }
+    if (!ghiAppendDataToBuffer(&connection->sendBuffer, data + sent, size - sent)) {
+        return 0;
+    }
+    return 2;
+}

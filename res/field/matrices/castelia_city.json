@@ -1,0 +1,7 @@
+{
+    "$schema": "map_matrix.schema.json",
+    "maps": [
+        [ "MAP_MODEL_CASTELIA_CITY_C3_00_00", "MAP_MODEL_CASTELIA_CITY_C3_01_00" ],
+        [ "MAP_MODEL_CASTELIA_CITY_C3_00_01", "MAP_MODEL_CASTELIA_CITY_C3_01_01" ]
+    ]
+}

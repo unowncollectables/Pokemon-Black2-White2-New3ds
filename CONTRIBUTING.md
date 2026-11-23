@@ -1,0 +1,101 @@
+# Contributing
+
+Thanks for helping. This project turns Pokémon Black 2 and White 2 back into C that compiles to the original ROMs
+byte for byte, so that the game can be read, modded and eventually ported. This page has the rules every change
+follows; [the docs](README.md#documentation) have the details.
+
+## Getting started
+
+1. Set up the build as in the [README](README.md#setup), with your own dumps of the games, and check that `ninja`
+   ends with both ROMs matching.
+2. Open the project in [objdiff](https://github.com/encounter/objdiff). `ninja` writes `objdiff.json`, and objdiff
+   rebuilds and diffs each function as you edit.
+3. Pick something to work on. [Source files](docs/source-files.md) lists every overlay's original files and the
+   [progress on ByteMatch](https://bytematch.dev/fuddlesworth/pokebw2) shows what is left. [Nonmatching functions](docs/nonmatching-functions.md) lists
+   functions already in C that don't match yet, each with what was tried, if you like a puzzle. Before starting
+   overlay work, find its open `[Decomp] Overlay NNN` issue (for naming, its `[Names] Overlay NNN` issue, with
+   `tools/decomp/naming_report.py` and the `name-symbols` skill) and read the comments. If nobody has claimed it, comment
+   that you are claiming it and what file or range you are starting with; then recheck for a concurrent claim.
+   Treat a claim as active until its author releases it or the issue closes. Release yours if you leave the overlay
+   unfinished. If someone already has it, choose another overlay or coordinate with them first. After each published
+   overlay change, comment on the issue with the file or range, matching progress, commit and remaining work. When
+   every original range is covered and every file is complete in both versions, verify both ROMs, add a final progress
+   comment and close the issue.
+
+## Decompiling a file
+
+The [workflow](docs/decompiling.md#workflow) in short:
+
+1. Find the original file's boundaries and its name, from a string the ROM embeds (such as `"resort_npc.c"`), in
+   English, or else from what it does. `tools/decomp/source_files.py ovNNN` helps; see
+   [Code organization](docs/code-organization.md).
+2. Add the file to both versions with `tools/decomp/add_source_file.py`.
+3. Write the C, in the same order as the functions in the ROM. `tools/decomp/compiler_probe.py FILE --mismatches`
+   shows which functions don't match yet, and `--show-diff` how. [How MWCC compiles](docs/matching.md) explains most
+   of the differences you will see.
+4. Once every function matches, mark the file complete with `tools/decomp/mark_complete.py`, run `ninja`, and check
+   that both ROMs still match. Also probe White 2 with `--version w2_us`.
+
+A file can be merged before it is complete: it stays without `complete` in `delinks.txt`, so the original code is
+still linked, and objdiff shows how close it is.
+
+## Rules
+
+- **Both ROMs stay byte for byte.** Every PR ends with `ninja` passing, which compiles every source file, complete or
+  not, and checks every module and both SHA1s, and with no compiler warnings: `tools/decomp/compile_all.py` compiles
+  every file of both versions and fails on any warning, as CI does.
+  Black 2 and White 2 share the source, with `BLACK2`/`WHITE2` defines where they differ.
+- **Change configs only with the scripts** (`add_source_file.py`, `mark_complete.py`, `rename_symbol.py`,
+  `config_fixes.py`). They update both versions and keep the changes when the configs are regenerated.
+- **One C file per original file**, with its functions in address order. Code built with the game's compiler goes in
+  `src/`; libraries built apart, with their own compiler, go in `lib/`. See
+  [Code organization](docs/code-organization.md).
+- **Natural C only.** Write what a programmer at Game Freak could have written: no inline assembly, no
+  `volatile` or casts to reach a field by byte offset, no meaningless temporaries or permuter output. A pointer sum
+  of the element's own type, `*(p + i + 1)`, is plain C that compiles differently from `p[i + 1]`: write it when it
+  gives the original's code. [Code standards](docs/code-standards.md) has every rule with its wrong and right forms.
+  Pull requests run them in CI: clang-format 23.1.1 (`pip install clang-format==23.1.1`) on the C files you change,
+  and `tools/decomp/check_style.py --diff origin/main` on the lines you add, which you can run before pushing.
+  When a function doesn't match, keep the closest natural C and add a row to
+  [Nonmatching functions](docs/nonmatching-functions.md) with both versions' addresses, the difference and what you
+  tried. In `lib/` only, a function the SDK, or a library it bundles, wrote in assembly is written as an MWCC `asm`
+  function, and assembly the library inlined at several call sites as a `static inline` with an `asm {}` block, each
+  with a comment saying so. One game function is an `asm` function too, `src/gfl/arc_tool.c`'s `ArchiveMoveImageTop`,
+  whose original build kept a dead store that no installed compiler produces from the C; the maintainer took this
+  exception for the last non-matching function, and the file says so. A library that is hand-written assembly as a
+  whole, whose routines have several entries or names (MSL's runtime, `fp_fastI.s`), is an assembly file, assembled
+  by its compiler version's mwasmarm.
+- **Write the C from the assembly.** Other decompilations, such as pret's pokeplatinum and pokeheartgold and
+  ntrtwl's SDK reconstructions, are good references for names and structure. A function may follow another
+  decompilation's structure where that is what matches, rewritten in this project's names, types and format, but
+  don't paste their code. Never use leaked or otherwise unlawfully obtained
+  material, such as leaked source code, in any form.
+- **Names:** in English, without Japanese words or Game Freak's private abbreviations (`zukan` is `Pokedex`,
+  `fldmmdl` `FieldActor`); well-known acronyms such as BGM, SE, HP and TM stay. Use swan's names first, translated the
+  same way (see [Names](docs/code-organization.md#names)). Name anything else through
+  `tools/decomp/rename_symbol.py`, which records the name in `config/names.txt` and updates the source. Library
+  code in `lib/` uses the SDK's own names where the code shows them, noting swan's name where it differs.
+- **Bugs:** mark a bug in the game with `// BUG:` and a fix under `#ifdef BUGFIX`, with the original code in `#else`.
+- **Never commit ROMs or anything extracted from them.** `.gitignore` covers `orig/`, `extract/` and `build/`.
+
+## Style
+
+Format the files you changed with `clang-format -i`, which uses `.clang-format`. Don't reformat files you didn't
+touch: clang-format releases disagree, so check `git diff` for changes outside your code. Match the comment density
+and naming of the code around yours.
+
+## Commits and pull requests
+
+- One original file, or one part of a large file, per commit, with both versions' configs and the docs it touched.
+- Subjects like the history's: `Decompile btl_server_flow.c's HP recovery`, `Complete event_shortcut_menu.c`,
+  `Match func_ov012_0215c160`, `tools: <what>`. The body says how many functions match, which mismatches are
+  documented, and the reason for any guessed name.
+- A PR states that `ninja` passes with both ROMs matching. Keep PRs to one topic so they are easy to review. A PR may
+  cover only part of an overlay or original file; completion is not required for a regular PR. Use a draft PR only
+  while the changes are not ready for review, and leave the overlay issue open until the whole overlay is complete.
+
+## Claude Code
+
+The repository includes [Claude Code](https://claude.com/claude-code) skills and agents for this workflow, in
+`CLAUDE.md` and `.claude/`, with Codex copies in `AGENTS.md`, `.agents/` and `.codex/`. They follow the same rules as
+this page. Using them is optional. A change to a skill goes into both copies.

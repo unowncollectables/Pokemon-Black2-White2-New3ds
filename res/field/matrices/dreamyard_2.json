@@ -1,0 +1,6 @@
+{
+    "$schema": "map_matrix.schema.json",
+    "maps": [
+        [ "MAP_MODEL_DREAMYARD_2_M_RUIN01_00_00" ]
+    ]
+}

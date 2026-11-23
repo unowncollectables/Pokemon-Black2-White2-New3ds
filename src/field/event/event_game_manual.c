@@ -1,0 +1,61 @@
+#include "types.h"
+#include "field/event/event_game_manual.h"
+#include "gfl/heap.h"
+#include "struct_decls.h"
+#include "system/field_event.h"
+#include "system/game_event.h"
+#include "system/game_system.h"
+
+GameEvent *EventGameManual_Create(GameSystem *gsys, u16 *result) {
+    GameData *gameData;
+    Field *field;
+    GameEvent *event;
+    GameManualEventWork *work;
+    GameManualSubwork *subwork;
+
+    gameData = GSYS_GetGameData(gsys);
+    field = GSYS_GetField(gsys);
+    event = GameEvent_Create(gsys, NULL, EventGameManual_Main, sizeof(GameManualEventWork));
+    work = GameEvent_GetData(event);
+    work->gsys = gsys;
+    work->field = field;
+    work->result = result;
+    subwork = GFL_HeapAllocate(4, sizeof(GameManualSubwork), FALSE, "event_game_manual.c", 0x4a);
+    work->subwork = subwork;
+    subwork->gameData = gameData;
+    return event;
+}
+
+// Run the manual proc, copy its result and release its parameters.
+enum {
+    GAME_MANUAL_STEP_START_PROC = 0,
+    GAME_MANUAL_STEP_FINISH = 1,
+};
+
+GameEventReturnCode EventGameManual_Main(GameEvent *event, u32 *state, void *data) {
+    GameManualEventWork *work;
+    GameEvent *next;
+
+    work = data;
+    switch (*state) {
+    case GAME_MANUAL_STEP_START_PROC:
+        next =
+            EventFieldSubprocessTransition_Create(work->gsys, work->field, 0x13f, &gManualProcFunctions, work->subwork);
+        GameEvent_ChainNext(event, next);
+        (*state)++;
+        break;
+    case GAME_MANUAL_STEP_FINISH:
+        EventGameManual_SetResult(work);
+        GFL_HeapFree(work->subwork);
+        return GAMEEVENT_DONE;
+    }
+    return GAMEEVENT_CONTINUE;
+}
+
+void EventGameManual_SetResult(GameManualEventWork *work) {
+    if (work->subwork->result == 0) {
+        *work->result = 0;
+    } else {
+        *work->result = 1;
+    }
+}
