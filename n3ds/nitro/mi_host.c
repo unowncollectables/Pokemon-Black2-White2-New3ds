@@ -55,3 +55,53 @@ void MIi_CpuClearFast(u32 value, void *dest, u32 size) {
 void MIi_UncompressBackward(void *end) {
     (void)end;
 }
+
+void MI_CpuCopy(const void *src, void *dest, u32 size) {
+    MI_CpuCopy8(src, dest, size);
+}
+
+void MI_CpuMove(const void *src, void *dest, u32 size) {
+    MI_CpuCopy8(src, dest, size);
+}
+
+void MIi_CpuCopy16(const void *src, void *dest, u32 size) {
+    memcpy(dest, src, size);
+}
+
+void MIi_CpuClear16(u16 value, void *dest, u32 size) {
+    u32 i;
+    u16 *p = dest;
+    u32 words = size / 2u;
+    for (i = 0; i < words; i++) {
+        p[i] = value;
+    }
+}
+
+void MIi_CpuCopyFast(const void *src, void *dest, u32 size) {
+    memcpy(dest, src, size);
+}
+
+void MIi_CpuSend32(const void *src, volatile void *dest, u32 size) {
+  memcpy((void *)dest, src, size);
+}
+
+int MI_CpuComp8(const void *a, const void *b, u32 size) {
+    return memcmp(a, b, size);
+}
+
+void MI_UncompressLZ8(const void *src, void *dest) {
+    (void)src;
+    (void)dest;
+}
+
+void MI_Copy36B(const void *src, void *dest) {
+    MI_CpuCopy8(src, dest, 36);
+}
+
+void MI_Copy64B(const void *src, void *dest) {
+    MI_CpuCopy8(src, dest, 64);
+}
+
+void MI_Zero36B(void *dest) {
+    MI_CpuFill8(dest, 0, 36);
+}

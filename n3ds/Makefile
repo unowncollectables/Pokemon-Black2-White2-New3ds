@@ -47,8 +47,11 @@ SHELL_SRC := source/main.c source/log.c source/workers.c source/audio.c source/s
 
 ifeq ($(PBW2_LINK_GAME),1)
 CFLAGS += -DPBW2_LINK_GAME=1
+CFLAGS += $(shell for d in $(CURDIR)/../lib/*/include; do echo -I$$d; done)
 SHELL_SRC += source/game_thread.c nitro/mi_host.c nitro/ic_dc_host.c nitro/os_more_host.c \
-	nitro/link_syms.c nitro/overlay_host.c nitro/overlay_ids.c nitro/nitro_stubs.c nitro/twl_stub.c
+	nitro/link_syms.c nitro/overlay_host.c nitro/overlay_ids.c \
+	nitro/nitro_stubs.c nitro/g3_gx_stub.c nitro/mtx_stub.c nitro/link_stubs.c \
+	nitro/proc_stubs.c nitro/net_stubs.c nitro/twl_stub.c
 GAME_RSP := $(CURDIR)/../build/n3ds/$(shell echo $(GAME) | tr A-Z a-z)/game_objects.rsp
 GAME_LDFLAGS := @$(GAME_RSP)
 else

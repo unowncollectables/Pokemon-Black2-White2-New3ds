@@ -1,17 +1,62 @@
 #!/usr/bin/env python3
-"""Build game_objects.rsp: game_main plus Nitro lib objects and an src/ closure."""
+"""Build game_objects.rsp for the boot/title slice (not full-game BFS)."""
 
 from __future__ import annotations
 
 import re
 import subprocess
-from collections import deque
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-NITRO_PREFIX = "lib/nitro/"
-SRC_PREFIX = "src/"
+# Whole trees that must not enter the link closure (proc tables pull them in).
+EXCLUDE_SRC_PREFIXES = (
+    "src/wifi/",
+    "src/communication/",
+    "src/tournament/",
+    "src/entralink/",
+    "src/musical/",
+    "src/pokewood/",
+    "src/battle/",
+    "src/field/",
+    "src/app/",
+    "src/moveeffect/",
+)
+
+EXCLUDE_SRC_FILES = {
+    "src/system/main.c",
+    "src/gfl/rtc_cache.c",
+    "src/gfl/net.c",
+    "src/system/net_err.c",
+    "src/system/game_sync_settings_proc.c",
+}
+
+# Host provides FS / GX / OS for these; linking Nitro copies causes multiply-defined symbols.
+EXCLUDE_LIB_NITRO_FILES = {
+    "lib/nitro/src/fs/fs_overlay.c",
+    "lib/nitro/src/fs/fs_api.c",
+    "lib/nitro/src/fs/fs_file.c",
+    "lib/nitro/src/fs/fs_memfile.c",
+    "lib/nitro/src/fs/fs_rom.c",
+    "lib/nitro/src/gx/gx.c",
+    "lib/nitro/src/os/os_arena.c",
+    "lib/nitro/src/os/os_emulator.c",
+    "lib/nitro/src/os/os_interrupt.c",
+    "lib/nitro/src/os/os_irqHandler.c",
+    "lib/nitro/src/os/os_ownerInfoEx.c",
+    "lib/nitro/src/os/os_reset.c",
+    "lib/nitro/src/os/os_tick.c",
+    "lib/nitro/src/os/os_timer.c",
+    "lib/nitro/src/gx/gx_load2d.c",
+    "lib/nitro/src/fx/fx_atanidx.c",
+    "lib/nitro/src/fx/fx_cp.c",
+}
+
+EXCLUDE_LIB_NITRO_PREFIXES = (
+    "lib/nitro/src/wm/",
+    "lib/nitro/src/mb/",
+    "lib/nitro/src/ctrdg/",
+)
 
 
 def nm_defined(path: Path) -> set[str]:
@@ -34,12 +79,24 @@ def nm_undefined(path: Path) -> set[str]:
     return names
 
 
+def src_path_ok(src: str) -> bool:
+    if src in EXCLUDE_SRC_FILES:
+        return False
+    if any(src.startswith(p) for p in EXCLUDE_SRC_PREFIXES):
+        return False
+    return src.startswith("src/")
+
+
+def lib_nitro_path_ok(src: str) -> bool:
+    if src in EXCLUDE_LIB_NITRO_FILES:
+        return False
+    if any(src.startswith(p) for p in EXCLUDE_LIB_NITRO_PREFIXES):
+        return False
+    return src.startswith("lib/nitro/")
+
+
 def eligible(src: str) -> bool:
-    if src == "src/system/main.c":
-        return False
-    if src == "lib/nitro/src/fs/fs_overlay.c":
-        return False
-    return src.startswith(SRC_PREFIX) or src.startswith(NITRO_PREFIX)
+    return src_path_ok(src) or lib_nitro_path_ok(src)
 
 
 def symbol_index(objdir: Path) -> dict[str, Path]:
@@ -87,6 +144,7 @@ def write_rsp(game: str) -> int:
 
 
 def main() -> int:
+    subprocess.run([str(ROOT / "scripts" / "n3ds_gen_nitro_stubs.py")], check=False)
     for game in ("BLACK2", "WHITE2"):
         write_rsp(game)
     return 0
