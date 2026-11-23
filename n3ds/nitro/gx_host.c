@@ -4,11 +4,14 @@
  * from NitroFS a/0/2/6 by title_pic.c, not from these registers. */
 #include "nitro/gx.h"
 
+#include "types.h"
+
 #include <string.h>
 
 extern u8 pbw2_io[];
 
 #if defined(PBW2_LINK_GAME)
+#include "g3_intercept.h"
 #include "pad_host.h"
 #include "vram_host.h"
 #include "nitro/pm.h"
@@ -22,7 +25,17 @@ void GX_Init(void) {
     memset(pbw2_io, 0, 0x2000);
 #if defined(PBW2_LINK_GAME)
     PbW2_VramHostInit();
+    PbW2_G3InterceptInit();
     PbW2_PadHostInit();
+    /* Hardware reset: identity 8.8 affine for BG2/BG3 on both engines until the game writes. */
+    PBW2_VU16(0x04000020) = (u16)0x0100;
+    PBW2_VU16(0x04000026) = (u16)0x0100;
+    PBW2_VU16(0x04000030) = (u16)0x0100;
+    PBW2_VU16(0x04000036) = (u16)0x0100;
+    PBW2_VU16(0x04001020) = (u16)0x0100;
+    PBW2_VU16(0x04001026) = (u16)0x0100;
+    PBW2_VU16(0x04001030) = (u16)0x0100;
+    PBW2_VU16(0x04001036) = (u16)0x0100;
 #endif
 }
 

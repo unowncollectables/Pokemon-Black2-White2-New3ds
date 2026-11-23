@@ -3,6 +3,13 @@
 // is GX_g2.c).
 #include "nitro/gx.h"
 
+#ifdef PBW2_N3DS
+void PbW2_NoteBgAffineWrite(u32 addr) __attribute__((weak));
+void PbW2_NoteBgAffineWrite(u32 addr) {
+    (void)addr;
+}
+#endif
+
 // ARM code in a Thumb file: the SDK compiled this one under nitro/code32.h
 #pragma thumb off
 void G2x_SetBGyAffine_(u32 addr, const MtxFx22 *mtx, int centerX, int centerY, int x, int y) {
@@ -18,6 +25,9 @@ void G2x_SetBGyAffine_(u32 addr, const MtxFx22 *mtx, int centerX, int centerY, i
     dy = mtx->_10 * x2 + mtx->_11 * y2 + (centerY << FX32_SHIFT);
     reg[2] = dx >> 4;
     reg[3] = dy >> 4;
+#ifdef PBW2_N3DS
+    PbW2_NoteBgAffineWrite(addr);
+#endif
 }
 #pragma thumb on
 

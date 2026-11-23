@@ -3,6 +3,7 @@
 
 #if defined(PBW2_LINK_GAME)
 
+#include "types.h"
 #include <stdint.h>
 #include <string.h>
 
@@ -30,6 +31,7 @@ void PbW2_VramHostInit(void) {
     memset(s_oam, 0, sizeof s_oam);
     s_load_bytes = 0;
     memset(s_bg_scr_upload_off, 0, sizeof s_bg_scr_upload_off);
+    PbW2_AffineTrackInit();
     s_host_ready = 1;
 }
 

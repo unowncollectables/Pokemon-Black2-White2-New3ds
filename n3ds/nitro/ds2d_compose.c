@@ -4,9 +4,11 @@
 
 #if defined(PBW2_LINK_GAME)
 
+#include "g3_intercept.h"
 #include "log.h"
 #include "nitro/hw.h"
 #include "nitro/gx.h"
+#include "types.h"
 #include "vram_host.h"
 
 #include <string.h>
@@ -117,8 +119,8 @@ static u32 bitmap_screen_byte_off(u16 cnt, int bg) {
     u32 slot = (((u32)cnt >> REG_G2_BG0CNT_SCREENBASE_SHIFT) & 0x1fu) * 0x4000u;
     u32 up = PbW2_BgScrUploadByteOff(bg);
 
-    /* CDemo loads with screen-base 0 while DMA targets +0x4000; follow last upload slot. */
-    if (up != 0u && slot == 0u) {
+    /* Double-buffered movie frames upload to a different 16 KiB slot than BGxCNT screen-base. */
+    if (up != 0u && up != slot) {
         slot = up;
     }
     return slot;
@@ -151,20 +153,40 @@ static s32 affine_ref28(u32 v) {
     return (s32)v;
 }
 
-static void read_bg_affine(const u8 *regs, int bg, s16 *pa, s16 *pb, s16 *pc, s16 *pd, s32 *rx, s32 *ry) {
-    u32 b = (bg == 2) ? 0x20u : 0x30u;
-    u32 m01 = reg_u32(regs, b);
-    u32 m23 = reg_u32(regs, b + 4u);
+static void identity_affine(s16 *pa, s16 *pb, s16 *pc, s16 *pd, s32 *rx, s32 *ry) {
+    *pa = (s16)0x0100;
+    *pb = 0;
+    *pc = 0;
+    *pd = (s16)0x0100;
+    *rx = 0;
+    *ry = 0;
+}
 
-    *pa = (s16)(m01 & 0xffffu);
-    *pb = (s16)(m01 >> 16);
-    *pc = (s16)(m23 & 0xffffu);
-    *pd = (s16)(m23 >> 16);
-    *rx = affine_ref28(reg_u32(regs, b + 8u));
-    *ry = affine_ref28(reg_u32(regs, b + 12u));
-    if (*pa == 0 && *pd == 0) {
-        *pa = (s16)0x0100;
-        *pd = (s16)0x0100;
+static int affine_coeffs_sane(s16 pa, s16 pb, s16 pc, s16 pd) {
+    if (pa == (s16)0x0100 && pb == 0 && pc == 0 && pd == (s16)0x0100) {
+        return 1;
+    }
+    if ((u16)pa > 0x0400u || (u16)pd > 0x0400u || (u16)pb > 0x0400u || (u16)pc > 0x0400u) {
+        return 0;
+    }
+    return 1;
+}
+
+static void read_bg_affine(int is_sub, int bg, s16 *pa, s16 *pb, s16 *pc, s16 *pd, s32 *rx, s32 *ry) {
+    u32 hw = 0x04000000u + (is_sub ? 0x1000u : 0u) + ((bg == 2) ? 0x20u : 0x30u);
+
+    if (!PbW2_BgAffineWritten(is_sub, bg)) {
+        identity_affine(pa, pb, pc, pd, rx, ry);
+        return;
+    }
+    *pa = (s16)PBW2_VU16(hw);
+    *pb = (s16)PBW2_VU16(hw + 2u);
+    *pc = (s16)PBW2_VU16(hw + 4u);
+    *pd = (s16)PBW2_VU16(hw + 6u);
+    *rx = affine_ref28(PBW2_VU32(hw + 8u));
+    *ry = affine_ref28(PBW2_VU32(hw + 12u));
+    if (!affine_coeffs_sane(*pa, *pb, *pc, *pd)) {
+        identity_affine(pa, pb, pc, pd, rx, ry);
     }
 }
 
@@ -215,7 +237,7 @@ static void compose_text_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmo
     if ((dc & (0x100u << bg)) == 0) {
         return;
     }
-    if (bg == 0 && (dc & 8u)) {
+    if (bg == 0 && (dc & REG_GX_DISPCNT_BG02D3D_MASK)) {
         return;
     }
 
@@ -323,7 +345,7 @@ static void log_mode5_bitmap(const u8 *regs, int bg, u16 cnt, u32 bmp_addr, int 
     const u16 *samp;
     u16 mid_c;
 
-    read_bg_affine(regs, bg, &pa, &pb, &pc, &pd, &rx, &ry);
+    read_bg_affine(0, bg, &pa, &pb, &pc, &pd, &rx, &ry);
     map_bitmap_uv(pa, pb, pc, pd, rx, ry, 128, 96, &mx, &my);
     mid_c = 0;
     samp = NULL;
@@ -335,10 +357,10 @@ static void log_mode5_bitmap(const u8 *regs, int bg, u16 cnt, u32 bmp_addr, int 
         }
     }
     Log_Line("GX",
-             "mode5-%s bg%d cnt=0x%04x prio=%u is16=%d screen=%u addr=0x%08x PA=%d PB=%d PC=%d PD=%d refX=%d "
+             "mode5-%s bg%d cnt=0x%04x prio=%u is16=%d screen=%u addr=0x%08x aff=%d PA=%d PB=%d PC=%d PD=%d refX=%d "
              "refY=%d mid=%d,%d samp=0x%04x,0x%04x,0x%04x,0x%04x mid_c=0x%04x opaque=%u",
              phase, bg, (unsigned)cnt, (unsigned)(cnt & 3u), is16, (unsigned)screen_base, (unsigned)bmp_addr,
-             (int)pa, (int)pb, (int)pc, (int)pd, (int)rx, (int)ry, (int)mx, (int)my,
+             PbW2_BgAffineWritten(0, bg), (int)pa, (int)pb, (int)pc, (int)pd, (int)rx, (int)ry, (int)mx, (int)my,
              samp ? (unsigned)samp[0] : 0u, samp ? (unsigned)samp[1] : 0u, samp ? (unsigned)samp[2] : 0u,
              samp ? (unsigned)samp[3] : 0u, (unsigned)mid_c, (unsigned)opaque);
 }
@@ -377,7 +399,7 @@ static void maybe_log_mode5(const u8 *regs, u32 dc, u32 bgmode, int bg, u16 cnt,
     }
 }
 
-static u16 sample_bitmap16(const u8 *regs, int bg, u16 cnt, int is_sub, int bw, int bh, int x, int y) {
+static u16 sample_bitmap16(int is_sub, int bg, u16 cnt, int bw, int bh, int x, int y) {
     s16 pa;
     s16 pb;
     s16 pc;
@@ -392,7 +414,7 @@ static u16 sample_bitmap16(const u8 *regs, int bg, u16 cnt, int is_sub, int bw, 
     const u16 *p;
     u16 c;
 
-    read_bg_affine(regs, bg, &pa, &pb, &pc, &pd, &rx, &ry);
+    read_bg_affine(is_sub, bg, &pa, &pb, &pc, &pd, &rx, &ry);
     map_bitmap_uv(pa, pb, pc, pd, rx, ry, x, y, &tx, &ty);
     wrap = (cnt & (1u << REG_G2_BG2CNT_AREAOVER_SHIFT)) == 0;
     if (wrap) {
@@ -411,8 +433,7 @@ static u16 sample_bitmap16(const u8 *regs, int bg, u16 cnt, int is_sub, int bw, 
     return rgb555_to_565(c & 0x7fffu);
 }
 
-static u16 sample_bitmap8(const u8 *regs, int bg, u16 cnt, int is_sub, int bw, int bh, int x, int y,
-                          const u16 *pltt) {
+static u16 sample_bitmap8(int is_sub, int bg, u16 cnt, int bw, int bh, int x, int y, const u16 *pltt) {
     s16 pa;
     s16 pb;
     s16 pc;
@@ -427,7 +448,7 @@ static u16 sample_bitmap8(const u8 *regs, int bg, u16 cnt, int is_sub, int bw, i
     const u8 *p;
     u8 ci;
 
-    read_bg_affine(regs, bg, &pa, &pb, &pc, &pd, &rx, &ry);
+    read_bg_affine(is_sub, bg, &pa, &pb, &pc, &pd, &rx, &ry);
     map_bitmap_uv(pa, pb, pc, pd, rx, ry, x, y, &tx, &ty);
     wrap = (cnt & (1u << REG_G2_BG2CNT_AREAOVER_SHIFT)) == 0;
     if (wrap) {
@@ -473,7 +494,7 @@ static void compose_bitmap_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bg
     if (is16) {
         for (y = 0; y < 192; y++) {
             for (x = 0; x < 256; x++) {
-                u16 pix = sample_bitmap16(regs, bg, cnt, is_sub, bw, bh, x, y);
+                u16 pix = sample_bitmap16(is_sub, bg, cnt, bw, bh, x, y);
 
                 if (pix != 0) {
                     out[y * 256 + x] = pix;
@@ -483,7 +504,7 @@ static void compose_bitmap_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bg
     } else {
         for (y = 0; y < 192; y++) {
             for (x = 0; x < 256; x++) {
-                u16 pix = sample_bitmap8(regs, bg, cnt, is_sub, bw, bh, x, y, pltt);
+                u16 pix = sample_bitmap8(is_sub, bg, cnt, bw, bh, x, y, pltt);
 
                 if (pix != 0) {
                     out[y * 256 + x] = pix;
@@ -594,21 +615,29 @@ static void draw_obj_layer(const u8 *regs, u32 dc, int is_sub, u16 *out) {
                     px = (a[1] & 0x1000) ? (width - 1 - xo) : xo;
                     py = (a[1] & 0x2000) ? (height - 1 - yo) : yo;
                     if (obj1d) {
-                        tile <<= obj1d_shift;
-                        addr = tile + (((u32)py >> 3) * (width >> 3) << (bpp8 ? 1 : 0));
+                        u32 shift = 5u + obj1d_shift + (bpp8 ? 1u : 0u);
+                        u32 block = (u32)(width >> 3) * (bpp8 ? 64u : 32u);
+                        addr = (tile << shift) + (u32)(py >> 3) * block;
                     } else {
-                        addr = tile + ((py >> 3) * 0x20);
+                        addr = (tile + (py >> 3) * 0x20u) << 5;
                     }
-                    addr <<= 5;
                     if (bpp8) {
-                        addr += ((py & 7) << 3) + ((px & ~7) << 3) + (px & 7);
+                        if (obj1d) {
+                            addr += ((py & 7) << 3) + (px & 7);
+                        } else {
+                            addr += ((py & 7) << 3) + ((px & ~7) << 3) + (px & 7);
+                        }
                         ci = ovram[addr & 0x3ffffu];
                         if (ci == 0) {
                             continue;
                         }
                         out[y * 256 + x] = rgb555_to_565(pltt[ci]);
                     } else {
-                        addr += ((py & 7) << 2) + ((px & ~7) << 2) + ((px & 7) >> 1);
+                        if (obj1d) {
+                            addr += ((py & 7) << 2) + ((px & 7) >> 1);
+                        } else {
+                            addr += ((py & 7) << 2) + ((px & ~7) << 2) + ((px & 7) >> 1);
+                        }
                         nib = ovram[addr & 0x3ffffu];
                         ci = (px & 1) ? (nib >> 4) : (nib & 0x0f);
                         if (ci == 0) {
@@ -682,6 +711,7 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out) {
         }
     }
     draw_obj_layer(regs, dc, is_sub, out);
+    PbW2_G3Compose(is_sub ? 0 : 1, out);
     apply_master_bright(out, reg_u16(regs, 0x6cu));
 }
 

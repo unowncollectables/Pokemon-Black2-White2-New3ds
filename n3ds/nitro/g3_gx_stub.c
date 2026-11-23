@@ -2,14 +2,24 @@
 #include "nitro/gx.h"
 #include "stub_log.h"
 
+#if defined(PBW2_LINK_GAME)
+#include "g3_intercept.h"
+#endif
+
 void GX_SendFifo48B(const void *src, volatile void *dest) {
-    (void)src;
     (void)dest;
+#if defined(PBW2_LINK_GAME)
+    PbW2_G3RecordFifo(src, 12u);
+#endif
+    (void)src;
 }
 
 void GX_SendFifo64B(const void *src, volatile void *dest) {
-    (void)src;
     (void)dest;
+#if defined(PBW2_LINK_GAME)
+    PbW2_G3RecordFifo(src, 16u);
+#endif
+    (void)src;
 }
 
 void GX_BeginLoadTex(void) {

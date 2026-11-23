@@ -17,9 +17,22 @@ static void *pbw2_map_ptr(const void *p) {
     return m;
 }
 
+static void pbw2_note_scr_dest(const void *dest) {
+    u32 arm;
+
+    if (PbW2_VramResolveArm(dest, &arm)) {
+        if (arm >= 0x06000000u && arm < 0x06020000u) {
+            PbW2_NoteBgScrUpload(2, arm);
+        } else if (arm >= 0x06020000u && arm < 0x06040000u) {
+            PbW2_NoteBgScrUpload(3, arm);
+        }
+    }
+}
+
 static void pbw2_note_copy(void *dest, u32 size) {
     if ((u32)(uintptr_t)dest >= 0x05000000u && (u32)(uintptr_t)dest < 0x08000000u) {
         PbW2_VramNoteLoad(size);
+        pbw2_note_scr_dest(dest);
     }
 }
 #endif
