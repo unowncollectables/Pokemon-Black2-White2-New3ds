@@ -35,7 +35,7 @@ A host decode of `res/graphics/title` (the same NCGR/NSCR/NCLR layout as
 archive `a/0/2/6`) produced the Black 2 logo on the blue title background
 and the White 2 logo on its background.
 
-## Current LINK_GAME smoke (r28)
+## Current LINK_GAME smoke (r28–r29)
 
 `MI_UncompressLZ8` in `n3ds/nitro/mi_host.c` is implemented for `PBW2_LINK_GAME`
 only (default shells stay a no-op stub). It is a C translation of
@@ -58,6 +58,19 @@ GAME FREAK inc."; the top LCD is still black (Citro3D replay and
 `NNS_G3dDraw` / TexLoad / Bind are not wired). G3 FIFO captured 48 words.
 
 Default shells remain **146976** B, `b7c59f88` / `fd82c634`.
+
+### r29 — title 2D
+
+Host BG VRAM (`s_bg` in `vram_host.c`) now covers `0x06000000`–`0x06800000`
+(`PBW2_BG_SIZE=0x00680000`, `PBW2_LINK_GAME` only) so sub BG at
+`0x06200000` and sub OBJ at `0x06600000` map. Title (`SUB_MAIN`, `pow=0`)
+puts the sub engine on the top LCD and main on the bottom: the Pokémon
+Black 2 logo and scrolling ice banner appear on top, "Developed by GAME
+FREAK inc." on the bottom. POWCNT polarity was already correct
+(`MAIN_SUB` / bit 15 → main on top, as used by copyright and CDEMO).
+Leftover: sub OBJ text reads as `PPPPS SSSST` instead of PRESS START;
+the main LCD is still a blank field plus the credit line (3D logo,
+`GX_SetCapture` to VRAM D, and Citro3D / `NNS_G3dDraw` are not wired).
 
 ## What the box should run
 
