@@ -20,14 +20,10 @@ static void Audio_Thread(void *arg) {
 }
 
 void Audio_Start(void) {
-    Result rc = ndspInit();
-    if (R_FAILED(rc)) {
-        s_ndsp = false;
-        Log_Line("AUDIO", "ndspInit failed %08lX, silent", (unsigned long)rc);
-    } else {
-        s_ndsp = true;
-        Log_Line("AUDIO", "ndsp up, silent (no ARM7 player yet)");
-    }
+    /* No ARM7 player in this milestone, so NDSP is not started. Azahar has no
+     * DSP firmware; calling ndspInit there fails and is not a port fault. */
+    s_ndsp = false;
+    Log_Line("AUDIO", "silent (no ARM7 player this milestone)");
     Workers_Start("audio", Audio_Thread, 0x20, 2, NULL);
 }
 

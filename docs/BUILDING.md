@@ -20,9 +20,21 @@ Outputs, gitignored:
 
 `scripts/n3ds_headers.py` writes `build/include/generated/` from `generated/*.txt`
 and `res/text/`. `scripts/n3ds_game_objects.py` compiles `src/` and `lib/` for
-`BLACK2` and `WHITE2`. `src/` must be 1218/1218 or the build stops. Library
+`BLACK2` and `WHITE2` with `-Wno-incompatible-pointer-types` (devkitARM 16
+otherwise stops on that). `src/` must be 1218/1218 or the build stops. Library
 files that are still MWCC assembly are reported and skipped. The counts land
 in `n3ds/include/pbw2_build_status.h`.
+
+Stage the extracted NitroFS (gitignored, not a ROM commit) after `ninja` has
+filled `extract/`:
+
+```sh
+bash scripts/n3ds_stage_nitrofs.sh b2 extract/b2_us/files
+bash scripts/n3ds_stage_nitrofs.sh w2 extract/w2_us/files
+```
+
+That copies into `$HOME/pbw2-sd/3ds/<game>_3ds/nitrofs`. Put `3ds/` on the SD
+card. The shell opens `a/0/0/2` from there. It does not write a `.sav`.
 
 `make -C n3ds b2` or `make -C n3ds w2` builds one game after the objects.
 

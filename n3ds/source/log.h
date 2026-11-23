@@ -2,7 +2,10 @@
 #ifndef PBW2_LOG_H
 #define PBW2_LOG_H
 
-void Log_Init(void);
+#include <stdbool.h>
+
+/* True when log.txt was opened on the card. */
+bool Log_Init(void);
 void Log_Close(void);
 void Log_Line(const char *tag, const char *fmt, ...);
 

@@ -69,7 +69,9 @@ def compile_one(cc: str, flags: list[str], source: Path, out: Path) -> tuple[str
 def compile_game(cc: str, arch_flags: list[str], name: str) -> tuple[int, int, int, int, list[str]]:
     flags = [
         "-marm", *arch_flags, "-mword-relocations", "-ffreestanding", "-fno-builtin", "-std=c99",
-        "-Wno-unknown-pragmas", "-DPBW2_N3DS", "-D__thumb", f"-D{name}", "-c", *includes(),
+        # GCC 14+ (devkitARM 16) rejects the decomp's pointer casts by default.
+        "-Wno-unknown-pragmas", "-Wno-incompatible-pointer-types",
+        "-DPBW2_N3DS", "-D__thumb", f"-D{name}", "-c", *includes(),
     ]
     jobs = []
     for tree, kind in ((ROOT / "src", "game"), (ROOT / "lib", "lib")):

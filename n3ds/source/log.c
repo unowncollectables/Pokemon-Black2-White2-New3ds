@@ -9,13 +9,14 @@
 
 static FILE *s_log;
 
-void Log_Init(void) {
+bool Log_Init(void) {
     mkdir("sdmc:/3ds", 0777);
     mkdir(PBW2_SD_DIR, 0777);
     char path[128];
     snprintf(path, sizeof path, "%s/log.txt", PBW2_SD_DIR);
     s_log = fopen(path, "w");
     Log_Line("3DS", "%s port log", PBW2_GAME_NAME);
+    return s_log != NULL;
 }
 
 void Log_Close(void) {

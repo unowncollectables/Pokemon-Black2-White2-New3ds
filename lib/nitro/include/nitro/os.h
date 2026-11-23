@@ -171,7 +171,12 @@ typedef struct OSSystemWork {
 } OSSystemWork;
 
 #define HW_MAIN_MEM_SHARED_WORK 0x02fffc00
+#ifdef PBW2_N3DS
+OSSystemWork *pbw2_system_work(void);
+#define OS_GetSystemWork() (pbw2_system_work())
+#else
 #define OS_GetSystemWork() ((OSSystemWork *)HW_MAIN_MEM_SHARED_WORK)
+#endif
 
 #define OS_IE_V_BLANK 0x1
 #define OS_IE_H_BLANK 0x2
@@ -194,17 +199,31 @@ typedef struct OSSystemWork {
 // The DSi's new DMA channel 1
 #define OS_IE_NDMA1 0x20000000
 
+#ifdef PBW2_N3DS
+u32 pbw2_vblank_count(void);
+static inline u32 OS_GetVBlankCount(void) {
+    return pbw2_vblank_count();
+}
+#else
 static inline u32 OS_GetVBlankCount(void) {
     return *(vu32 *)HW_VBLANK_COUNT_BUF;
 }
+#endif
 
 // Waits for one of the interrupts, after clearing their flags if clear is set, by halting the CPU until it happens.
 // NitroSDK's OS_WaitInterrupt (OS_WaitIrq, which sleeps the thread instead, is swan's irq_waitFor)
 void OS_WaitInterrupt(BOOL clear, OSIrqMask interrupts); // swan's CPU_WaitIntrBit
 
+#ifdef PBW2_N3DS
+void pbw2_irq_check_or(u32 mask);
+static inline void OS_SetIrqCheckFlag(OSIrqMask interrupts) {
+    pbw2_irq_check_or(interrupts);
+}
+#else
 static inline void OS_SetIrqCheckFlag(OSIrqMask interrupts) {
     *(vu32 *)HW_INTR_CHECK_BUF |= interrupts;
 }
+#endif
 
 // Memory arenas and OS heaps: OS_GetArenaLo, OS_GetArenaHi, OS_SetArenaLo, OS_SetArenaHi,
 // OS_AllocFromArenaLo, OS_InitAlloc, OS_CreateHeap, OS_AllocFromHeap and OS_FreeToHeap

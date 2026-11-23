@@ -13,7 +13,7 @@
 #define reg_PXI_INTF (*(vu16 *)REG_SUBPINTF_ADDR)
 #define REG_PXI_INTF_RECV_MASK 0x000f
 #define REG_PXI_INTF_SEND_SHIFT 8
-#define reg_PXI_FIFO_CNT (*(vu16 *)0x04000184)
+#define reg_PXI_FIFO_CNT PBW2_VU16(0x04000184)
 #define REG_PXI_FIFO_CNT_SEND_FULL_MASK 0x0002
 #define REG_PXI_FIFO_CNT_RECV_EMP_MASK 0x0100
 #define REG_PXI_FIFO_CNT_ERR_MASK 0x4000
@@ -22,8 +22,8 @@
 #define REG_PXI_FIFO_CNT_ERR_ACK (REG_PXI_FIFO_CNT_E_MASK | REG_PXI_FIFO_CNT_ERR_MASK)
 // Clears the send FIFO, enables the FIFO and its interrupt when the receive FIFO is not empty
 #define REG_PXI_FIFO_CNT_INIT 0xc408
-#define reg_PXI_SEND_FIFO (*(vu32 *)0x04000188)
-#define reg_PXI_RECV_FIFO (*(vu32 *)0x04100000)
+#define reg_PXI_SEND_FIFO PBW2_VU32(0x04000188)
+#define reg_PXI_RECV_FIFO PBW2_VU32(0x04100000)
 
 // What sending a word and receiving one return
 #define PXI_FIFO_SUCCESS 0

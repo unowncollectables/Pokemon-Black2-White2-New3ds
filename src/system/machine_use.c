@@ -51,11 +51,15 @@ void SystemInit(void) {
     GX_Init();
     FX_Init();
 
+#ifndef PBW2_N3DS
+    // DSi SCFG. The 3DS port does not touch that register. Clock speed is the
+    // New 3DS setting on the shell, not this write.
     if (OS_GetConsoleType() & OS_CONSOLE_DEV_MASK) {
         SCFG_SetCpuSpeed(SCFG_CPU_SPEED_2X);
         reg_SCFG_EXT &= ~SCFG_EXT_VRAM;
         SCFG_EXT_COPY &= ~SCFG_EXT_VRAM;
     }
+#endif
 
     (void)OS_EnableIrq();
     FS_Init(1);

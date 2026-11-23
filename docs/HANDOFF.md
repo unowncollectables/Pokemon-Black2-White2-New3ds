@@ -21,12 +21,40 @@ Those binaries are gitignored. A devkitPro machine builds them with
 sources, with `PBW2_LOCAL_SYSBASE=1`. A normal devkitARM install does not set
 that.
 
-Game C, both versions, no ROM: **1218/1218**. Library C: **517/572**. The
-objects are under `build/n3ds/` and are not linked into the shell.
-`n3ds/include/pbw2_build_status.h` stores the counts.
+Game C, both versions, no ROM: **1218/1218**. That count is with Arm GCC 14.2
+(the same default error on incompatible pointer types as GCC 14 and later)
+and `-Wno-incompatible-pointer-types`. Library C on that compiler: **514/572**.
+The maintainer's devkitARM 16.1.0 (GCC 16), after the same flag, counted
+**516/572**. The gap is `__memcpy`, which GCC 14 does not declare and
+devkitARM's sysroot does. `scripts/n3ds_game_objects.py` rewrites
+`n3ds/include/pbw2_build_status.h` on every build, so the shell shows the
+compiler that just ran.
 
-The shell was not started on a New 3DS and not started in Azahar. The
-maintainer's machine does that smoke test.
+Azahar on `bfda6ba` launched both shells and wrote no `.sav`. This step has
+not been run in Azahar.
+
+## What the box should run
+
+```sh
+git pull
+bash scripts/n3ds_build.sh
+# n3ds/build/b2/black2_3ds.3dsx and n3ds/build/w2/white2_3ds.3dsx
+
+# after the shell is on the card, from the extract you already have:
+bash scripts/n3ds_stage_nitrofs.sh b2 /path/to/extract/b2_us/files
+bash scripts/n3ds_stage_nitrofs.sh w2 /path/to/extract/w2_us/files
+# copy ~/pbw2-sd/3ds onto the SD card
+```
+
+Expect, for about 20 seconds each, no crash and no `.sav`:
+
+- log: `sdmc already mounted` (or `sdmc mounted`), not `sdmc not mounted`
+- log: `silent (no ARM7 player this milestone)`, and no `ndspInit failed`
+- log: `nitrofs not staged` until the copy above, then `nitrofs a/0/0/2 open`
+- top screen: RTC from the 3DS clock, and the same NitroFS line
+
+The logo and the title screen are still not drawn. `src/system/main.c` is not
+linked.
 
 ## What the shell does
 
@@ -34,7 +62,8 @@ maintainer's machine does that smoke test.
   `CpuSpeed: 804MHz` and `EnableL2Cache: true` are what actually leave 268 MHz.
   `CanAccessCore2: true` is set. `CoreVersion: 2`.
 - Audio thread and IO thread on core 2 (core 0 if core 2 is refused). Both are
-  joined before `ndspExit` and `gfxExit`. `ndspExit` runs once.
+  joined before `gfxExit`. NDSP is not started: this milestone has no ARM7
+  player, and Azahar has no DSP firmware (`ndspInit` returned `D880A7FA`).
 - C-stick through IRRST, ZL/ZR through HID. START exits. L+R+Y opens an empty
   settings screen. Nothing is written.
 - If a `.sav` is already on the card, the log records its size and leaves it.
@@ -44,10 +73,11 @@ maintainer's machine does that smoke test.
 
 ## What is stubbed
 
-- Sound. NDSP comes up, or the log says `ndspInit` failed. No ARM7 player, no
-  music. Silent is the planned state of this phase.
-- GPU. There is no DS 2D/3D renderer. `GxShim_Present` only records flags.
-- Files. The IO thread sleeps. It does not open the ROM or the save.
+- Sound. NDSP is not started. No ARM7 player, no music.
+- GPU. `GX_Init` clears the host IO buffer. Nothing is drawn from it yet.
+  `GxShim_Present` still only records screen flags.
+- Files. `FS_OpenFile` reads `sdmc:/3ds/<game>_3ds/nitrofs/<path>` once that
+  tree is staged. The IO thread still does not touch the save.
 - DSi/TWL and the two DSP firmware images. Those library files do not compile
   here. The DSP images are the ROM-backed headers `rom/dsp/*.inc`.
 - Overlays. All 344 stay out of the shell. `GameInit` in `src/system/main.c`

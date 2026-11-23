@@ -7,9 +7,9 @@
 #define PBW2_B2_GAME_C_TOTAL 1218
 #define PBW2_W2_GAME_C_OK 1218
 #define PBW2_W2_GAME_C_TOTAL 1218
-#define PBW2_B2_LIB_C_OK 517
+#define PBW2_B2_LIB_C_OK 514
 #define PBW2_B2_LIB_C_TOTAL 572
-#define PBW2_W2_LIB_C_OK 517
+#define PBW2_W2_LIB_C_OK 514
 #define PBW2_W2_LIB_C_TOTAL 572
 
 #endif

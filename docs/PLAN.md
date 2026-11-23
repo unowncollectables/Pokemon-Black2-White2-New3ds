@@ -12,13 +12,14 @@ presents with the frame's screen flags.
 
 ## Boot
 
-The shell in `n3ds/` is this phase. It links for both games, asks for the
-New 3DS clock, and stops before the game.
+The shell in `n3ds/` links for both games and asks for the New 3DS clock.
+`n3ds/nitro/` has OS, IRQ, arenas, pad bits, RTC, a path filesystem, and
+`GX_Init` that only clears the host IO buffer. The logo is not drawn.
 
-Still to do before the logo: a Nitro OS/IRQ/PAD/FS/GX layer, then link
-`src/system/main.c` and the overlays it loads first (12 and 27). The other
-342 overlays are linked statically in the same pass, or as soon as the loader
-exists. DSi-only entry points stay stubs. ARM7 audio stays silent.
+Still to do before the title screen: draw the logo and the title background
+from the staged NitroFS, then link `src/system/main.c` as `Pbw2_GameMain` and
+overlays 12 and 27. The shell keeps `main`. The other overlays follow. DSi
+entry points stay stubs. ARM7 audio stays silent.
 
 The user's ROM is read at runtime for the filesystem, and at build time only
 by `python3 configure.py && ninja` for the matching DS ROM. It is not committed.

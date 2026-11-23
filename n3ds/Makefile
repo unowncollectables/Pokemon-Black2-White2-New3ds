@@ -25,7 +25,10 @@ ARCH := -march=armv6k+fp -mtune=mpcore -mfloat-abi=hard -mtp=soft
 endif
 
 CFLAGS := -g -O2 -Wall -Wno-unused-function -mword-relocations -ffunction-sections -fdata-sections \
-	$(ARCH) -D__3DS__ -I$(CURDIR)/include -I$(CURDIR)/source -I$(CTRULIB)/include $(PBW2_EXTRA_INC)
+	$(ARCH) -D__3DS__ -DPBW2_N3DS \
+	-I$(CURDIR)/include -I$(CURDIR)/source -I$(CURDIR)/nitro \
+	-iquote$(CURDIR)/../include -I$(CURDIR)/../lib/nitro/include -I$(CURDIR)/../lib/twl/include \
+	-I$(CTRULIB)/include $(PBW2_EXTRA_INC)
 LDFLAGS := -specs=3dsx.specs -g $(ARCH) -Wl,--gc-sections
 LIBPATHS := -L$(CTRULIB)/lib
 ifeq ($(PBW2_LOCAL_SYSBASE),1)
@@ -39,7 +42,8 @@ SHIM :=
 endif
 
 SOURCES := source/main.c source/log.c source/workers.c source/audio.c source/save_shim.c \
-	source/settings.c source/present.c source/input.c source/io_thread.c $(SHIM)
+	source/settings.c source/present.c source/input.c source/io_thread.c \
+	nitro/os_host.c nitro/rtc_host.c nitro/fs_host.c nitro/gx_host.c nitro/host.c $(SHIM)
 
 .PHONY: all b2 w2 headers game-objects check clean
 

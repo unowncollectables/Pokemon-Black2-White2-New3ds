@@ -16,9 +16,9 @@ Per-file credits stay in the decomp's headers. This is the overview.
   GabeSud0/pokeplatinum-3ds (GPL-3.0). No SoulSilver or Platinum renderer
   sources are copied; those speak a different API.
 - [CallanCampos/Frigate](https://github.com/CallanCampos/Frigate) (GPL-3.0).
-  The native PC/Mac port of this decomp. Used as the reference for compiling
-  pokebw2's C on a host and for which Nitro modules a host replaces. No Frigate
-  sources are copied.
+  The native PC/Mac port of this decomp. Used as the reference for which Nitro
+  modules a host replaces (`port/hal/os`, `rtc`, `fs`, `gx`). `n3ds/nitro/` is
+  written for the 3DS. No Frigate source is copied.
 - [devkitPro/libctru](https://github.com/devkitPro/libctru),
   [devkitPro/devkitarm-crtls](https://github.com/devkitPro/devkitarm-crtls),
   and [devkitPro/3dstools](https://github.com/devkitPro/3dstools). The 3DS

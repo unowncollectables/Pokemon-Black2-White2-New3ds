@@ -3,12 +3,12 @@
 
 #include "types.h"
 
-#define reg_MI_EXMEMCNT (*(vu16 *)0x04000204)
+#define reg_MI_EXMEMCNT PBW2_VU16(0x04000204)
 #define REG_MI_EXMEMCNT_EP_MASK 0x8000
 #define REG_MI_EXMEMCNT_EP_SHIFT 15
 
 // The shared WRAM's bank control: which processor gets which half of it
-#define reg_GX_VRAMCNT_WRAM (*(vu8 *)0x04000247)
+#define reg_GX_VRAMCNT_WRAM PBW2_VU8(0x04000247)
 
 // Who gets the shared WRAM's two 16 KiB halves: the ARM7 gets those that the ARM9 doesn't
 typedef enum {
