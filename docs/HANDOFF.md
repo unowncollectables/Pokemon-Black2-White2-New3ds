@@ -21,17 +21,19 @@ Those binaries are gitignored. A devkitPro machine builds them with
 sources, with `PBW2_LOCAL_SYSBASE=1`. A normal devkitARM install does not set
 that.
 
-Game C, both versions, no ROM: **1218/1218**. That count is with Arm GCC 14.2
-(the same default error on incompatible pointer types as GCC 14 and later)
-and `-Wno-incompatible-pointer-types`. Library C on that compiler: **514/572**.
-The maintainer's devkitARM 16.1.0 (GCC 16), after the same flag, counted
-**516/572**. The gap is `__memcpy`, which GCC 14 does not declare and
-devkitARM's sysroot does. `scripts/n3ds_game_objects.py` rewrites
-`n3ds/include/pbw2_build_status.h` on every build, so the shell shows the
-compiler that just ran.
+Game C, both versions, no ROM: **1218/1218**, with
+`-Wno-incompatible-pointer-types`. Library C depends on the compiler:
+Arm GCC 14.2 counted **514/572**, and devkitARM 16.1.0 (GCC 16) counted
+**516/572**. The gap is `__memcpy`. `scripts/n3ds_game_objects.py` writes
+`build/n3ds/pbw2_build_status.h`, which is gitignored. A box build does not
+dirty the tree. The shell prints those counts when the header was on the
+include path, and `-1` when it was not.
 
-Azahar on `bfda6ba` launched both shells and wrote no `.sav`. This step has
-not been run in Azahar.
+Azahar on `b8cf620` launched both shells, with and without NitroFS staged,
+and wrote no `.sav`. The logo draw in this step has not been run in Azahar.
+A host decode of `res/graphics/title` (the same NCGR/NSCR/NCLR layout as
+archive `a/0/2/6`) produced the Black 2 logo on the blue title background
+and the White 2 logo on its background.
 
 ## What the box should run
 
@@ -46,15 +48,29 @@ bash scripts/n3ds_stage_nitrofs.sh w2 /path/to/extract/w2_us/files
 # copy ~/pbw2-sd/3ds onto the SD card
 ```
 
-Expect, for about 20 seconds each, no crash and no `.sav`:
+`git status` after `n3ds_build.sh` should be clean. The count header is
+`build/n3ds/pbw2_build_status.h`.
+
+Expect, for about 20 seconds each, no crash and no `.sav`. Separate SD
+directories. Headless steps for this machine are in
+[tools/box/azahar-smoke.sh](../tools/box/azahar-smoke.sh): set `NITROFS_SRC`
+to the staged `nitrofs` directory and `SD_SUBDIR` to `3ds/black2_3ds` or
+`3ds/white2_3ds`.
 
 - log: `sdmc already mounted` (or `sdmc mounted`), not `sdmc not mounted`
 - log: `silent (no ARM7 player this milestone)`, and no `ndspInit failed`
-- log: `nitrofs not staged` until the copy above, then `nitrofs a/0/0/2 open`
-- top screen: RTC from the 3DS clock, and the same NitroFS line
+- log: `nitrofs a/0/0/2 open`
+- log: `title pic: top is the logo over the title background; bottom is the lower title screen`
+- top screen: the version logo (Pokémon Black 2 or White 2) over that
+  version's title background, in the 256×192 area. Side bars are the wider
+  3DS screen
+- bottom screen: the lower title graphic from the same archive (the Game
+  Freak line on the source art)
+- without NitroFS staged: the text shell, and no title-pic line
 
-The logo and the title screen are still not drawn. `src/system/main.c` is not
-linked.
+`src/system/main.c` is still not linked. This is not the 3D title scene, and
+the background does not scroll yet. Overlays 12 and 27 stay out until a logo
+is actually on screen.
 
 ## What the shell does
 
@@ -74,8 +90,10 @@ linked.
 ## What is stubbed
 
 - Sound. NDSP is not started. No ARM7 player, no music.
-- GPU. `GX_Init` clears the host IO buffer. Nothing is drawn from it yet.
-  `GxShim_Present` still only records screen flags.
+- GPU. `GX_Init` clears the host IO buffer. The logo is not read from those
+  registers. `title_pic.c` decodes NitroFS `a/0/2/6` and the shell blits it.
+  `GxShim_Present` still only records screen flags. The 3D engine is not
+  running.
 - Files. `FS_OpenFile` reads `sdmc:/3ds/<game>_3ds/nitrofs/<path>` once that
   tree is staged. The IO thread still does not touch the save.
 - DSi/TWL and the two DSP firmware images. Those library files do not compile
@@ -106,42 +124,38 @@ matching build does not define that macro.
 - `src/field/script/trainer_script.c`: GCC rejects a file-scope array sized by
   a `const int`. The 3DS build uses a macro of the same value.
 
-## What blocks the logo and the title screen
+## What blocks the title process
 
 `src/system/main.c` `main` calls `SystemInit`, enables GX interrupts, then
 `GameInit`. `GameInit` loads overlays 12 and 27 and queues `EVENT_TITLE_FUNCS`.
 That is the title path. It is not in the `.3dsx`.
 
-Linking it today would not show a logo. The calls go through Nitro OS, GX,
-the filesystem, and the overlay loader. Much of that C compiles, and then
-touches DS registers (`0x04000000` and the rest) or is still MWCC assembly.
-The 3DS process does not have those registers. The missing piece is a Nitro
-compatibility layer: OS, memory, GX/G3, the ROM filesystem, pad, RTC. Frigate
-has that layer for a PC host and already boots this decomp through the title
-screen into the field. The SoulSilver and Platinum 3DS renderers speak a
-different API, so they are the source of the runtime rules above, not a
-drop-in GX.
+The picture on screen is archive `a/0/2/6` drawn by the shell: sub BG 2
+(member 3, the title background), sub BG 3 over it (members 0, 1 and 2, the
+version logo), and main BG 3 on the bottom screen (members 9, 10 and 8).
+Tile 0 and palette index 0 on the logo layer are holes, so the background
+shows through. The 3D scene, the logo sprite, and the scroll are still the
+title process's job.
 
-Until that layer exists, the honest boot is the shell you can read: which
-game, whether the console is a New 3DS, and the compile counts.
+Link `Pbw2_GameMain` only after the box has seen that logo. The calls still
+go through Nitro OS, GX, and the overlay loader. Much of that C compiles,
+and then touches DS registers or is still MWCC assembly. Register writes
+from game C land in `pbw2_io`. DSi/TWL stays stubbed. Sound stays silent.
 
 ## Recommended next steps
 
-1. On a devkitPro machine, `bash scripts/n3ds_build.sh` and open
-   `black2_3ds.3dsx` in Azahar. Confirm both screens, ZL/ZR, the C-stick, START
-   leaving, and that no `.sav` appears. Then the same for White 2, and that it
-   does not open Black 2's directory.
-2. Replace the Nitro modules the title path touches, in this order: OS and
-   IRQ (so `main`'s loop can wait a frame), pad, archive/FS backed by the
-   user's ROM in memory, then GX 2D enough for the logo and the title
-   background. Keep DSi entry points stubbed. Keep sound silent.
-3. Link `src/system/main.c` as `Pbw2_GameMain` (the shell already owns `main`)
-   only after those calls return instead of writing DS MMIO. Static-link
-   overlays 12 and 27 with it, then the rest of the 344.
-4. Do not write the save from the platform when the game starts calling
+1. On the devkitARM 16 machine, `bash scripts/n3ds_build.sh`. Confirm the
+   tree is clean afterward. Open `black2_3ds.3dsx` in Azahar with NitroFS
+   staged and confirm the logo over the title background, the lower screen,
+   no crash, and no `.sav`. Then White 2, in its own directory.
+2. Only after that logo is on screen, link `src/system/main.c` as
+   `Pbw2_GameMain` (the shell already owns `main`). Static-link or load
+   overlays 12 (`ov012.bin`, 123,520 bytes) and 27 (`ov027.bin`, 3,776
+   bytes). Keep DSi stubbed and sound silent.
+3. Do not write the save from the platform when the game starts calling
    `Save_GameWrite`. Remove the refusal in that function at the same time the
    game becomes the caller, and keep the bytes the cartridge format.
-5. First settings toggles, when a feature exists, default off. Sharp text uses
+4. First settings toggles, when a feature exists, default off. Sharp text uses
    `Present_Flags()` from that frame.
 
 ## ROM step, one place
@@ -156,3 +170,18 @@ python3 configure.py && ninja
 
 That is the step that reads the ROM. Header generation and the 3DS shell do
 not.
+
+## Maintainer notes
+
+These are the box notes for this port. They name machine paths and public
+sources. They do not contain dumps, saves, or keys.
+
+- [docs/research/RESEARCH.md](research/RESEARCH.md)
+- [docs/research/PLAN-initial.md](research/PLAN-initial.md)
+- [docs/research/BOX-HANDOFF.md](research/BOX-HANDOFF.md)
+- [tools/box/build-matching.sh](../tools/box/build-matching.sh) — matching
+  rebuild on the box's pokebw2 checkout
+- [tools/box/azahar-smoke.sh](../tools/box/azahar-smoke.sh) — headless New 3DS
+  smoke. `NITROFS_SRC` is copied into that run's emulated SD only
+- [tools/box/patches/pokebw2-345b790-delinks-rename.patch](../tools/box/patches/pokebw2-345b790-delinks-rename.patch)
+  — the 66 delink renames, already applied in this tree

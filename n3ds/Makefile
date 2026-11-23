@@ -26,7 +26,7 @@ endif
 
 CFLAGS := -g -O2 -Wall -Wno-unused-function -mword-relocations -ffunction-sections -fdata-sections \
 	$(ARCH) -D__3DS__ -DPBW2_N3DS \
-	-I$(CURDIR)/include -I$(CURDIR)/source -I$(CURDIR)/nitro \
+	-I$(CURDIR)/../build/n3ds -I$(CURDIR)/include -I$(CURDIR)/source -I$(CURDIR)/nitro \
 	-iquote$(CURDIR)/../include -I$(CURDIR)/../lib/nitro/include -I$(CURDIR)/../lib/twl/include \
 	-I$(CTRULIB)/include $(PBW2_EXTRA_INC)
 LDFLAGS := -specs=3dsx.specs -g $(ARCH) -Wl,--gc-sections
@@ -43,7 +43,8 @@ endif
 
 SOURCES := source/main.c source/log.c source/workers.c source/audio.c source/save_shim.c \
 	source/settings.c source/present.c source/input.c source/io_thread.c \
-	nitro/os_host.c nitro/rtc_host.c nitro/fs_host.c nitro/gx_host.c nitro/host.c $(SHIM)
+	nitro/os_host.c nitro/rtc_host.c nitro/fs_host.c nitro/gx_host.c nitro/host.c \
+	nitro/title_pic.c $(SHIM)
 
 .PHONY: all b2 w2 headers game-objects check clean
 
@@ -76,7 +77,7 @@ $(BUILD)/$(TARGET).3dsx: $(BUILD)/$(TARGET).elf
 	3dsxtool $< $@
 	@echo built $@
 
-$(BUILD)/$(TARGET).elf: $(SOURCES) include/pbw2_port.h include/pbw2_build_status.h
+$(BUILD)/$(TARGET).elf: $(SOURCES) include/pbw2_port.h ../build/n3ds/pbw2_build_status.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(GAMEFLAGS) $(SOURCES) $(LDFLAGS) $(LIBPATHS) $(LIBS) -Wl,-Map,$(BUILD)/$(TARGET).map -o $@
 

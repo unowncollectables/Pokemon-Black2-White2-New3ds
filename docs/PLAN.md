@@ -14,12 +14,14 @@ presents with the frame's screen flags.
 
 The shell in `n3ds/` links for both games and asks for the New 3DS clock.
 `n3ds/nitro/` has OS, IRQ, arenas, pad bits, RTC, a path filesystem, and
-`GX_Init` that only clears the host IO buffer. The logo is not drawn.
+`GX_Init` that clears the host IO buffer. When NitroFS is staged, the shell
+draws the version logo over the title background from `a/0/2/6`, and the
+lower title screen under it.
 
-Still to do before the title screen: draw the logo and the title background
-from the staged NitroFS, then link `src/system/main.c` as `Pbw2_GameMain` and
-overlays 12 and 27. The shell keeps `main`. The other overlays follow. DSi
-entry points stay stubs. ARM7 audio stays silent.
+Still to do before the title process: confirm that picture in Azahar, then
+link `src/system/main.c` as `Pbw2_GameMain` and overlays 12 and 27. The shell
+keeps `main`. The other overlays follow. DSi entry points stay stubs. ARM7
+audio stays silent.
 
 The user's ROM is read at runtime for the filesystem, and at build time only
 by `python3 configure.py && ninja` for the matching DS ROM. It is not committed.

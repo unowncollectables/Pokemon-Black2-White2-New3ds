@@ -4,7 +4,23 @@
 
 #include <3ds.h>
 
+/* Written by scripts/n3ds_game_objects.py into build/n3ds/. Not committed:
+ * devkitARM 16 and other compilers count a different number of library files. */
+#if defined(__has_include)
+#if __has_include("pbw2_build_status.h")
 #include "pbw2_build_status.h"
+#endif
+#endif
+#ifndef PBW2_B2_GAME_C_OK
+#define PBW2_B2_GAME_C_OK (-1)
+#define PBW2_B2_GAME_C_TOTAL (-1)
+#define PBW2_W2_GAME_C_OK (-1)
+#define PBW2_W2_GAME_C_TOTAL (-1)
+#define PBW2_B2_LIB_C_OK (-1)
+#define PBW2_B2_LIB_C_TOTAL (-1)
+#define PBW2_W2_LIB_C_OK (-1)
+#define PBW2_W2_LIB_C_TOTAL (-1)
+#endif
 
 /* One tree, two games. The link chooses the game; the save directory follows. */
 #if defined(PBW2_WHITE2)

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* GX_Init does not program a DS display. Register writes from game C land in
- * pbw2_io (see include/types.h). Drawing the logo from those registers is the
- * next step, after NitroFS is on the card. */
+ * pbw2_io (see include/types.h). The logo and the title background are drawn
+ * from NitroFS a/0/2/6 by title_pic.c, not from these registers. */
 #include "nitro/gx.h"
 
 #include <string.h>
