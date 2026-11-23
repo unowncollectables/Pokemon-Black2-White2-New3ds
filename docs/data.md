@@ -658,7 +658,7 @@ them.
 
 The item icons' archive (`a/0/2/5`) has a member for each constant of `generated/item_icons.txt`, in its order:
 an icon (`ITEM_ICON_*`), 32×32 and 16 colors, or a palette (`ITEM_ICON_PALETTE_*`), its colors in JASC format, 0
-transparent. `ITEM_GRAPHICS_CHARS_AND_PALETTES` in `src/system/pml_item.c` gives each item an icon and a palette, as
+transparent. `ITEM_GRAPHICS_CHARS_AND_PALETTES` in `src/pml/item.c` gives each item an icon and a palette, as
 `[ITEM_HYPER_POTION] = { ITEM_ICON_POTION, ITEM_ICON_PALETTE_HYPER_POTION }`, and `LIST_ITEM_GRAPHICS` the Wonder
 Launcher's list icons. Items share them, so each is named after the first item that shows it and is a file of that
 item's directory: `ITEM_ICON_POTION` is `res/items/potion/icon.png`, `ITEM_ICON_PALETTE_HYPER_POTION`

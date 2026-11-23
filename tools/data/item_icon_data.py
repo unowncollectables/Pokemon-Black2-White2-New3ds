@@ -69,7 +69,7 @@ def members(root: Path) -> list[tuple[str, Path, str]]:
 
 def display_palettes() -> dict[int, int]:
     """Returns the palette member that each icon member is shown with: the first item's in pml_item.c's tables."""
-    source = (ROOT / "src/system/pml_item.c").read_text()
+    source = (ROOT / "src/pml/item.c").read_text()
     names = {name: number for number, name in enumerate(ordered_names("item_icons"))}
     shown = {}
     for table in ("ITEM_GRAPHICS_CHARS_AND_PALETTES", "LIST_ITEM_GRAPHICS"):
