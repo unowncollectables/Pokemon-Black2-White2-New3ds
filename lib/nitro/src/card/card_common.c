@@ -66,10 +66,11 @@ void CARD_Init(void) {
         p->priority = 4;
         p->callback = NULL;
         p->callbackArg = NULL;
+        OS_InitThreadQueue(&p->busyQueue);
         CARDi_InitResourceLock();
-        CARDi_InitCommand();
         CARD_Enable(TRUE);
     }
+    CARDi_InitCommand();
     return;
 #endif
     if (p->flag == 0) {

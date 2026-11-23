@@ -236,6 +236,7 @@ void PbW2_DtcmHostInit(void);
 void PbW2_NvramHostInit(void);
 void PbW2_RomHeaderHostInit(void);
 void PbW2_OsThreadHostInit(void);
+void PbW2_CpDivHostInit(void);
 void PXI_Init(void);
 void CARD_Init(void);
 #endif
@@ -250,6 +251,7 @@ void OS_Init(void) {
     PbW2_RomHeaderHostInit();
     PbW2_DtcmHostInit();
     PbW2_NvramHostInit();
+    PbW2_CpDivHostInit();
     CARD_Init();
 #endif
     s_irq_on = 1;

@@ -3,6 +3,20 @@
 // user settings, and turns the raw samples into screen coordinates. The file name is the SDK's, and the split is
 // certain: the sizes of the functions are those of tp.o and its .bss is the one static. The names are the SDK's.
 #include "nitro/tp.h"
+
+#ifdef PBW2_N3DS
+#include "cp_div_host.h"
+#include "nitro/cp.h"
+
+static void PbW2_TpCpDiv32(s32 numer_l, u32 denom, u32 *result_out) {
+    PbW2_CpSetDivCnt(0);
+    PbW2_CpSetNumerL(numer_l);
+    PbW2_CpSetDenom32(denom);
+    while (PbW2_CpGetDivCnt() & REG_CP_BUSY_MASK) {
+    }
+    *result_out = PbW2_CpGetResultL();
+}
+#endif
 #include "nitro/cp.h"
 #include "nitro/mi.h"
 #include "nitro/os.h"
@@ -229,28 +243,40 @@ void TP_SetCalibrateParam(const TPCalibrateParam *calibrate) {
 
     enabled = OS_DisableInterrupts();
     if (calibrate->xDotSize != 0) {
+#ifdef PBW2_N3DS
+        u32 inv;
+        PbW2_TpCpDiv32(1 << 28, (u32)calibrate->xDotSize, &inv);
+        tpState.calibrate.x.dotSizeInv = inv;
+#else
         reg_CP_DIVCNT = 0;
         reg_CP_DIV_NUMER_L = 1 << 28;
         reg_CP_DIV_DENOM = (u32)calibrate->xDotSize;
-        tpState.calibrate.x.origin = calibrate->x0;
-        tpState.calibrate.x.dotSize = calibrate->xDotSize;
         while (reg_CP_DIVCNT & REG_CP_BUSY_MASK) {
         }
         tpState.calibrate.x.dotSizeInv = reg_CP_DIV_RESULT_L;
+#endif
+        tpState.calibrate.x.origin = calibrate->x0;
+        tpState.calibrate.x.dotSize = calibrate->xDotSize;
     } else {
         tpState.calibrate.x.origin = 0;
         tpState.calibrate.x.dotSize = 0;
         tpState.calibrate.x.dotSizeInv = 0;
     }
     if (calibrate->yDotSize != 0) {
+#ifdef PBW2_N3DS
+        u32 inv;
+        PbW2_TpCpDiv32(1 << 28, (u32)calibrate->yDotSize, &inv);
+        tpState.calibrate.y.dotSizeInv = inv;
+#else
         reg_CP_DIVCNT = 0;
         reg_CP_DIV_NUMER_L = 1 << 28;
         reg_CP_DIV_DENOM = (u32)calibrate->yDotSize;
-        tpState.calibrate.y.origin = calibrate->y0;
-        tpState.calibrate.y.dotSize = calibrate->yDotSize;
         while (reg_CP_DIVCNT & REG_CP_BUSY_MASK) {
         }
         tpState.calibrate.y.dotSizeInv = reg_CP_DIV_RESULT_L;
+#endif
+        tpState.calibrate.y.origin = calibrate->y0;
+        tpState.calibrate.y.dotSize = calibrate->yDotSize;
     } else {
         tpState.calibrate.y.origin = 0;
         tpState.calibrate.y.dotSize = 0;
@@ -431,11 +457,45 @@ u32 TP_CalcCalibrateParam(TPCalibrateParam *calibrate, u16 rawX1, u16 rawY1, u16
     }
 
     enabled = OS_DisableInterrupts();
+    rawYDiff = rawY1 - rawY2;
+    screenYDiff = screenY1 - screenY2;
+#ifdef PBW2_N3DS
+    {
+        u32 xdots;
+        u32 ydots;
+
+        PbW2_TpCpDiv32((rawX1 - rawX2) << 8, (u32)(screenX1 - screenX2), &xdots);
+        dotSize = (s32)xdots;
+        if (dotSize >= 0x8000 || dotSize < -0x8000) {
+            OS_RestoreInterrupts(enabled);
+            return 1;
+        }
+        calibrate->xDotSize = dotSize;
+        origin = ((((rawX1 + rawX2) << 8) - (screenX1 + screenX2) * calibrate->xDotSize) << 9) >> 16;
+        if (origin >= 0x8000 || origin < -0x8000) {
+            OS_RestoreInterrupts(enabled);
+            return 1;
+        }
+        calibrate->x0 = origin;
+
+        PbW2_TpCpDiv32(rawYDiff << 8, (u32)screenYDiff, &ydots);
+        dotSize = (s32)ydots;
+        OS_RestoreInterrupts(enabled);
+        if (dotSize >= 0x8000 || dotSize < -0x8000) {
+            return 1;
+        }
+        calibrate->yDotSize = dotSize;
+        origin = ((((rawY1 + rawY2) << 8) - (screenY1 + screenY2) * calibrate->yDotSize) << 9) >> 16;
+        if (origin >= 0x8000 || origin < -0x8000) {
+            return 1;
+        }
+        calibrate->y0 = origin;
+        return 0;
+    }
+#else
     reg_CP_DIVCNT = 0;
     reg_CP_DIV_NUMER_L = (rawX1 - rawX2) << 8;
     reg_CP_DIV_DENOM = (u32)(screenX1 - screenX2);
-    rawYDiff = rawY1 - rawY2;
-    screenYDiff = screenY1 - screenY2;
     while (reg_CP_DIVCNT & REG_CP_BUSY_MASK) {
     }
     dotSize = reg_CP_DIV_RESULT_L;
@@ -468,6 +528,7 @@ u32 TP_CalcCalibrateParam(TPCalibrateParam *calibrate, u16 rawX1, u16 rawY1, u16
     }
     calibrate->y0 = origin;
     return 0;
+#endif
 }
 
 // TP_GetCalibratedPoint: the point on the screen of a raw one. Without a calibration it is the raw one

@@ -8,6 +8,7 @@ void PbW2_PxiServiceArm7(int fifoTag, u32 data);
 
 static PXIFifoCallback s_recv[PXI_MAX_FIFO_TAG];
 static int s_pending_fs_cmd;
+static int s_pxi_inited;
 
 static void deliver(int fifoTag, u32 data, BOOL err) {
     if (fifoTag < 0 || fifoTag >= PXI_MAX_FIFO_TAG) {
@@ -19,9 +20,12 @@ static void deliver(int fifoTag, u32 data, BOOL err) {
 }
 
 void PXI_Init(void) {
-    memset(s_recv, 0, sizeof s_recv);
-    s_pending_fs_cmd = -1;
-    PBW2_STUB_LOG("PXI", "Init");
+    if (!s_pxi_inited) {
+        memset(s_recv, 0, sizeof s_recv);
+        s_pending_fs_cmd = -1;
+        s_pxi_inited = 1;
+        PBW2_STUB_LOG("PXI", "Init");
+    }
 }
 
 void PXI_InitFifo(void) {

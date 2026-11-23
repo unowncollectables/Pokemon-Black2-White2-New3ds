@@ -67,6 +67,9 @@ void OS_SleepThread(OSThreadQueue *queue) {
     u32 my_gen;
 
     if (!queue) {
+#if defined(__3DS__)
+        svcSleepThread(100000);
+#endif
         return;
     }
     host = queue_host(queue);
