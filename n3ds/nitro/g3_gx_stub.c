@@ -12,6 +12,46 @@ void GX_SendFifo64B(const void *src, volatile void *dest) {
     (void)dest;
 }
 
+void GX_BeginLoadTex(void) {
+}
+
+void GX_LoadTex(const void *src, u32 dest3dOffset, u32 size) {
+    (void)src;
+    (void)dest3dOffset;
+    (void)size;
+}
+
+void GX_EndLoadTex(void) {
+}
+
+void GX_BeginLoadTexPltt(void) {
+}
+
+void GX_LoadTexPltt(const void *src, u32 dest3dOffset, u32 size) {
+    (void)src;
+    (void)dest3dOffset;
+    (void)size;
+}
+
+void GX_EndLoadTexPltt(void) {
+}
+
+void GX_BeginLoadClearImage(void) {
+}
+
+void GX_LoadClearImageColor(const void *src, u32 size) {
+    (void)src;
+    (void)size;
+}
+
+void GX_LoadClearImageDepth(const void *src, u32 size) {
+    (void)src;
+    (void)size;
+}
+
+void GX_EndLoadClearImage(void) {
+}
+
 void G3X_Init(void) {
     PBW2_STUB_LOG("G3X", "Init");
 }

@@ -4,6 +4,7 @@
 
 #if defined(PBW2_LINK_GAME)
 
+#include "log.h"
 #include "nitro/hw.h"
 #include "nitro/gx.h"
 #include "vram_host.h"
@@ -244,7 +245,7 @@ static void compose_engine(const u8 *regs, u16 *out) {
         memset(out, 0, 256u * 192u * 2u);
         return;
     }
-    if (((dc >> 16) & 3u) != 1u) {
+    if ((dc & REG_GX_DISPCNT_MODE_MASK) == 0) {
         memset(out, 0, 256u * 192u * 2u);
         return;
     }
@@ -289,19 +290,45 @@ int PbW2_ComposeScreens(u16 *top_rgb565, u16 *bottom_rgb565) {
 int PbW2_GameDisplayReady(void) {
     u32 dc = *(const u32 *)(pbw2_io + 0);
     u32 sub = *(const u32 *)(pbw2_io + 0x1000);
-    u32 en = (dc | sub) & 0x00000f00u;
-    u32 mode = ((dc >> 16) & 3u) | ((sub >> 16) & 3u);
+    u32 layers = (dc | sub) & (0x00000f00u | 0x00001000u);
+    u32 main_on = (dc & REG_GX_DISPCNT_MODE_MASK) != 0;
+    u32 sub_on = (sub & REG_GX_DISPCNT_MODE_MASK) != 0;
 
     if (PbW2_VramLoadBytes() < 64u) {
         return 0;
     }
-    if (mode == 0) {
+    if (!main_on && !sub_on) {
         return 0;
     }
-    if (en == 0) {
+    if (layers == 0) {
         return 0;
     }
     return 1;
+}
+
+void PbW2_GxDisplayTrace(void) {
+    static u32 s_frames;
+    static int s_logged_ready;
+
+    s_frames++;
+    if ((s_frames % 60u) != 0u && s_logged_ready) {
+        return;
+    }
+    {
+        u32 dc = *(const u32 *)(pbw2_io + 0);
+        u32 sub = *(const u32 *)(pbw2_io + 0x1000);
+        u32 vramcnt = *(const u32 *)(pbw2_io + 0x240);
+        u32 pwr = *(const u32 *)(pbw2_io + 0x304);
+        Log_Line("GX",
+                 "disp trace vram=%u dc=0x%08x sub=0x%08x bg0-3cnt=0x%04x%04x mbright=0x%04x vramcnt=0x%08x pow=0x%04x ready=%d",
+                 (unsigned)PbW2_VramLoadBytes(), (unsigned)dc, (unsigned)sub,
+                 (unsigned)*(const u16 *)(pbw2_io + 0x08), (unsigned)*(const u16 *)(pbw2_io + 0x0e),
+                 (unsigned)reg_u16(pbw2_io, 0x6cu), (unsigned)vramcnt, (unsigned)(pwr & 0xffffu),
+                 PbW2_GameDisplayReady());
+    }
+    if (PbW2_GameDisplayReady()) {
+        s_logged_ready = 1;
+    }
 }
 
 #endif

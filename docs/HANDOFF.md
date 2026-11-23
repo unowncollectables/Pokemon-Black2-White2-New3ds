@@ -218,6 +218,35 @@ python3 configure.py && ninja
 That is the step that reads the ROM. Header generation and the 3DS shell do
 not.
 
+## N3DS 3D path (planned; not implemented)
+
+Title and CDEMO opening use **NNS_G3d** (`NNS_G3dInit`, tex/palette VRAM via GFD,
+`NNS_G3dDraw1Mat1ShpW32Direct`, `NNS_G3dGeFlushBuffer`) plus **MTX_*** /
+`CP_Set*`. On 3DS this must become either PICA200 via Citro3D or a software
+rasterizer fed from the same display lists.
+
+**Sister ports to mine before rewriting:**
+
+| Repo | What to look for |
+|------|------------------|
+| [unowncollectables/3ds-platinum](https://github.com/unowncollectables/3ds-platinum) | `widecomp.c` (2D, already adapted); any G3 command FIFO → GPU path; movie overlays. |
+| [unowncollectables/Pokemon-HeartGold-SoulSilver-New3ds](https://github.com/unowncollectables/Pokemon-HeartGold-SoulSilver-New3ds) | Citro3D setup, geometry queue, texture upload from DS VRAM keys, present integration. |
+
+**Link strategy for MTX / lib:**
+
+- Prefer compiling real `lib/nitro/src/cp/cp*.c` and `lib/nitro/src/mtx/*.c` (or
+  game-local copies) into `LIB_GAME_OBJS` once CP matrix access is hosted, same
+  pattern as `gx_load2d.o` + `mi_dma` VRAM redirect.
+- Keep `g3_gx_stub.c` only for FIFO/display-list **consumption** until a
+  translator exists; `GX_SendFifo*` should log polygon counts, not no-op
+  silently, when debugging geometry.
+
+**CDEMO ov264 (double load):** `boot_proc` queues overlay 264 twice (GF logo
+`demo=0`, then opening `demo=2`). Immediate return usually means the script hit
+`CDEMO_CMD_END` (fade/movie state finished), not a missing overlay — check
+`[overlay] GFL_OvlUnload id=264` spacing and `[GX] disp trace` for VRAM growth
+during `CDemo_LoadMovieFrame` (`GX_LoadBG2Scr` / `GX_LoadBG3Scr`).
+
 ## Maintainer notes
 
 These are the box notes for this port. They name machine paths and public

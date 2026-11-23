@@ -180,6 +180,7 @@ BOOL FS_UnloadOverlay(MIProcessor target, FSOverlayID id) {
             if (slot->mem) {
                 free(slot->mem);
             }
+            Log_Line("overlay", "GFL_OvlUnload id=%u", (unsigned)id);
             memset(slot, 0, sizeof *slot);
             return TRUE;
         }

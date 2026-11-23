@@ -186,4 +186,5 @@ void MI_NDmaFillAsync(u32 dma, void *dest, u32 value, u32 size, void (*cb)(void 
         cb(arg);
     }
 }
+
 #endif

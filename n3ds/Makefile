@@ -49,15 +49,18 @@ SHELL_SRC := source/main.c source/log.c source/workers.c source/audio.c source/s
 
 ifeq ($(PBW2_LINK_GAME),1)
 GAME_SYM := $(shell echo $(GAME) | tr A-Z a-z)
+LIB_GAME_G2D := \
+	g2d_Load.o g2d_NCG_load.o g2d_NCL_load.o g2d_NSC_load.o g2d_NAN_load.o g2d_NCE_load.o g2d_NMC_load.o \
+	g2d_Animation.o g2d_CellAnimation.o g2d_CellTransferManager.o g2d_Image.o g2d_MultiCellAnimation.o \
+	g2d_Node.o g2d_OAM.o g2d_OamSoftwareSpriteDraw.o g2d_Renderer.o g2d_RendererCore.o g2d_SRTControl.o \
+	g2d_PaletteTable.o g2di_Mtx32.o g2di_VRamLocation.o
+LIB_GAME_GFD := \
+	gfd_VramTransferManager.o gfd_FramePlttVramMan.o gfd_FrameTexVramMan.o gfd_LinkedListPlttVramMan.o \
+	gfd_LinkedListTexVramMan.o gfd_PlttVramMan.o gfd_TexVramMan.o gfdi_LinkedListVramMan_Common.o
 LIB_GAME_OBJS := \
 	../build/n3ds/$(GAME_SYM)/obj/lib/nitro/src/gx/gx_load2d.o \
-	../build/n3ds/$(GAME_SYM)/obj/lib/nnsys/src/g2d/g2d_Load.o \
-	../build/n3ds/$(GAME_SYM)/obj/lib/nnsys/src/g2d/g2d_NCG_load.o \
-	../build/n3ds/$(GAME_SYM)/obj/lib/nnsys/src/g2d/g2d_NCL_load.o \
-	../build/n3ds/$(GAME_SYM)/obj/lib/nnsys/src/g2d/g2d_NSC_load.o \
-	../build/n3ds/$(GAME_SYM)/obj/lib/nnsys/src/g2d/g2d_NAN_load.o \
-	../build/n3ds/$(GAME_SYM)/obj/lib/nnsys/src/g2d/g2d_NCE_load.o \
-	../build/n3ds/$(GAME_SYM)/obj/lib/nnsys/src/g2d/g2d_NMC_load.o
+	$(foreach o,$(LIB_GAME_G2D),../build/n3ds/$(GAME_SYM)/obj/lib/nnsys/src/g2d/$(o)) \
+	$(foreach o,$(LIB_GAME_GFD),../build/n3ds/$(GAME_SYM)/obj/lib/nnsys/src/gfd/$(o))
 CFLAGS += -DPBW2_LINK_GAME=1
 CFLAGS += $(shell for d in $(CURDIR)/../lib/*/include; do echo -I$$d; done)
 SHELL_SRC += source/game_thread.c nitro/mi_host.c nitro/ic_dc_host.c \
@@ -65,7 +68,7 @@ SHELL_SRC += source/game_thread.c nitro/mi_host.c nitro/ic_dc_host.c \
 	nitro/pxi_service.c nitro/cp_div_host.c nitro/nvram_host.c nitro/dtcm_host.c nitro/link_syms.c nitro/overlay_host.c \
 	nitro/overlay_ids.c nitro/overlay_id_decode_gen.c nitro/survey_prob_host.c nitro/nitro_stubs.c nitro/nns_title_stubs.c nitro/title_link_syms.c \
 	nitro/g3_gx_stub.c nitro/g3d_glb_stubs.c nitro/mtx_stub.c nitro/link_stubs.c nitro/proc_stubs.c nitro/net_stubs.c \
-	nitro/twl_stub.c nitro/pad_host.c nitro/vram_host.c nitro/ds2d_compose.c
+	nitro/twl_stub.c nitro/pad_host.c nitro/vram_host.c nitro/vram_dma.c nitro/ds2d_compose.c
 GAME_RSP := $(CURDIR)/../build/n3ds/$(shell echo $(GAME) | tr A-Z a-z)/game_objects.rsp
 GAME_LDFLAGS := @$(GAME_RSP)
 else

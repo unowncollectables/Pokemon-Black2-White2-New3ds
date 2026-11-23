@@ -3,6 +3,10 @@
 #include "nitro/mi.h"
 #include "nitro/os.h"
 
+#ifdef PBW2_N3DS
+#include "vram_dma.h"
+#endif
+
 // Waiting for a transfer or stopping one leaves DMA0 with a dummy transfer of one word, from address 0 to address 0
 #define MIi_DUMMY_CNT (MI_DMA_ENABLE | MI_DMA_SRC_FIX | MI_DMA_DEST_FIX | 1)
 
@@ -18,6 +22,11 @@ void MIi_DmaFill32(u32 dmaNo, void *dest, u32 data, u32 size, BOOL dmaEnable) {
     if (size == 0) {
         return;
     }
+#ifdef PBW2_N3DS
+    if (PbW2_TryDmaFill32(dest, data, size)) {
+        return;
+    }
+#endif
     dmaCntp = &((vu32 *)REG_DMA0SAD_ADDR)[dmaNo * 3 + 2];
     while (*dmaCntp & MI_DMA_ENABLE) {
     }
@@ -38,6 +47,11 @@ void MIi_DmaCopy32(u32 dmaNo, const void *src, void *dest, u32 size, BOOL dmaEna
     if (size == 0) {
         return;
     }
+#ifdef PBW2_N3DS
+    if (PbW2_TryDmaCopy32(src, dest, size)) {
+        return;
+    }
+#endif
     MIi_CheckDma0SourceAddress(dmaNo, (u32)src, size, MI_DMA_SRC_INC);
     dmaCntp = &((vu32 *)REG_DMA0SAD_ADDR)[dmaNo * 3 + 2];
     while (*dmaCntp & MI_DMA_ENABLE) {
@@ -59,6 +73,11 @@ void MIi_DmaCopy16(u32 dmaNo, const void *src, void *dest, u32 size, BOOL dmaEna
     if (size == 0) {
         return;
     }
+#ifdef PBW2_N3DS
+    if (PbW2_TryDmaCopy16(src, dest, size)) {
+        return;
+    }
+#endif
     MIi_CheckDma0SourceAddress(dmaNo, (u32)src, size, MI_DMA_SRC_INC);
     dmaCntp = &((vu32 *)REG_DMA0SAD_ADDR)[dmaNo * 3 + 2];
     while (*dmaCntp & MI_DMA_ENABLE) {

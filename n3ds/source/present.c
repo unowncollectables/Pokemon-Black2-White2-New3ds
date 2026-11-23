@@ -37,14 +37,15 @@ void GxShim_Present(uint32_t flags) {
     extern void pbw2_game_notify_present(void);
 
     if (PbW2_VramHostReady()) {
-        (void)PbW2_ComposeScreens(s_top, s_bottom);
-        if ((flags & PBW2_SCREEN_TOP) != 0) {
-            Present_BlitRGB565(GFX_TOP, s_top, 256, 192);
-        }
-        if ((flags & PBW2_SCREEN_BOTTOM) != 0) {
-            Present_BlitRGB565(GFX_BOTTOM, s_bottom, 256, 192);
-        }
+        PbW2_GxDisplayTrace();
         if (PbW2_GameDisplayReady()) {
+            (void)PbW2_ComposeScreens(s_top, s_bottom);
+            if ((flags & PBW2_SCREEN_TOP) != 0) {
+                Present_BlitRGB565(GFX_TOP, s_top, 256, 192);
+            }
+            if ((flags & PBW2_SCREEN_BOTTOM) != 0) {
+                Present_BlitRGB565(GFX_BOTTOM, s_bottom, 256, 192);
+            }
             pbw2_game_notify_present();
         }
     }

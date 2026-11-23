@@ -10,5 +10,6 @@
 
 int PbW2_ComposeScreens(u16 *top_rgb565, u16 *bottom_rgb565);
 int PbW2_GameDisplayReady(void);
+void PbW2_GxDisplayTrace(void);
 
 #endif
