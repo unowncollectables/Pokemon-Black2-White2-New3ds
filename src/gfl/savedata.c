@@ -1,6 +1,11 @@
 #include "types.h"
 #include "gfl/heap.h"
 #include "gfl/savedata.h"
+
+#ifdef PBW2_N3DS
+#include "log.h"
+#include "system/savedata/save_control.h"
+#endif
 #include "gfl/std.h"
 
 typedef struct {
@@ -54,8 +59,16 @@ void runSaveBlkInitializers(void *data, SaveDataTable *svdt) {
         u32 offset = svdt->blocks[i].offset;
 
         MIi_CpuClear32(0, (u8 *)data + offset, svdt->blocks[i].size);
+#ifdef PBW2_N3DS
+        if (i == SAVE_BLOCK_HIGH_LINK || i == SAVE_BLOCK_POKEDEX || i == 0) {
+            Log_Line("game", "save block init id=%u", (unsigned)table[i].gmdataID);
+        }
+#endif
         table[i].init((u8 *)data + offset);
     }
+#ifdef PBW2_N3DS
+    Log_Line("game", "runSaveBlkInitializers done count=%u", (unsigned)count);
+#endif
 }
 
 static u32 getSizeSaveTblBlk(SaveDataTable *svdt, u32 id) {

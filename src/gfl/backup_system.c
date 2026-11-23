@@ -7,6 +7,10 @@
 #include "gfl/ui.h"
 #include "nitro/math.h"
 
+#ifdef PBW2_N3DS
+#include "log.h"
+#endif
+
 // The copies of a save, as SaveData_GetCopyOffset takes them
 #define SAVE_COPY_MAIN 1
 #define SAVE_COPY_BACKUP 2
@@ -237,11 +241,17 @@ u32 SaveData_Load(SaveData *sv, u32 heapId) {
     if (!svsys->cardOk) {
         return SAVE_LOAD_RESULT_ERROR;
     }
+#ifdef PBW2_N3DS
+    Log_Line("game", "SaveData_Load enter");
+#endif
     if (sv->mainOffset != sv->backupOffset) {
         result = SaveData_LoadWithBackup(sv, heapId, FALSE, 0);
     } else {
         result = SaveData_LoadSingle(sv, FALSE, 0);
     }
+#ifdef PBW2_N3DS
+    Log_Line("game", "SaveData_Load raw=%u", (unsigned)result);
+#endif
     switch (result) {
     case SAVE_LOAD_RESULT_OK:
         sv->dataExists = TRUE;

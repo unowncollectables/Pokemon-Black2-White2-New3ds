@@ -4,6 +4,20 @@
 #include "nitro/card.h"
 #include "nitro/os.h"
 
+#ifdef PBW2_N3DS
+#include "stub_log.h"
+#include <string.h>
+
+static int s_backup_host_logged;
+
+static void backup_host_log_once(void) {
+    if (!s_backup_host_logged) {
+        s_backup_host_logged = 1;
+        PBW2_STUB_LOG("save", "backup_card host (no async CARD worker)");
+    }
+}
+#endif
+
 static void setCardWrittenVerified(void *arg);
 static void unlockBackupAndReportError(u16 lockId, BOOL noResponse, BackupWriteErrorCallback callback);
 
@@ -13,6 +27,10 @@ static BOOL sWriteDone = TRUE;
 static BOOL sLocked;
 
 BOOL identifyGameCardBackup(void) {
+#ifdef PBW2_N3DS
+    backup_host_log_once();
+    return TRUE;
+#else
     s32 lock_id = OS_GetLockID();
     CARDBackupType type;
 
@@ -25,18 +43,35 @@ BOOL identifyGameCardBackup(void) {
     CARD_UnlockBackup(lock_id);
     OS_ReleaseLockID(lock_id);
     return type != 0 ? TRUE : FALSE;
+#endif
 }
 
 BOOL writeFlashWaitSuccess(u32 dest, const void *src, u32 size, BackupWriteErrorCallback callback) {
+#ifdef PBW2_N3DS
+    (void)dest;
+    (void)src;
+    (void)size;
+    (void)callback;
+    return TRUE;
+#else
     BOOL result;
     u16 lockId = startWriteFlash(dest, src, size, callback);
 
     while (!finishBackupGetResult(lockId, &result, callback)) {
     }
     return result;
+#endif
 }
 
 BOOL readFlashWaitSuccess(u32 src, void *dest, u32 size, BackupReadErrorCallback callback) {
+#ifdef PBW2_N3DS
+    (void)src;
+    (void)callback;
+    if (dest != NULL && size != 0) {
+        memset(dest, 0xFF, size);
+    }
+    return FALSE;
+#else
     s32 lock_id = OS_GetLockID();
     BOOL result;
 
@@ -50,6 +85,7 @@ BOOL readFlashWaitSuccess(u32 src, void *dest, u32 size, BackupReadErrorCallback
         callback();
     }
     return result;
+#endif
 }
 
 static void setCardWrittenVerified(void *arg) {
@@ -57,6 +93,14 @@ static void setCardWrittenVerified(void *arg) {
 }
 
 u16 startWriteFlash(u32 dest, const void *src, u32 size, BackupWriteErrorCallback callback) {
+#ifdef PBW2_N3DS
+    (void)dest;
+    (void)src;
+    (void)size;
+    (void)callback;
+    sWriteDone = TRUE;
+    return (u16)OS_GetLockID();
+#else
     u32 header;
     s32 lock_id = OS_GetLockID();
 
@@ -69,9 +113,18 @@ u16 startWriteFlash(u32 dest, const void *src, u32 size, BackupWriteErrorCallbac
     sWriteDone = FALSE;
     CARD_WriteAndVerifyBackupAsync(dest, src, size, setCardWrittenVerified, NULL);
     return lock_id;
+#endif
 }
 
 BOOL finishBackupGetResult(u16 lockId, BOOL *result, BackupWriteErrorCallback callback) {
+#ifdef PBW2_N3DS
+    (void)lockId;
+    (void)callback;
+    if (result != NULL) {
+        *result = TRUE;
+    }
+    return TRUE;
+#else
     if (sWriteDone == TRUE) {
         CARD_UnlockBackup(lockId);
         OS_ReleaseLockID(lockId);
@@ -102,9 +155,15 @@ BOOL finishBackupGetResult(u16 lockId, BOOL *result, BackupWriteErrorCallback ca
         return TRUE;
     }
     return FALSE;
+#endif
 }
 
 void cancelCardProcess(u16 lockId) {
+#ifdef PBW2_N3DS
+    (void)lockId;
+    sLocked = FALSE;
+    return;
+#else
     if (!CARD_TryWaitBackupAsync()) {
         CARD_CancelBackupAsync();
         CARD_WaitBackupAsync();
@@ -114,6 +173,7 @@ void cancelCardProcess(u16 lockId) {
         OS_ReleaseLockID(lockId);
         sLocked = FALSE;
     }
+#endif
 }
 
 static void unlockBackupAndReportError(u16 lockId, BOOL noResponse, BackupWriteErrorCallback callback) {

@@ -13,6 +13,10 @@
 #include "system/savedata/save_table.h"
 #include "system/savedata/trainer_data_savedata.h"
 
+#ifdef PBW2_N3DS
+#include "log.h"
+#endif
+
 // The game's save: loading it when the game starts, saving it a step at a time, and the extra saves. The name is the
 // ROM's string, and SaveControlWork, ctrl, sv_extra and extra_id are the names its assertions keep. The tables of the
 // saves' blocks are save_table.c's.
@@ -38,6 +42,9 @@ static SaveControl *SaveControlWork;
 SaveControl *SaveControl_Create(HeapID heapId) {
     SaveControl *ctrl;
     u32 result;
+#ifdef PBW2_N3DS
+    Log_Line("game", "SaveControl_Create enter");
+#endif
     u32 extraResult;
     SaveExtraID i;
     SaveOutside *outside;
@@ -49,10 +56,16 @@ SaveControl *SaveControl_Create(HeapID heapId) {
     ctrl->loadNotClean = TRUE;
     ctrl->dataExists = FALSE;
     ctrl->sv = SaveData_InitMain(&save_block_data, heapId);
+#ifdef PBW2_N3DS
+    Log_Line("game", "SaveData_InitMain done");
+#endif
     ctrl->memoryLink = GFL_HeapAllocate(heapId, sizeof(MemoryLinkSave), TRUE, "save_control.c", 87);
     zero476Bytes(ctrl->memoryLink);
 
     result = SaveData_Load(ctrl->sv, HEAPID_USER);
+#ifdef PBW2_N3DS
+    Log_Line("game", "SaveData_Load result=%u", (unsigned)result);
+#endif
     if ((result == SAVE_LOAD_RESULT_OK || result == SAVE_LOAD_RESULT_OK_PARTIAL) &&
         TrainerDataSave_IsIntroSave(ctrl) == TRUE) {
         result = SAVE_LOAD_RESULT_NONE;
@@ -105,8 +118,14 @@ SaveControl *SaveControl_Create(HeapID heapId) {
         break;
     }
 
+#ifdef PBW2_N3DS
+    Log_Line("game", "GFL_OvlLoad ov331 (save outside)");
+#endif
     GFL_OvlLoad(OVERLAY_SAVE_OUTSIDE);
     outside = SaveOutside_Load(HEAPID_TAIL(HEAPID_USER));
+#ifdef PBW2_N3DS
+    Log_Line("game", "SaveOutside_Load done");
+#endif
     ctrl->giftsLoaded = SaveOutside_IsGiftsLoaded(outside);
     ctrl->giftsBroken = SaveOutside_IsGiftsBroken(outside);
     ctrl->keysLoaded = SaveOutside_IsKeysLoaded(outside);
@@ -129,6 +148,10 @@ SaveControl *SaveControl_Create(HeapID heapId) {
     } else {
         ctrl->markDreamRadarRead = FALSE;
     }
+#ifdef PBW2_N3DS
+    Log_Line("game", "SaveControl_Create return newGame=%u dataExists=%u", (unsigned)ctrl->newGame,
+             (unsigned)ctrl->dataExists);
+#endif
     return ctrl;
 }
 

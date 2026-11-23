@@ -34,19 +34,12 @@ typedef int BOOL;
 // NitroSDK's alignment attribute, as in `static u8 buffer[64] ATTRIBUTE_ALIGN(32);`
 #define ATTRIBUTE_ALIGN(num) __attribute__((aligned(num)))
 
-// DS IO registers. The matching build still points them at the DS. PBW2_N3DS
-// points them at pbw2_io, a buffer in the port, so compiled game code does not
-// store to the 3DS memory map.
 #ifdef PBW2_N3DS
 extern u8 pbw2_io[];
 #define PBW2_IO(addr) (pbw2_io + ((u32)(addr) - 0x04000000u))
 #define PBW2_VU8(addr) (*(vu8 *)PBW2_IO(addr))
 #define PBW2_VU16(addr) (*(vu16 *)PBW2_IO(addr))
 #define PBW2_VU32(addr) (*(vu32 *)PBW2_IO(addr))
-#else
-#define PBW2_VU8(addr) (*(vu8 *)(addr))
-#define PBW2_VU16(addr) (*(vu16 *)(addr))
-#define PBW2_VU32(addr) (*(vu32 *)(addr))
 #endif
 
 #endif // POKEBW2_TYPES_H

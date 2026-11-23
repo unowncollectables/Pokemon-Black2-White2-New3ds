@@ -364,5 +364,4 @@ void WH_SetScanInfoCallback(void) { PBW2_STUB_LOG("link", "WH_SetScanInfoCallbac
 void allocConfigDSSoftwareFeature(void) { PBW2_STUB_LOG("link", "allocConfigDSSoftwareFeature"); }
 void getSeasonFromPlayerData(void) { PBW2_STUB_LOG("link", "getSeasonFromPlayerData"); }
 void getTextFileForFestMissions(void) { PBW2_STUB_LOG("link", "getTextFileForFestMissions"); }
-void probabilityLoop(void) { PBW2_STUB_LOG("link", "probabilityLoop"); }
 void setupNameEntry(void) { PBW2_STUB_LOG("link", "setupNameEntry"); }

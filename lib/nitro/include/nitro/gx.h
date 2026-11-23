@@ -26,58 +26,253 @@ typedef u16 GXRgb;
 #define GX_RGB_B_SHIFT 10
 #define GX_RGB_B_MASK 0x7c00
 
+#ifdef PBW2_N3DS
 #define reg_GX_DISPCNT PBW2_VU32(0x04000000)
+#else
+#define reg_GX_DISPCNT (*(vu32 *)0x04000000)
+#endif
+#ifdef PBW2_N3DS
 #define reg_GX_DISPSTAT PBW2_VU16(0x04000004)
+#else
+#define reg_GX_DISPSTAT (*(vu16 *)0x04000004)
+#endif
 #define REG_GX_DISPSTAT_VBLK_MASK 0x0001
+#ifdef PBW2_N3DS
 #define reg_G2_BG0CNT PBW2_VU16(0x04000008)
+#else
+#define reg_G2_BG0CNT (*(vu16 *)0x04000008)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2_WIN0H PBW2_VU16(0x04000040)
+#else
+#define reg_G2_WIN0H (*(vu16 *)0x04000040)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2_WIN1H PBW2_VU16(0x04000042)
+#else
+#define reg_G2_WIN1H (*(vu16 *)0x04000042)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2_WIN0V PBW2_VU16(0x04000044)
+#else
+#define reg_G2_WIN0V (*(vu16 *)0x04000044)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2_WIN1V PBW2_VU16(0x04000046)
+#else
+#define reg_G2_WIN1V (*(vu16 *)0x04000046)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2_WININ PBW2_VU16(0x04000048)
+#else
+#define reg_G2_WININ (*(vu16 *)0x04000048)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2_WINOUT PBW2_VU16(0x0400004a)
+#else
+#define reg_G2_WINOUT (*(vu16 *)0x0400004a)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2_BLDCNT PBW2_VU16(0x04000050)
+#else
+#define reg_G2_BLDCNT (*(vu16 *)0x04000050)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2_BLDALPHA PBW2_VU16(0x04000052)
+#else
+#define reg_G2_BLDALPHA (*(vu16 *)0x04000052)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3X_DISP3DCNT PBW2_VU16(0x04000060)
+#else
+#define reg_G3X_DISP3DCNT (*(vu16 *)0x04000060)
+#endif
+#ifdef PBW2_N3DS
 #define reg_GX_DISPCAPCNT PBW2_VU32(0x04000064)
+#else
+#define reg_GX_DISPCAPCNT (*(vu32 *)0x04000064)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3X_GXFIFO PBW2_VU32(0x04000400)
+#else
+#define reg_G3X_GXFIFO (*(vu32 *)0x04000400)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3_MTX_MODE PBW2_VU32(0x04000440)
+#else
+#define reg_G3_MTX_MODE (*(vu32 *)0x04000440)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3_MTX_PUSH PBW2_VU32(0x04000444)
+#else
+#define reg_G3_MTX_PUSH (*(vu32 *)0x04000444)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3_MTX_POP PBW2_VU32(0x04000448)
+#else
+#define reg_G3_MTX_POP (*(vu32 *)0x04000448)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3_MTX_STORE PBW2_VU32(0x0400044c)
+#else
+#define reg_G3_MTX_STORE (*(vu32 *)0x0400044c)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3_MTX_RESTORE PBW2_VU32(0x04000450)
+#else
+#define reg_G3_MTX_RESTORE (*(vu32 *)0x04000450)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3_MTX_IDENTITY PBW2_VU32(0x04000454)
+#else
+#define reg_G3_MTX_IDENTITY (*(vu32 *)0x04000454)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3_MTX_SCALE PBW2_VU32(0x0400046c)
+#else
+#define reg_G3_MTX_SCALE (*(vu32 *)0x0400046c)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3_MTX_TRANS PBW2_VU32(0x04000470)
+#else
+#define reg_G3_MTX_TRANS (*(vu32 *)0x04000470)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3_COLOR PBW2_VU32(0x04000480)
+#else
+#define reg_G3_COLOR (*(vu32 *)0x04000480)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3_NORMAL PBW2_VU32(0x04000484)
+#else
+#define reg_G3_NORMAL (*(vu32 *)0x04000484)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3_TEXCOORD PBW2_VU32(0x04000488)
+#else
+#define reg_G3_TEXCOORD (*(vu32 *)0x04000488)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3_VTX_16 PBW2_VU32(0x0400048c)
+#else
+#define reg_G3_VTX_16 (*(vu32 *)0x0400048c)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3_VTX_10 PBW2_VU32(0x04000490)
+#else
+#define reg_G3_VTX_10 (*(vu32 *)0x04000490)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3_POLYGON_ATTR PBW2_VU32(0x040004a4)
+#else
+#define reg_G3_POLYGON_ATTR (*(vu32 *)0x040004a4)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3_TEXIMAGE_PARAM PBW2_VU32(0x040004a8)
+#else
+#define reg_G3_TEXIMAGE_PARAM (*(vu32 *)0x040004a8)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3_TEXPLTT_BASE PBW2_VU32(0x040004ac)
+#else
+#define reg_G3_TEXPLTT_BASE (*(vu32 *)0x040004ac)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3_DIF_AMB PBW2_VU32(0x040004c0)
+#else
+#define reg_G3_DIF_AMB (*(vu32 *)0x040004c0)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3_SPE_EMI PBW2_VU32(0x040004c4)
+#else
+#define reg_G3_SPE_EMI (*(vu32 *)0x040004c4)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3_LIGHT_VECTOR PBW2_VU32(0x040004c8)
+#else
+#define reg_G3_LIGHT_VECTOR (*(vu32 *)0x040004c8)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3_LIGHT_COLOR PBW2_VU32(0x040004cc)
+#else
+#define reg_G3_LIGHT_COLOR (*(vu32 *)0x040004cc)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3_BEGIN_VTXS PBW2_VU32(0x04000500)
+#else
+#define reg_G3_BEGIN_VTXS (*(vu32 *)0x04000500)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3_END_VTXS PBW2_VU32(0x04000504)
+#else
+#define reg_G3_END_VTXS (*(vu32 *)0x04000504)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3_SWAP_BUFFERS PBW2_VU32(0x04000540)
+#else
+#define reg_G3_SWAP_BUFFERS (*(vu32 *)0x04000540)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3_VIEWPORT PBW2_VU32(0x04000580)
+#else
+#define reg_G3_VIEWPORT (*(vu32 *)0x04000580)
+#endif
 // The counts of polygons in polygon list RAM and of vertices in vertex RAM
+#ifdef PBW2_N3DS
 #define reg_G3X_LISTRAM_COUNT PBW2_VU16(0x04000604)
+#else
+#define reg_G3X_LISTRAM_COUNT (*(vu16 *)0x04000604)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3X_VTXRAM_COUNT PBW2_VU16(0x04000606)
+#else
+#define reg_G3X_VTXRAM_COUNT (*(vu16 *)0x04000606)
+#endif
+#ifdef PBW2_N3DS
 #define reg_GXS_DB_DISPCNT PBW2_VU32(0x04001000)
+#else
+#define reg_GXS_DB_DISPCNT (*(vu32 *)0x04001000)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2S_DB_WIN0H PBW2_VU16(0x04001040)
+#else
+#define reg_G2S_DB_WIN0H (*(vu16 *)0x04001040)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2S_DB_WIN1H PBW2_VU16(0x04001042)
+#else
+#define reg_G2S_DB_WIN1H (*(vu16 *)0x04001042)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2S_DB_WIN0V PBW2_VU16(0x04001044)
+#else
+#define reg_G2S_DB_WIN0V (*(vu16 *)0x04001044)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2S_DB_WIN1V PBW2_VU16(0x04001046)
+#else
+#define reg_G2S_DB_WIN1V (*(vu16 *)0x04001046)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2S_DB_WININ PBW2_VU16(0x04001048)
+#else
+#define reg_G2S_DB_WININ (*(vu16 *)0x04001048)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2S_DB_WINOUT PBW2_VU16(0x0400104a)
+#else
+#define reg_G2S_DB_WINOUT (*(vu16 *)0x0400104a)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2S_DB_BLDCNT PBW2_VU16(0x04001050)
+#else
+#define reg_G2S_DB_BLDCNT (*(vu16 *)0x04001050)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2S_DB_BLDALPHA PBW2_VU16(0x04001052)
-
+#else
+#define reg_G2S_DB_BLDALPHA (*(vu16 *)0x04001052)
+#endif
 #define REG_GX_DISPCNT_W0_SHIFT 13
 #define REG_GX_DISPCNT_W0_MASK 0x00002000
 #define REG_GX_DISPCNT_W1_MASK 0x00004000
@@ -1194,34 +1389,112 @@ static inline void G3_Vtx(fx16 x, fx16 y, fx16 z) {
     reg_G3_VTX_16 = (u32)((u16)x | ((u16)y << 16));
     reg_G3_VTX_16 = (u32)(u16)z;
 }
+#ifdef PBW2_N3DS
 #define reg_G2_BG2PA PBW2_VU16(0x04000020)
-
+#else
+#define reg_G2_BG2PA (*(vu16 *)0x04000020)
+#endif
 // A vertex with 10-bit coordinates, of 6 fractional bits
 static inline void G3_Vtx10(fx16 x, fx16 y, fx16 z) {
     reg_G3_VTX_10 = (u32)((x >> 6) & 0x3ff) | ((u32)((y >> 6) & 0x3ff) << 10) | ((u32)((z >> 6) & 0x3ff) << 20);
 }
 
 // The BG registers of both engines. The sub engine's are at the main engine's address plus 0x1000
+#ifdef PBW2_N3DS
 #define reg_G2_BG1CNT PBW2_VU16(0x0400000a)
+#else
+#define reg_G2_BG1CNT (*(vu16 *)0x0400000a)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2_BG2CNT PBW2_VU16(0x0400000c)
+#else
+#define reg_G2_BG2CNT (*(vu16 *)0x0400000c)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2_BG3CNT PBW2_VU16(0x0400000e)
+#else
+#define reg_G2_BG3CNT (*(vu16 *)0x0400000e)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2_BG0OFS PBW2_VU32(0x04000010)
+#else
+#define reg_G2_BG0OFS (*(vu32 *)0x04000010)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2_BG1OFS PBW2_VU32(0x04000014)
+#else
+#define reg_G2_BG1OFS (*(vu32 *)0x04000014)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2_BG2OFS PBW2_VU32(0x04000018)
+#else
+#define reg_G2_BG2OFS (*(vu32 *)0x04000018)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2_BG3OFS PBW2_VU32(0x0400001c)
+#else
+#define reg_G2_BG3OFS (*(vu32 *)0x0400001c)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2_BG2PA PBW2_VU16(0x04000020)
+#else
+#define reg_G2_BG2PA (*(vu16 *)0x04000020)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2_BG3PA PBW2_VU16(0x04000030)
+#else
+#define reg_G2_BG3PA (*(vu16 *)0x04000030)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2S_DB_BG0CNT PBW2_VU16(0x04001008)
+#else
+#define reg_G2S_DB_BG0CNT (*(vu16 *)0x04001008)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2S_DB_BG1CNT PBW2_VU16(0x0400100a)
+#else
+#define reg_G2S_DB_BG1CNT (*(vu16 *)0x0400100a)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2S_DB_BG2CNT PBW2_VU16(0x0400100c)
+#else
+#define reg_G2S_DB_BG2CNT (*(vu16 *)0x0400100c)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2S_DB_BG3CNT PBW2_VU16(0x0400100e)
+#else
+#define reg_G2S_DB_BG3CNT (*(vu16 *)0x0400100e)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2S_DB_BG0OFS PBW2_VU32(0x04001010)
+#else
+#define reg_G2S_DB_BG0OFS (*(vu32 *)0x04001010)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2S_DB_BG1OFS PBW2_VU32(0x04001014)
+#else
+#define reg_G2S_DB_BG1OFS (*(vu32 *)0x04001014)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2S_DB_BG2OFS PBW2_VU32(0x04001018)
+#else
+#define reg_G2S_DB_BG2OFS (*(vu32 *)0x04001018)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2S_DB_BG3OFS PBW2_VU32(0x0400101c)
+#else
+#define reg_G2S_DB_BG3OFS (*(vu32 *)0x0400101c)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2S_DB_BG2PA PBW2_VU16(0x04001020)
+#else
+#define reg_G2S_DB_BG2PA (*(vu16 *)0x04001020)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2S_DB_BG3PA PBW2_VU16(0x04001030)
-
+#else
+#define reg_G2S_DB_BG3PA (*(vu16 *)0x04001030)
+#endif
 // The fields of a BG control register. Bit 13 is the extended palette slot of BG 0 and 1, and the area overflow
 // mode of BG 2 and 3
 #define REG_G2_BG0CNT_CHARBASE_SHIFT 2
@@ -1695,18 +1968,62 @@ void GX_DispOn(void); // swan's gfxEngineEnableA
 
 // The control registers of the VRAM banks: one byte each (WRAMCNT is between G and H). A bank is given to a use by its
 // master select, and some uses take an offset to tell the banks of the same use apart
+#ifdef PBW2_N3DS
 #define reg_GX_VRAMCNT_A PBW2_VU8(0x04000240)
+#else
+#define reg_GX_VRAMCNT_A (*(vu8 *)0x04000240)
+#endif
+#ifdef PBW2_N3DS
 #define reg_GX_VRAMCNT_B PBW2_VU8(0x04000241)
+#else
+#define reg_GX_VRAMCNT_B (*(vu8 *)0x04000241)
+#endif
+#ifdef PBW2_N3DS
 #define reg_GX_VRAMCNT_C PBW2_VU8(0x04000242)
+#else
+#define reg_GX_VRAMCNT_C (*(vu8 *)0x04000242)
+#endif
+#ifdef PBW2_N3DS
 #define reg_GX_VRAMCNT_D PBW2_VU8(0x04000243)
+#else
+#define reg_GX_VRAMCNT_D (*(vu8 *)0x04000243)
+#endif
+#ifdef PBW2_N3DS
 #define reg_GX_VRAMCNT_E PBW2_VU8(0x04000244)
+#else
+#define reg_GX_VRAMCNT_E (*(vu8 *)0x04000244)
+#endif
+#ifdef PBW2_N3DS
 #define reg_GX_VRAMCNT_F PBW2_VU8(0x04000245)
+#else
+#define reg_GX_VRAMCNT_F (*(vu8 *)0x04000245)
+#endif
+#ifdef PBW2_N3DS
 #define reg_GX_VRAMCNT_G PBW2_VU8(0x04000246)
+#else
+#define reg_GX_VRAMCNT_G (*(vu8 *)0x04000246)
+#endif
+#ifdef PBW2_N3DS
 #define reg_GX_VRAMCNT_H PBW2_VU8(0x04000248)
+#else
+#define reg_GX_VRAMCNT_H (*(vu8 *)0x04000248)
+#endif
+#ifdef PBW2_N3DS
 #define reg_GX_VRAMCNT_I PBW2_VU8(0x04000249)
+#else
+#define reg_GX_VRAMCNT_I (*(vu8 *)0x04000249)
+#endif
 // A to D together, and H and I together
+#ifdef PBW2_N3DS
 #define reg_GX_VRAMCNT PBW2_VU32(0x04000240)
+#else
+#define reg_GX_VRAMCNT (*(vu32 *)0x04000240)
+#endif
+#ifdef PBW2_N3DS
 #define reg_GX_VRAM_HI_CNT PBW2_VU16(0x04000248)
+#else
+#define reg_GX_VRAM_HI_CNT (*(vu16 *)0x04000248)
+#endif
 #define REG_GX_VRAMCNT_A_MST_SHIFT 0
 #define REG_GX_VRAMCNT_A_OFS_SHIFT 3
 #define REG_GX_VRAMCNT_A_E_MASK 0x80
@@ -1848,10 +2165,26 @@ void G3X_InitMtxStack(void);                                      // swan's gfxR
 int G3X_GetBoxTestResult(s32 *result);                            // swan's gfxGetBoxTestResult
 
 // NitroSDK libgx's gx.c: the power and display registers it sets up, and its entry points
+#ifdef PBW2_N3DS
 #define reg_G2_BG2PD PBW2_VU16(0x04000026)
+#else
+#define reg_G2_BG2PD (*(vu16 *)0x04000026)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2_BG3PD PBW2_VU16(0x04000036)
+#else
+#define reg_G2_BG3PD (*(vu16 *)0x04000036)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2S_DB_BG2PD PBW2_VU16(0x04001026)
+#else
+#define reg_G2S_DB_BG2PD (*(vu16 *)0x04001026)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G2S_DB_BG3PD PBW2_VU16(0x04001036)
+#else
+#define reg_G2S_DB_BG3PD (*(vu16 *)0x04001036)
+#endif
 #define reg_GX_MASTER_BRIGHT (*(vu16 *)REG_MASTER_BRIGHT_ADDR)
 #define reg_GXS_DB_MASTER_BRIGHT (*(vu16 *)REG_DB_MASTER_BRIGHT_ADDR)
 
@@ -1946,27 +2279,77 @@ void G2x_ChangeBlendBrightness_(u32 reg, int brightness); // swan's gfxRegAdjust
 
 // NitroSDK libgx's g3imm.c and g3_util.c: matrix commands through the FIFO port, and rotations through the matrix
 // multiplication port
+#ifdef PBW2_N3DS
 #define reg_G3_MTX_MULT_3x3 PBW2_VU32(0x04000468)
-
+#else
+#define reg_G3_MTX_MULT_3x3 (*(vu32 *)0x04000468)
+#endif
 void G3_LoadMtx44(const MtxFx44 *mtx); // swan's gfxLoadMatrix4x4
 // NitroSDK's GX_SendFifo64B and GX_SendFifo48B, which copy 64 or 48 bytes to one address (gxasm.c)
 void GX_SendFifo64B(const void *src, volatile void *dest); // swan's gfxUploadMatrix4x4
 void GX_SendFifo48B(const void *src, volatile void *dest); // swan's gfxUploadMatrix4x3
 
 // NitroSDK libgx's g3x.c: the 3D engine's registers that it clears, polls and loads, and its entry points
+#ifdef PBW2_N3DS
 #define reg_G3X_GXSTAT PBW2_VU32(0x04000600)
+#else
+#define reg_G3X_GXSTAT (*(vu32 *)0x04000600)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3X_DISP_1DOT_DEPTH PBW2_VU16(0x04000610)
+#else
+#define reg_G3X_DISP_1DOT_DEPTH (*(vu16 *)0x04000610)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3X_CLIPMTX_RESULT_0 PBW2_VU32(0x04000640)
+#else
+#define reg_G3X_CLIPMTX_RESULT_0 (*(vu32 *)0x04000640)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3X_VECMTX_RESULT_0 PBW2_VU32(0x04000680)
+#else
+#define reg_G3X_VECMTX_RESULT_0 (*(vu32 *)0x04000680)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3X_EDGE_COLOR_0 PBW2_VU16(0x04000330)
+#else
+#define reg_G3X_EDGE_COLOR_0 (*(vu16 *)0x04000330)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3X_CLEAR_COLOR PBW2_VU32(0x04000350)
+#else
+#define reg_G3X_CLEAR_COLOR (*(vu32 *)0x04000350)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3X_CLEAR_DEPTH PBW2_VU16(0x04000354)
+#else
+#define reg_G3X_CLEAR_DEPTH (*(vu16 *)0x04000354)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3X_CLRIMAGE_OFFSET PBW2_VU16(0x04000356)
+#else
+#define reg_G3X_CLRIMAGE_OFFSET (*(vu16 *)0x04000356)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3X_FOG_COLOR PBW2_VU32(0x04000358)
+#else
+#define reg_G3X_FOG_COLOR (*(vu32 *)0x04000358)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3X_FOG_OFFSET PBW2_VU16(0x0400035c)
+#else
+#define reg_G3X_FOG_OFFSET (*(vu16 *)0x0400035c)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3X_FOG_TABLE_0 PBW2_VU32(0x04000360)
+#else
+#define reg_G3X_FOG_TABLE_0 (*(vu32 *)0x04000360)
+#endif
+#ifdef PBW2_N3DS
 #define reg_G3_SHININESS PBW2_VU32(0x040004d0)
-
+#else
+#define reg_G3_SHININESS (*(vu32 *)0x040004d0)
+#endif
 // GXSTAT: the box test's state and result, the matrix stacks' levels and errors, the command FIFO's state (bit 25 of
 // it, the second of the three, is set while the FIFO is less than half full) and whether the geometry engine is busy,
 // with the condition of the FIFO's interrupt

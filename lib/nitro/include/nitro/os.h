@@ -476,7 +476,9 @@ typedef struct {
 
 // The user settings that the ARM7 reads from the firmware into the shared memory (NitroSDK's NVRAMConfig), with the
 // console's MAC address after them. Of the settings, the version and the alarm are not named
+#ifdef PBW2_N3DS
 typedef struct NVRAMConfig NVRAMConfig;
+#endif
 
 typedef struct NVRAMConfigOwnerInfo {
     u8 favoriteColor : 4;
@@ -503,6 +505,7 @@ typedef struct NVRAMConfigTpCalibData {
     u8 dy2;
 } NVRAMConfigTpCalibData;
 
+#ifdef PBW2_N3DS
 struct NVRAMConfig {
     u16 unk_00; // the version and the pad byte that follow it, which the code does not read
     NVRAMConfigOwnerInfo owner;
@@ -527,11 +530,34 @@ struct NVRAMConfig {
     u8 macAddress[6];
 };
 
-#ifdef PBW2_N3DS
 extern NVRAMConfig PbW2_NvramUserInfo;
 #define HW_NVRAM_USER_INFO ((u32) &PbW2_NvramUserInfo)
 #else
 #define HW_NVRAM_USER_INFO 0x02fffc80
+
+typedef struct NVRAMConfig {
+    u16 unk_00; // the version and the pad byte that follow it, which the code does not read
+    NVRAMConfigOwnerInfo owner;
+    u8 alarm[6]; // the alarm
+    NVRAMConfigTpCalibData tp;
+    // NitroSDK's NVRAMConfigOption: the language and the flags of the settings
+    u16 language : 3;
+    u16 agbLcd : 1;
+    u16 detectPullOutCardFlag : 1;
+    u16 detectPullOutCtrdgFlag : 1;
+    u16 autoBootFlag : 1;
+    u16 : 4;
+    u16 input_favoriteColor : 1;
+    u16 input_tp : 1;
+    u16 input_language : 1;
+    u16 input_rtc : 1;
+    u16 input_nickname : 1;
+    u8 timezone;
+    u8 rtcClockAdjust;
+    s64 rtcOffset;
+    u32 unk_70;
+    u8 macAddress[6];
+} NVRAMConfig;
 #endif
 
 void OS_GetOwnerInfo(OSOwnerInfo *info);

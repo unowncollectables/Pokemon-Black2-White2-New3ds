@@ -53,7 +53,7 @@ CFLAGS += $(shell for d in $(CURDIR)/../lib/*/include; do echo -I$$d; done)
 SHELL_SRC += source/game_thread.c nitro/mi_host.c nitro/ic_dc_host.c \
 	nitro/os_more_host.c nitro/os_thread_host.c nitro/rom_header_host.c nitro/pm_host.c nitro/pxi_host.c \
 	nitro/pxi_service.c nitro/cp_div_host.c nitro/nvram_host.c nitro/dtcm_host.c nitro/link_syms.c nitro/overlay_host.c \
-	nitro/overlay_ids.c nitro/overlay_id_decode_gen.c nitro/nitro_stubs.c nitro/nns_title_stubs.c nitro/title_link_syms.c \
+	nitro/overlay_ids.c nitro/overlay_id_decode_gen.c nitro/survey_prob_host.c nitro/nitro_stubs.c nitro/nns_title_stubs.c nitro/title_link_syms.c \
 	nitro/g3_gx_stub.c nitro/g3d_glb_stubs.c nitro/mtx_stub.c nitro/link_stubs.c nitro/proc_stubs.c nitro/net_stubs.c \
 	nitro/twl_stub.c
 GAME_RSP := $(CURDIR)/../build/n3ds/$(shell echo $(GAME) | tr A-Z a-z)/game_objects.rsp
