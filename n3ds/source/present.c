@@ -12,6 +12,7 @@ void Pbw2_GspVblank(void) {
 #if defined(PBW2_LINK_GAME)
 #include "ds2d_compose.h"
 #include "game_present.h"
+#include "vram_host.h"
 #endif
 
 #include <3ds.h>
@@ -35,15 +36,17 @@ void GxShim_Present(uint32_t flags) {
     static u16 s_bottom[256 * 192];
     extern void pbw2_game_notify_present(void);
 
-    (void)PbW2_ComposeScreens(s_top, s_bottom);
-    if ((flags & PBW2_SCREEN_TOP) != 0) {
-        Present_BlitRGB565(GFX_TOP, s_top, 256, 192);
-    }
-    if ((flags & PBW2_SCREEN_BOTTOM) != 0) {
-        Present_BlitRGB565(GFX_BOTTOM, s_bottom, 256, 192);
-    }
-    if (PbW2_GameDisplayReady()) {
-        pbw2_game_notify_present();
+    if (PbW2_VramHostReady()) {
+        (void)PbW2_ComposeScreens(s_top, s_bottom);
+        if ((flags & PBW2_SCREEN_TOP) != 0) {
+            Present_BlitRGB565(GFX_TOP, s_top, 256, 192);
+        }
+        if ((flags & PBW2_SCREEN_BOTTOM) != 0) {
+            Present_BlitRGB565(GFX_BOTTOM, s_bottom, 256, 192);
+        }
+        if (PbW2_GameDisplayReady()) {
+            pbw2_game_notify_present();
+        }
     }
 #endif
     if (s_logged) {

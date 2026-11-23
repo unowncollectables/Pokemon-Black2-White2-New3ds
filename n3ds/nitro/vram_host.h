@@ -6,6 +6,7 @@
 #if defined(PBW2_LINK_GAME)
 
 void PbW2_VramHostInit(void);
+int PbW2_VramHostReady(void);
 void *PbW2_VramMap(const void *addr);
 void PbW2_VramNoteLoad(u32 bytes);
 u32 PbW2_VramLoadBytes(void);

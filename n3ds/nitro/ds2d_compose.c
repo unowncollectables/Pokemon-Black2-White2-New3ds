@@ -12,6 +12,10 @@
 
 extern u8 pbw2_io[];
 
+#define PBW2_SCR_W 256
+#define PBW2_SCR_H 192
+static u16 s_powcnt_swap_buf[PBW2_SCR_W * PBW2_SCR_H];
+
 static u16 rgb555_to_565(u16 c) {
     u32 r = c & 0x1f;
     u32 g = (c >> 5) & 0x1f;
@@ -274,10 +278,10 @@ int PbW2_ComposeScreens(u16 *top_rgb565, u16 *bottom_rgb565) {
         compose_engine(pbw2_io + 0x1000, bottom_rgb565);
     }
     if (swap && top_rgb565 && bottom_rgb565) {
-        u16 tmp[256 * 192];
-        memcpy(tmp, top_rgb565, sizeof tmp);
-        memcpy(top_rgb565, bottom_rgb565, sizeof tmp);
-        memcpy(bottom_rgb565, tmp, sizeof tmp);
+        u32 fb_bytes = PBW2_SCR_W * PBW2_SCR_H * (u32)sizeof(u16);
+        memcpy(s_powcnt_swap_buf, top_rgb565, fb_bytes);
+        memcpy(top_rgb565, bottom_rgb565, fb_bytes);
+        memcpy(bottom_rgb565, s_powcnt_swap_buf, fb_bytes);
     }
     return (top_rgb565 != NULL || bottom_rgb565 != NULL);
 }

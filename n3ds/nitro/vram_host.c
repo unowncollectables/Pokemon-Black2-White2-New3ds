@@ -20,6 +20,7 @@ static u8 s_bg[PBW2_BG_SIZE];
 static u8 s_lcdc[PBW2_LCDC_SIZE];
 static u8 s_oam[PBW2_OAM_SIZE];
 static u32 s_load_bytes;
+static int s_host_ready;
 
 void PbW2_VramHostInit(void) {
     memset(s_pltt, 0, sizeof s_pltt);
@@ -27,6 +28,11 @@ void PbW2_VramHostInit(void) {
     memset(s_lcdc, 0, sizeof s_lcdc);
     memset(s_oam, 0, sizeof s_oam);
     s_load_bytes = 0;
+    s_host_ready = 1;
+}
+
+int PbW2_VramHostReady(void) {
+    return s_host_ready != 0;
 }
 
 void *PbW2_VramMap(const void *addr) {
