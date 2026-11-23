@@ -1,126 +1,37 @@
 # AGENTS.md
 
-Handoff for the next session: [docs/HANDOFF.md](docs/HANDOFF.md). The phase list
-is [docs/PLAN.md](docs/PLAN.md). If this file disagrees with the code, trust the
-code and fix this file in the same change.
+Start here, then read [docs/HANDOFF.md](docs/HANDOFF.md) before changing
+anything. The phase list is [docs/PLAN.md](docs/PLAN.md). If a doc disagrees
+with the code, trust the code and fix the doc in the same change.
 
-The matching decomp's own agent notes are [docs/DECOMP_AGENTS.md](docs/DECOMP_AGENTS.md)
+The matching decomp's own notes are [docs/DECOMP_AGENTS.md](docs/DECOMP_AGENTS.md)
 and [CLAUDE.md](CLAUDE.md). They still apply when you edit `src/` or `lib/`
 without `PBW2_N3DS`.
 
-## 1. Goal
+## Goal
 
-A native New 3DS port of Pokémon Black 2 and White 2 (US/EU). The decompiled C
-runs on the ARM11. A platform layer owns the 3DS GPU, input, audio, and the
-save file's location. Personal, experimental, GPL-3.0. Owner: GitHub
-`unowncollectables`.
+A native New 3DS port of Pokémon Black 2 and White 2 (US/EU). Personal use,
+private repo, GPL-3.0. Owner: GitHub `unowncollectables`. Black 2 leads;
+White 2 is built from the same tree in the same change. The DS matching
+rebuild stays.
 
-Black 2 is the first game that should reach the logo and the title screen.
-White 2 is built from the same tree at every step. The DS matching rebuild
-stays.
+## Hard rules
 
-## 2. Hard rules
-
-1. Never commit ROMs, saves, extracted `extract/` output, logs, or built
-   binaries (`.nds`, `.sav`, `.3dsx`, `.cia`, `.elf`). The user supplies dumps.
-   `.gitignore` covers the common cases. Check `git status` before every commit.
-2. The save format does not change. Only the game writes the `.sav`. The
+1. Never commit ROMs, assets extracted from a ROM, saves, builds, logs, or
+   personal information (`.nds`, `extract/`, `.sav`, `.3dsx`, `.cia`, `.elf`,
+   log dumps). The user supplies their own dump. Never download a ROM.
+2. Keep the repo private. Do not force-push. Merges need the user's yes.
+3. The save format does not change. Only the game writes a `.sav`. The
    platform must not create one, and it must not write one on boot, exit, or
    from a settings toggle.
-3. Every new gameplay feature is a default-off toggle in the in-game Settings
-   screen (L+R+Y). No randomizer, cheats, or fast-forward. The game does not
-   reset or relaunch itself.
-4. New 3DS only. CIA metadata requests 804 MHz, the L2 cache, and core 2.
-   Do not design around old 3DS memory or the single extra core being absent.
-5. A 3DS process gets about 32 threads. Stop and join every worker before
-   tearing down the GPU or NDSP. `ndspExit` runs once, after the audio thread
-   has been joined.
-6. Sharp-text layers, when they exist, present with the same screen flags
-   `Present_Commit` stored for that frame.
-7. Do not force-push. Branch, open a PR, do not merge it here. Do not bump a
-   version by hand. Do not build a CIA in this repo.
+4. Every new gameplay feature is a default-off toggle in the in-game Settings
+   screen (L+R+Y). Risky features stay off until the user turns them on. No
+   randomizer, cheats, or fast-forward. The game does not reset or relaunch
+   itself.
+5. Credit reused GPL code in [n3ds/THIRD_PARTY.md](n3ds/THIRD_PARTY.md).
+6. Do not build or commit a CIA. The user builds installers with their own
+   Builder. Do not bump a version by hand.
+7. New 3DS only (804 MHz, L2, core 2). Do not design around Old 3DS limits.
 
-## 3. Architecture
-
-`src/` and `lib/` are pokebw2. `python3 configure.py && ninja` is still the
-byte-matching DS build (MWCC, ARM9). It needs the user's ROM.
-
-`n3ds/` is the 3DS program. `make -C n3ds` compiles the decomp's C with
-devkitARM for ARM11 (`scripts/n3ds_game_objects.py`) and links a separate shell
-(`n3ds/source/`). The shell is what the `.3dsx` runs today. The game's
-`main` in `src/system/main.c` is not linked into it.
-
-The shell is not a pspoke port. SoulSilver and Platinum on 3DS speak pspoke's
-`psp_*` API. This decomp speaks Nitro. Take their lessons (threads, present
-flags, save file, 804 MHz RSF, logging). Do not drop their renderer in as the
-GX implementation. Frigate (`CallanCampos/Frigate`) is the native port of this
-same decomp on PC; its `port/hal` is the map of which SDK modules a host has
-to replace. Its code is not vendored here.
-
-ARM7 is not decompiled. Sound stays a host NDSP player. This phase is silent.
-The 344 overlays should be linked statically, or loaded by a native overlay
-table, not left as DS overlay files the ARM9 swaps by hand. DSi/TWL-only code
-may stay stubbed.
-
-## 4. Build
-
-DevkitPro `3ds-dev`, `DEVKITPRO=/opt/devkitpro`. Python 3.11+. No ROM for the
-3DS shell. The matching DS build also needs ninja, clang, and the tools
-`configure.py` downloads. Details: [docs/BUILDING.md](docs/BUILDING.md).
-
-```sh
-bash scripts/n3ds_build.sh
-```
-
-`PBW2_LOCAL_SYSBASE=1` is only for a machine whose `arm-none-eabi-gcc` is not
-devkitARM's (Ubuntu's newlib). Leave it unset on a normal devkitPro install.
-
-## 5. File map
-
-| Path | What |
-| --- | --- |
-| `upstream.lock` | pokebw2 commit and the two ROM SHA1s |
-| `config/b2_us`, `config/w2_us` | Decomp configs. Arm9 delink paths match the tree |
-| `src/`, `lib/` | Game and SDK C. Two files have a `PBW2_N3DS` branch so GCC can compile them |
-| `n3ds/source/` | Shell: main, workers, log, input, settings, save shim, silent audio, present flags |
-| `n3ds/nitro/` | Host OS, IRQ, arenas, RTC, path FS, `GX_Init`, title picture from `a/0/2/6` |
-| `scripts/n3ds_stage_nitrofs.sh` | Copy `extract/<game>_us/files` to a card layout. Output stays out of git |
-| `n3ds/cia/*.rsf` | CIA access control. New 3DS clock, L2, core 2 |
-| `build/n3ds/pbw2_build_status.h` | Last `n3ds_game_objects.py` counts. Gitignored; the compiler changes the library count |
-| `scripts/n3ds_headers.py` | Constant and text headers from `generated/` and `res/text/`. No ROM |
-| `scripts/n3ds_game_objects.py` | Compiles `src/` and `lib/` for both games. `src/` must be complete |
-| `scripts/check_delinks.py` | Fails if an arm9 delink names a missing file |
-| `docs/PLAN.md` | Phases |
-
-SD layout, once a save exists, is `sdmc:/3ds/black2_3ds/` and
-`sdmc:/3ds/white2_3ds/` (`log.txt`, and the `.sav` only after the game writes
-it). The two games do not open each other's files.
-
-## 6. Settings and logging
-
-L+R+Y opens settings. B closes. START leaves the shell. There are no gameplay
-toggles yet. Do not write `config.txt` until a real toggle exists, and that
-toggle defaults off.
-
-`log.txt` is rewritten each run. Tags: `[3DS]` `[AUDIO]` `[BTN]` `[SAVE]`
-`[CFG]` `[GX]` `[LOG]`. One line per event, not per frame.
-
-## 7. Status
-
-The shell for both games links to a `.3dsx`. It asks for 804 MHz, reads ZL/ZR
-and the C-stick, joins its workers on exit, and does not write a save. Sound
-stays silent without calling `ndspInit`. An already-mounted `sdmc` is success.
-`n3ds/nitro/` is the host OS, IRQ, arenas, RTC, path FS, and `GX_Init`. With
-NitroFS staged, the shell draws the logo and the title background from
-`a/0/2/6`. Game register writes compile into `pbw2_io`, not the 3DS map.
-Game `main` is still not linked. Full notes: [docs/HANDOFF.md](docs/HANDOFF.md).
-
-## 8. Conventions
-
-- Branch `cursor/<name>-5254` for this agent's work. PR to `main`. Do not merge.
-- `PBW2_N3DS` guards code that exists only so GCC can compile the decomp. The
-  matching build does not define it.
-- Keep Black 2 and White 2 on one source tree. A change that compiles only one
-  of them is not done.
-- Say when something was not run. This shell was linked here. It was not
-  launched on a console or in an emulator.
+Full box layout, build commands, architecture, history, CI, and next steps:
+[docs/HANDOFF.md](docs/HANDOFF.md).
