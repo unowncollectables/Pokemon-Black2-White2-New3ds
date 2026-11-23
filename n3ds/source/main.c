@@ -194,12 +194,17 @@ int main(int argc, char **argv) {
         uint32_t flags = Present_Flags();
         if (PbW2_ShellShouldDrawTitle() && TitlePic_Ready()) {
             Present_DrawTitle(flags, TitlePic_Top(), TitlePic_Bottom());
-        } else if (!PbW2_GameHasPresented()) {
-            if (flags & PBW2_SCREEN_TOP) {
-                Draw_Top(new3ds);
-            }
-            if (flags & PBW2_SCREEN_BOTTOM) {
-                Draw_Bottom();
+        } else {
+#if defined(PBW2_LINK_GAME)
+            if (!PbW2_GameHasPresented())
+#endif
+            {
+                if (flags & PBW2_SCREEN_TOP) {
+                    Draw_Top(new3ds);
+                }
+                if (flags & PBW2_SCREEN_BOTTOM) {
+                    Draw_Bottom();
+                }
             }
         }
         GxShim_Present(flags);

@@ -222,8 +222,11 @@ not.
 
 Software compositor in `n3ds/nitro/ds2d_compose.c`: mode-0 text (4/8 bpp), modes **3–5**
 bitmap BG2/BG3 (8/16 bpp with BG scroll), main vs sub engines (`HW_DB_*` VRAM/pltt/OAM),
-POWCNT LCD swap (engine routing, not buffer swap). After `first game present`, the shell
-console is not drawn over the 256×192 game area (`PbW2_GameHasPresented`).
+POWCNT bit 15: main engine → upper 3DS LCD when set (`0x8000`). Extended BG pltt from
+LCDC F/G when `DISPCNT` bit 30 (slot from `BGxCNT` bit 13). Mode-5 CDemo DC bitmap
+is 8bpp + ext palette; bitmap base = `screenBase × 0x4000`. OBJ ext pltt when
+`DISPCNT` bit 31. Shell console overlay is `PBW2_LINK_GAME` only — default `.3dsx`
+must stay byte-identical to r15 (`146976` B, SHA `b7c59f88` / `fd82c634`).
 
 ## N3DS 3D path (planned; not implemented)
 
