@@ -79,7 +79,6 @@ void SystemInit(void) {
     if (amp == PM_AMP_ON) {
         PM_SetAmp(PM_AMP_OFF);
     }
-
 }
 
 void Machine_ProcessExitRequest(void) {

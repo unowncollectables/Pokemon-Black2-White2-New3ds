@@ -54,15 +54,29 @@ static u32 engine_obj_vram_base(int is_sub) {
     return is_sub ? HW_DB_OBJ_VRAM : HW_OBJ_VRAM;
 }
 
+static u32 main_bg_bank_mask(void) {
+    u32 vramcnt = *(const u32 *)(pbw2_io + 0x240);
+    u32 mask = 0;
+    u32 i;
+
+    for (i = 0; i < 4u; i++) {
+        u8 bank = (u8)((vramcnt >> (i * 8u)) & 0xffu);
+        u32 mst = bank & 7u;
+
+        if ((bank & REG_GX_VRAMCNT_A_E_MASK) != 0 && (mst == 2u || mst == 3u)) {
+            mask |= 1u << i;
+        }
+    }
+    return mask;
+}
+
 static u32 bg_screen_addr(u32 dc, u16 cnt, int is_sub, u32 bgmode, int bg) {
     u32 base = engine_bg_vram_base(is_sub);
     u32 screen_base = ((u32)cnt >> REG_G2_BG0CNT_SCREENBASE_SHIFT) & 0x1fu;
     u32 off;
 
-    if (bg >= 2 && bgmode == GX_BGMODE_5 && (cnt & REG_G2_BG0CNT_COLORMODE_MASK)) {
-        return base + screen_base * 0x4000u;
-    }
     if (bg >= 2 && bgmode >= GX_BGMODE_3 && bgmode <= GX_BGMODE_5 && (cnt & REG_G2_BG0CNT_COLORMODE_MASK)) {
+        (void)main_bg_bank_mask();
         return base + screen_base * 0x4000u;
     }
     off = screen_base * 0x800u;
@@ -177,10 +191,36 @@ static void bitmap_dims(u16 cnt, int *bw, int *bh) {
     }
 }
 
+static void log_mode5_bitmap_once(int bg, u16 cnt, u32 bmp_addr, int is16, const u16 *pix16) {
+    static u8 s_logged[2];
+    u32 opaque;
+    u32 i;
+
+    if (bg < 2 || bg > 3 || s_logged[bg - 2]) {
+        return;
+    }
+    s_logged[bg - 2] = 1;
+    opaque = 0;
+    if (is16 && pix16 != NULL) {
+        for (i = 0; i < 256u * 256u; i++) {
+            if ((pix16[i] & 0x8000u) != 0) {
+                opaque++;
+            }
+        }
+    }
+    Log_Line("GX",
+             "mode5 bg%d cnt=0x%04x is16=%d addr=0x%08x bank_mask=0x%x samp=0x%04x,0x%04x,0x%04x,0x%04x "
+             "opaque=%u",
+             bg, (unsigned)cnt, is16, (unsigned)bmp_addr, (unsigned)main_bg_bank_mask(),
+             pix16 ? (unsigned)pix16[0] : 0u, pix16 ? (unsigned)pix16[1] : 0u, pix16 ? (unsigned)pix16[2] : 0u,
+             pix16 ? (unsigned)pix16[3] : 0u, (unsigned)opaque);
+}
+
 static void compose_bitmap_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmode, u16 *out) {
     u16 cnt = reg_u16(regs, 8 + bg * 2);
     const u8 *bmp;
     const u16 *pltt;
+    u32 bmp_addr;
     int bw;
     int bh;
     int is16;
@@ -195,21 +235,12 @@ static void compose_bitmap_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bg
     if ((cnt & REG_G2_BG0CNT_COLORMODE_MASK) == 0) {
         return;
     }
-    /*
-     * CDemo (G2_SetBG*ControlDCBmp) sets GX_BG_EXTMODE_DCBMP (0x84). Movie frames
-     * are 8bpp indexed; treat mode-5 DC bitmap layers as 8bpp regardless of bit 2.
-     */
+    /* bit7=1 bitmap; bit2=1 direct color 16bpp (ABGR1555, bit15 opaque). */
     is16 = (cnt & 0x0004u) != 0;
-    if (bgmode == GX_BGMODE_5) {
-        is16 = 0;
-    }
-    bmp = vram_ptr(bg_screen_addr(dc, cnt, is_sub, bgmode, bg));
+    bmp_addr = bg_screen_addr(dc, cnt, is_sub, bgmode, bg);
+    bmp = vram_ptr(bmp_addr);
     pltt = bg_layer_pltt(dc, cnt, is_sub, bg);
     bitmap_dims(cnt, &bw, &bh);
-    if (bgmode == GX_BGMODE_5 && is16) {
-        bw = 256;
-        bh = 192;
-    }
     if (bg == 2) {
         scroll_x = (s16)reg_u16(regs, 0x28);
         scroll_y = (s16)reg_u16(regs, 0x2a);
@@ -220,6 +251,10 @@ static void compose_bitmap_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bg
 
     if (is16) {
         const u16 *pix16 = (const u16 *)(const void *)bmp;
+
+        if (bgmode == GX_BGMODE_5) {
+            log_mode5_bitmap_once(bg, cnt, bmp_addr, is16, pix16);
+        }
         for (y = 0; y < 192; y++) {
             int sy = y + scroll_y;
             for (x = 0; x < 256; x++) {
@@ -232,13 +267,16 @@ static void compose_bitmap_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bg
                 }
                 src = (u32)sy * (u32)bw + (u32)sx;
                 c = pix16[src];
-                if (c == 0) {
+                if ((c & 0x8000u) == 0) {
                     continue;
                 }
-                out[y * 256 + x] = rgb555_to_565(c);
+                out[y * 256 + x] = rgb555_to_565(c & 0x7fffu);
             }
         }
     } else {
+        if (bgmode == GX_BGMODE_5) {
+            log_mode5_bitmap_once(bg, cnt, bmp_addr, is16, NULL);
+        }
         for (y = 0; y < 192; y++) {
             int sy = y + scroll_y;
             for (x = 0; x < 256; x++) {

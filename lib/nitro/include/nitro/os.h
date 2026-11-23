@@ -536,7 +536,7 @@ struct NVRAMConfig {
 };
 
 extern NVRAMConfig PbW2_NvramUserInfo;
-#define HW_NVRAM_USER_INFO ((u32) &PbW2_NvramUserInfo)
+#define HW_NVRAM_USER_INFO ((u32)&PbW2_NvramUserInfo)
 #else
 #define HW_NVRAM_USER_INFO 0x02fffc80
 
