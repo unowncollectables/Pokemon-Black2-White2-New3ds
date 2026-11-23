@@ -18,7 +18,10 @@ DATA_OR_HOSTED = {
     "NNS_G3dGlb", "GXi_VRamLockId", "OSi_TickCounter",
     "NAME_ENTRY_PROC_FUNCTIONS", "NAME_ENTRY_SOUNDS", "NAME_ENTRY_SOUND_COUNT",
     "FIELDMAP_PROC_FUNCS", "DSProt_Callbacks", "DSProt_NopIndex",
-    "NNS_FndAllocFromExpHeapEx", "NNS_G2dGetUnpackedCellBank",
+    "NNS_FndCreateExpHeapEx", "NNS_FndDestroyExpHeap", "NNS_FndAllocFromExpHeapEx",
+    "NNS_FndFreeToExpHeap", "NNS_FndGetAllocatableSizeForExpHeapEx", "NNS_FndGetSizeForMBlockExpHeap",
+    "NNS_FndGetTotalFreeSizeForExpHeap", "NNS_FndInitAllocatorForExpHeap", "NNS_FndResizeForMBlockExpHeap",
+    "NNS_FndVisitAllocatedForExpHeap", "NNS_G2dGetUnpackedCellBank",
     "NNS_G2dGetUnpackedCharacterData", "NNS_G2dGetUnpackedMultiCellBank",
     "FS_SetDefaultDMA", "NNS_SndArcInit", "NNS_SndArcSetup",
 }

@@ -97,8 +97,12 @@ def lib_nitro_path_ok(src: str) -> bool:
     return src.startswith("lib/nitro/")
 
 
+def lib_nnsys_path_ok(src: str) -> bool:
+    return src.startswith("lib/nnsys/src/fnd/")
+
+
 def eligible(src: str) -> bool:
-    return src_path_ok(src) or lib_nitro_path_ok(src)
+    return src_path_ok(src) or lib_nitro_path_ok(src) or lib_nnsys_path_ok(src)
 
 
 def symbol_index(objdir: Path) -> dict[str, Path]:

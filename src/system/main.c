@@ -21,6 +21,10 @@
 #include "system/gfl_use.h"
 #include "system/machine_use.h"
 #include "system/main.h"
+
+#ifdef PBW2_N3DS
+#include "log.h"
+#endif
 #include "system/printsys.h"
 #include "system/savedata/save_control.h"
 #include "system/savedata/trainer_data_savedata.h"
@@ -124,6 +128,9 @@ static void GameUpdateVBlank(void) {
 }
 
 static void GameInit(void) {
+#ifdef PBW2_N3DS
+    Log_Line("game", "GameInit enter");
+#endif
     GFL_OvlLoad(OVERLAY_ID(12));
     GFL_OvlLoad(OVERLAY_ID(27));
     GFL_TextRndInit(0);

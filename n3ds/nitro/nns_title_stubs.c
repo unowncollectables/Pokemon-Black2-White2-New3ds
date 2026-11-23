@@ -1,17 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "nitro/fs.h"
-#include "nnsys/fnd.h"
 #include "nnsys/g2d.h"
 #include "nnsys/snd.h"
 #include "stub_log.h"
-
-void *NNS_FndAllocFromExpHeapEx(NNSFndHeapHandle heap, u32 size, int alignment) {
-    (void)heap;
-    (void)size;
-    (void)alignment;
-    PBW2_STUB_LOG("NNS", "FndAllocFromExpHeapEx");
-    return NULL;
-}
 
 BOOL NNS_G2dGetUnpackedCellBank(void *file, NNSG2dCellDataBank **cells) {
     (void)file;

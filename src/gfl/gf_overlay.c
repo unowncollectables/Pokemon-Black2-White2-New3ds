@@ -5,6 +5,10 @@
 #include "nitro/fs.h"
 #include "nitro/os.h"
 
+#ifdef PBW2_N3DS
+#include "log.h"
+#endif
+
 // The memory an overlay is loaded to
 enum {
     OVL_REGION_MAIN,
@@ -91,6 +95,9 @@ BOOL GFL_OvlLoad(u32 overlayId) {
         return TRUE;
     }
     if (!GFL_OvlCheckMemoryCollision(overlayId)) {
+#ifdef PBW2_N3DS
+        Log_Line("overlay", "GFL_OvlLoad id=%u collision", (unsigned)overlayId);
+#endif
         return FALSE;
     }
     region = GFL_OvlGetMemoryRegion(overlayId);
@@ -107,6 +114,9 @@ BOOL GFL_OvlLoad(u32 overlayId) {
     }
     if (i >= count) {
         GFL_ASSERT(0);
+#ifdef PBW2_N3DS
+        Log_Line("overlay", "GFL_OvlLoad id=%u no slot", (unsigned)overlayId);
+#endif
         return FALSE;
     }
     // Tightly coupled memory can't be written by DMA
@@ -121,6 +131,9 @@ BOOL GFL_OvlLoad(u32 overlayId) {
     if (loaded) {
         result = TRUE;
     }
+#ifdef PBW2_N3DS
+    Log_Line("overlay", "GFL_OvlLoad id=%u %s", (unsigned)overlayId, result ? "ok" : "fail");
+#endif
     return result;
 }
 

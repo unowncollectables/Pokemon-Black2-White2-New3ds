@@ -140,15 +140,6 @@ void MusComm_ExitWait(void) { PBW2_STUB_LOG("link", "MusComm_ExitWait"); }
 void MusComm_Init(void) { PBW2_STUB_LOG("link", "MusComm_Init"); }
 void MusComm_Update(void) { PBW2_STUB_LOG("link", "MusComm_Update"); }
 void NCFG_ReadConfigEx(void) { PBW2_STUB_LOG("link", "NCFG_ReadConfigEx"); }
-void NNS_FndCreateExpHeapEx(void) { PBW2_STUB_LOG("link", "NNS_FndCreateExpHeapEx"); }
-void NNS_FndDestroyExpHeap(void) { PBW2_STUB_LOG("link", "NNS_FndDestroyExpHeap"); }
-void NNS_FndFreeToExpHeap(void) { PBW2_STUB_LOG("link", "NNS_FndFreeToExpHeap"); }
-void NNS_FndGetAllocatableSizeForExpHeapEx(void) { PBW2_STUB_LOG("link", "NNS_FndGetAllocatableSizeForExpHeapEx"); }
-void NNS_FndGetSizeForMBlockExpHeap(void) { PBW2_STUB_LOG("link", "NNS_FndGetSizeForMBlockExpHeap"); }
-void NNS_FndGetTotalFreeSizeForExpHeap(void) { PBW2_STUB_LOG("link", "NNS_FndGetTotalFreeSizeForExpHeap"); }
-void NNS_FndInitAllocatorForExpHeap(void) { PBW2_STUB_LOG("link", "NNS_FndInitAllocatorForExpHeap"); }
-void NNS_FndResizeForMBlockExpHeap(void) { PBW2_STUB_LOG("link", "NNS_FndResizeForMBlockExpHeap"); }
-void NNS_FndVisitAllocatedForExpHeap(void) { PBW2_STUB_LOG("link", "NNS_FndVisitAllocatedForExpHeap"); }
 void NNS_G2dAddRendererTargetSurface(void) { PBW2_STUB_LOG("link", "NNS_G2dAddRendererTargetSurface"); }
 void NNS_G2dApplyOamManagerToHW(void) { PBW2_STUB_LOG("link", "NNS_G2dApplyOamManagerToHW"); }
 void NNS_G2dBeginRenderingEx(void) { PBW2_STUB_LOG("link", "NNS_G2dBeginRenderingEx"); }

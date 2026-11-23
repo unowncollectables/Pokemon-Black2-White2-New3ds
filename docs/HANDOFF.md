@@ -146,6 +146,22 @@ go through Nitro OS, GX, and the overlay loader. Much of that C compiles,
 and then touches DS registers or is still MWCC assembly. Register writes
 from game C land in `pbw2_io`. DSi/TWL stays stubbed. Sound stays silent.
 
+## Title-link closure: DS address hotspots (grep, box r7)
+
+Scan of sources in the boot/title `game_objects.rsp` (~259 objects after
+linking `lib/nnsys/src/fnd/*`):
+
+| Pattern | Notes |
+|---------|--------|
+| `0x02xxxxxx` literals | `lib/nitro/src/os/os_alloc.c` **extra heap** — hosted on 3DS with `PBW2_N3DS` (`OS_AllocFromArenaLo`). Also `card_rom.c`, `snd_bank.c`, `spi/tp.c`, `gf_overlay.c` (ITCM bounds), `resonance_resort_data.c`. |
+| `HW_DTCM` / `HW_ITCM` | `heap_dtcm.c`, `gf_overlay.c` — DTCM uses host `SDK_AUTOLOAD_DTCM_START`; ITCM overlay path still DS-sized constants in game overlay manager. |
+| `reg_*` / `0x04xxxxxx` | Nitro GX/MI/OS paths in closure (`gx_bgcnt`, `gx_vramcnt`, `mi_dma*`, `snd_command`, game `dma_vblank.c`). Most display goes through `gx_host.c` shims; direct register writes remain a risk until audited per file. |
+| `HW_OAM` | `gx_layers.c`, `wm_icon.c` — OAM via game GX helpers; host must not touch DS OAM addresses. |
+
+Excluded from closure (host instead): `lib/nitro/src/os/os_arena.c`,
+`spi/pm.c`, all of `pxi/*`. Next hangs are more likely **typed** stubs or
+unmapped literals in pulled Nitro objects than Fnd heaps once r7 is on the box.
+
 ## Recommended next steps
 
 1. On the devkitARM 16 machine, `bash scripts/n3ds_build.sh`. Confirm the
@@ -153,16 +169,18 @@ from game C land in `pbw2_io`. DSi/TWL stays stubbed. Sound stays silent.
    staged and confirm the logo over the title background, the lower screen,
    no crash, and no `.sav`. Then White 2, in its own directory.
 2. Experimental title link: after `game-objects`, `python3
-   scripts/n3ds_link_closure.py` builds a boot/title `game_objects.rsp` (~253
-   objects; wifi/field/app trees excluded; `lib/nitro/src/spi/pm.c` and
-   `lib/nitro/src/pxi/*` excluded — host `pm_host.c` / `pxi_host.c` instead).
+   scripts/n3ds_link_closure.py` builds a boot/title `game_objects.rsp` (~259
+   objects; includes `lib/nnsys/src/fnd/*`; wifi/field/app trees excluded;
+   `lib/nitro/src/spi/pm.c` and `lib/nitro/src/pxi/*` excluded — host
+   `pm_host.c` / `pxi_host.c` instead).
    `PBW2_LINK_GAME=1 make -C n3ds b2 w2` links `Pbw2_GameMain` on a worker
    thread. Stage overlays on SD only:
    `sdmc:/3ds/<game>_3ds/overlays/arm9_ovt.bin`, `ov012.bin`, `ov027.bin`.
-   After `SystemInit` the game should pass `PM_GetAmp` (no PXI wait); the
-   shell stops drawing `TitlePic` once `pbw2_game_system_init_done` runs.
-   Stub hits go to `log.txt` via `Log_Line` (`PBW2_STUB_LOG`). Default
-   `n3ds_build.sh` does not set `PBW2_LINK_GAME`.
+   After `SystemInit` expect `GFLAppInit enter`, working Fnd heaps (no
+   `0x02000000` writes from `OS_CreateExtraHeap`), then `GameInit enter`,
+   `GFL_OvlLoad id=12/27 ok` when overlays are staged; stub hits and overlay
+   host lines in `log.txt`. Shell stops TitlePic after `pbw2_game_system_init_done`.
+   Default `n3ds_build.sh` does not set `PBW2_LINK_GAME`.
 3. Do not write the save from the platform when the game starts calling
    `Save_GameWrite`. Remove the refusal in that function at the same time the
    game becomes the caller, and keep the bytes the cartridge format.

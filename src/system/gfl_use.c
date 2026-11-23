@@ -23,6 +23,10 @@
 #include "system/net_define.h"
 #include "system/save_error.h"
 
+#ifdef PBW2_N3DS
+#include "log.h"
+#endif
+
 // The game's setup of the GFL library, which the ROM names: the heaps, the archive paths, the tasks that run in the
 // HBlank and after the VBlank, the VBlank callback and the linear congruential random numbers. Names from swan
 // (https://github.com/ds-pokemon-hacking/swan, GPL-3.0), except those of the types and the statics
@@ -105,6 +109,9 @@ static void *sExtraHeapMemory;
 static GFLUseWork *sWork;
 
 void GFLAppInit(void) {
+#ifdef PBW2_N3DS
+    Log_Line("game", "GFLAppInit enter");
+#endif
     if (!OS_IsRunOnTwl()) {
         void *end = OS_GetArenaHi(OS_ARENA_MAIN);
         void *start = OS_GetArenaLo(OS_ARENA_MAIN);

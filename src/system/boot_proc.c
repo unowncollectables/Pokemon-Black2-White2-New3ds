@@ -6,6 +6,10 @@
 #include "gfl/overlay.h"
 #include "gfl/proc.h"
 
+#ifdef PBW2_N3DS
+#include "log.h"
+#endif
+
 // The first process of the game: the boot screens, the Game Freak logo, the opening and the title screen, over and
 // over. The file's name is a guess, from what it does: the ROM has no string for it
 
@@ -27,6 +31,13 @@ static BootScreensParam sBootScreensParam;
 static CDemoParam sCDemoParam;
 
 static BOOL StartMenuEventInit(GameProc *proc, u32 *state, void *param, void *work) {
+#ifdef PBW2_N3DS
+    (void)proc;
+    (void)state;
+    (void)param;
+    (void)work;
+    Log_Line("game", "boot_proc enter");
+#endif
     return TRUE;
 }
 
@@ -53,6 +64,9 @@ static BOOL StartMenuEventTick(GameProc *proc, u32 *state, void *param, void *wo
         *state = 3;
         break;
     case 3:
+#ifdef PBW2_N3DS
+        Log_Line("game", "title proc queued (overlay 162)");
+#endif
         GCTX_ProcMgrQueueProc(OVERLAY_ID(162), &TITLE_PROC_FUNCTIONS, NULL);
         *state = 0;
         break;

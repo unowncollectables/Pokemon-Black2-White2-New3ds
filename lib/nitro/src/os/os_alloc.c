@@ -247,7 +247,15 @@ OSHeapHandle OS_CreateExtraHeap(OSArenaId arena) {
             hp = &info->heapArray[heap];
             if (hp->size < 0) {
                 hp->size = 0x4000;
+#ifdef PBW2_N3DS
+                cell = (Cell *)OS_AllocFromArenaLo(arena, (u32)hp->size, (u32)ALIGNMENT);
+                if (cell == NULL) {
+                    OS_RestoreInterrupts(irq);
+                    return -1;
+                }
+#else
                 cell = (Cell *)0x02000000;
+#endif
                 cell->prev = NULL;
                 cell->next = NULL;
                 cell->size = 0x4000;

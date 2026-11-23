@@ -39,7 +39,7 @@ def arch(cc: str) -> list[str]:
 
 
 def includes() -> list[str]:
-    found = ["-Iinclude", "-Ibuild/include/generated"]
+    found = ["-Iinclude", "-Ibuild/include/generated", "-In3ds/source"]
     for path in sorted((ROOT / "lib").glob("*/include")):
         found.append(f"-I{path.relative_to(ROOT).as_posix()}")
     return found

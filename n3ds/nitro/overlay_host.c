@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Load arm9 overlays from staged bins under sdmc:/3ds/<game>_3ds/overlays/. */
+#include "log.h"
 #include "nitro/fs.h"
 #include "nitro/mi.h"
 #include "stub_log.h"
@@ -88,7 +89,7 @@ void PBW2_OverlayHostInit(void) {
     }
     fclose(fp);
     s_tableBytes = headerBytes;
-    printf("overlay host: arm9_ovt %u bytes\n", headerBytes);
+    Log_Line("overlay", "arm9_ovt %u bytes", headerBytes);
 }
 
 static HostedOverlay *slot_for(u32 id) {
@@ -155,8 +156,8 @@ BOOL FS_LoadOverlay(MIProcessor target, FSOverlayID id) {
         MI_CpuFill8(info.ramAddress + info.ramSize, 0, info.bssSize);
     }
     slot->loaded = 1;
-    printf("overlay host: loaded %u at %p (%u+%u)\n", (unsigned)id, (void *)info.ramAddress,
-           (unsigned)info.ramSize, (unsigned)info.bssSize);
+    Log_Line("overlay", "loaded id=%u size=%u bss=%u", (unsigned)id, (unsigned)info.ramSize,
+             (unsigned)info.bssSize);
     return TRUE;
 }
 
