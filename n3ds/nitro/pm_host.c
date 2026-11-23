@@ -37,6 +37,9 @@ void PM_ReadyToExit(void) {
     PBW2_STUB_LOG("PM", "ReadyToExit blocked");
 }
 
+void PMi_SetDispOffCount(void) {
+}
+
 BOOL PM_GetAutoExit(void) {
     return FALSE;
 }

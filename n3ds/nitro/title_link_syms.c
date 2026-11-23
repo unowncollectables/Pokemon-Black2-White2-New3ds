@@ -21,6 +21,7 @@ const u16 NNSi_objSizeHTbl[3][4] = {
 };
 
 u16 GXi_VRamLockId;
+u32 GXi_DmaId = GX_DEFAULT_DMAID;
 volatile u64 OSi_TickCounter;
 
 NNSG3dGlb NNS_G3dGlb;

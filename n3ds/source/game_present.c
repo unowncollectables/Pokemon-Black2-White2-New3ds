@@ -12,7 +12,7 @@ void pbw2_game_system_init_done(void) {
 void pbw2_game_notify_present(void) {
     if (!s_game_has_presented) {
         s_game_has_presented = 1;
-        Log_Line("GX", "first game present");
+        Log_Line("GX", "first game present (display on + VRAM loaded)");
     }
 }
 

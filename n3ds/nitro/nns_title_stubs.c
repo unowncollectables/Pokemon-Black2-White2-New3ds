@@ -1,29 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "nitro/fs.h"
-#include "nnsys/g2d.h"
 #include "nnsys/snd.h"
 #include "stub_log.h"
-
-BOOL NNS_G2dGetUnpackedCellBank(void *file, NNSG2dCellDataBank **cells) {
-    (void)file;
-    (void)cells;
-    PBW2_STUB_LOG("NNS", "G2dGetUnpackedCellBank");
-    return FALSE;
-}
-
-BOOL NNS_G2dGetUnpackedCharacterData(void *file, NNSG2dCharacterData **character) {
-    (void)file;
-    (void)character;
-    PBW2_STUB_LOG("NNS", "G2dGetUnpackedCharacterData");
-    return FALSE;
-}
-
-BOOL NNS_G2dGetUnpackedMultiCellBank(void *file, NNSG2dMultiCellDataBank **cells) {
-    (void)file;
-    (void)cells;
-    PBW2_STUB_LOG("NNS", "G2dGetUnpackedMultiCellBank");
-    return FALSE;
-}
 
 u32 FS_SetDefaultDMA(u32 dma) {
     (void)dma;

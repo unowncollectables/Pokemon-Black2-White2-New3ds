@@ -4,9 +4,36 @@
 
 #include <string.h>
 
+#if defined(PBW2_LINK_GAME)
+#include "vram_host.h"
+
+static void *pbw2_map_ptr(const void *p) {
+    void *m;
+
+    if (p == NULL) {
+        return NULL;
+    }
+    m = PbW2_VramMap(p);
+    return m;
+}
+
+static void pbw2_note_copy(void *dest, u32 size) {
+    if ((u32)(uintptr_t)dest >= 0x05000000u && (u32)(uintptr_t)dest < 0x08000000u) {
+        PbW2_VramNoteLoad(size);
+    }
+}
+#endif
+
 void MI_CpuCopy8(const void *src, void *dest, u32 size) {
     if (size && src && dest) {
+#if defined(PBW2_LINK_GAME)
+        void *d = pbw2_map_ptr(dest);
+        const void *s = pbw2_map_ptr(src);
+        pbw2_note_copy(dest, size);
+        memcpy(d, s, size);
+#else
         memcpy(dest, src, size);
+#endif
     }
 }
 
@@ -36,10 +63,20 @@ void MI_CpuFill(void *dest, u32 value, u32 size) {
 }
 
 void MIi_CpuCopy32(const void *src, void *dest, u32 size) {
+#if defined(PBW2_LINK_GAME)
+    void *d = pbw2_map_ptr(dest);
+    const void *s = pbw2_map_ptr(src);
+    pbw2_note_copy(dest, size);
+    memcpy(d, s, size);
+#else
     memcpy(dest, src, size);
+#endif
 }
 
 void MIi_CpuClear32(u32 value, void *dest, u32 size) {
+#if defined(PBW2_LINK_GAME)
+    dest = pbw2_map_ptr(dest);
+#endif
     u32 *p = dest;
     u32 words = size / 4u;
     u32 i;
@@ -65,11 +102,21 @@ void MI_CpuMove(const void *src, void *dest, u32 size) {
 }
 
 void MIi_CpuCopy16(const void *src, void *dest, u32 size) {
+#if defined(PBW2_LINK_GAME)
+    void *d = pbw2_map_ptr(dest);
+    const void *s = pbw2_map_ptr(src);
+    pbw2_note_copy(dest, size);
+    memcpy(d, s, size);
+#else
     memcpy(dest, src, size);
+#endif
 }
 
 void MIi_CpuClear16(u16 value, void *dest, u32 size) {
     u32 i;
+#if defined(PBW2_LINK_GAME)
+    dest = pbw2_map_ptr(dest);
+#endif
     u16 *p = dest;
     u32 words = size / 2u;
     for (i = 0; i < words; i++) {
@@ -82,7 +129,14 @@ void MIi_CpuCopyFast(const void *src, void *dest, u32 size) {
 }
 
 void MIi_CpuSend32(const void *src, volatile void *dest, u32 size) {
-  memcpy((void *)dest, src, size);
+#if defined(PBW2_LINK_GAME)
+    void *d = pbw2_map_ptr((void *)dest);
+    const void *s = pbw2_map_ptr(src);
+    pbw2_note_copy((void *)dest, size);
+    memcpy(d, s, size);
+#else
+    memcpy((void *)dest, src, size);
+#endif
 }
 
 int MI_CpuComp8(const void *a, const void *b, u32 size) {
@@ -105,3 +159,31 @@ void MI_Copy64B(const void *src, void *dest) {
 void MI_Zero36B(void *dest) {
     MI_CpuFill8(dest, 0, 36);
 }
+
+#if defined(PBW2_LINK_GAME)
+void MI_NDmaCopy(u32 dma, const void *src, void *dest, u32 size) {
+    (void)dma;
+    MIi_CpuCopy32(src, dest, size);
+}
+
+void MI_NDmaFill(u32 dma, void *dest, u32 value, u32 size) {
+    (void)dma;
+    MIi_CpuClear32(value, dest, size);
+}
+
+void MI_NDmaCopyAsync(u32 dma, const void *src, void *dest, u32 size, void (*cb)(void *), void *arg) {
+    (void)dma;
+    MIi_CpuCopy32(src, dest, size);
+    if (cb) {
+        cb(arg);
+    }
+}
+
+void MI_NDmaFillAsync(u32 dma, void *dest, u32 value, u32 size, void (*cb)(void *), void *arg) {
+    (void)dma;
+    MIi_CpuClear32(value, dest, size);
+    if (cb) {
+        cb(arg);
+    }
+}
+#endif

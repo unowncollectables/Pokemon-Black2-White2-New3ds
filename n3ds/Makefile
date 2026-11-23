@@ -48,6 +48,16 @@ SHELL_SRC := source/main.c source/log.c source/workers.c source/audio.c source/s
 	nitro/title_pic.c $(SHIM)
 
 ifeq ($(PBW2_LINK_GAME),1)
+GAME_SYM := $(shell echo $(GAME) | tr A-Z a-z)
+LIB_GAME_OBJS := \
+	../build/n3ds/$(GAME_SYM)/obj/lib/nitro/src/gx/gx_load2d.o \
+	../build/n3ds/$(GAME_SYM)/obj/lib/nnsys/src/g2d/g2d_Load.o \
+	../build/n3ds/$(GAME_SYM)/obj/lib/nnsys/src/g2d/g2d_NCG_load.o \
+	../build/n3ds/$(GAME_SYM)/obj/lib/nnsys/src/g2d/g2d_NCL_load.o \
+	../build/n3ds/$(GAME_SYM)/obj/lib/nnsys/src/g2d/g2d_NSC_load.o \
+	../build/n3ds/$(GAME_SYM)/obj/lib/nnsys/src/g2d/g2d_NAN_load.o \
+	../build/n3ds/$(GAME_SYM)/obj/lib/nnsys/src/g2d/g2d_NCE_load.o \
+	../build/n3ds/$(GAME_SYM)/obj/lib/nnsys/src/g2d/g2d_NMC_load.o
 CFLAGS += -DPBW2_LINK_GAME=1
 CFLAGS += $(shell for d in $(CURDIR)/../lib/*/include; do echo -I$$d; done)
 SHELL_SRC += source/game_thread.c nitro/mi_host.c nitro/ic_dc_host.c \
@@ -55,7 +65,7 @@ SHELL_SRC += source/game_thread.c nitro/mi_host.c nitro/ic_dc_host.c \
 	nitro/pxi_service.c nitro/cp_div_host.c nitro/nvram_host.c nitro/dtcm_host.c nitro/link_syms.c nitro/overlay_host.c \
 	nitro/overlay_ids.c nitro/overlay_id_decode_gen.c nitro/survey_prob_host.c nitro/nitro_stubs.c nitro/nns_title_stubs.c nitro/title_link_syms.c \
 	nitro/g3_gx_stub.c nitro/g3d_glb_stubs.c nitro/mtx_stub.c nitro/link_stubs.c nitro/proc_stubs.c nitro/net_stubs.c \
-	nitro/twl_stub.c nitro/pad_host.c
+	nitro/twl_stub.c nitro/pad_host.c nitro/vram_host.c nitro/ds2d_compose.c
 GAME_RSP := $(CURDIR)/../build/n3ds/$(shell echo $(GAME) | tr A-Z a-z)/game_objects.rsp
 GAME_LDFLAGS := @$(GAME_RSP)
 else
@@ -99,7 +109,7 @@ $(BUILD)/$(TARGET).3dsx: $(BUILD)/$(TARGET).elf
 
 $(BUILD)/$(TARGET).elf: $(SHELL_SRC) include/pbw2_port.h ../build/n3ds/pbw2_build_status.h
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) $(GAMEFLAGS) $(SHELL_SRC) $(LDFLAGS) $(GAME_LDFLAGS) $(LIBPATHS) $(LIBS) \
+	$(CC) $(CFLAGS) $(GAMEFLAGS) $(SHELL_SRC) $(LDFLAGS) $(GAME_LDFLAGS) $(LIB_GAME_OBJS) $(LIBPATHS) $(LIBS) \
 		-Wl,-Map,$(BUILD)/$(TARGET).map -o $@
 
 clean:
