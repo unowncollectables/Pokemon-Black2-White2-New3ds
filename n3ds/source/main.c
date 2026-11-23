@@ -75,37 +75,6 @@ static u32 Pad_FromHid(u32 held) {
     return pad;
 }
 
-/* The 3DS framebuffer is the landscape picture rotated 90 degrees
- * counterclockwise: 240 wide in memory, 400 or 320 tall. */
-static void Blit_Pic(gfxScreen_t screen, const uint16_t *pic, int screen_w, int screen_h) {
-    u16 width = 0;
-    u16 height = 0;
-    u16 *fb = (u16 *)gfxGetFramebuffer(screen, GFX_LEFT, &width, &height);
-    int ox = (screen_w - 256) / 2;
-    int oy = (screen_h - 192) / 2;
-    int y;
-    int x;
-    if (!fb || width == 0) {
-        return;
-    }
-    for (y = 0; y < screen_h; y++) {
-        for (x = 0; x < screen_w; x++) {
-            fb[(u32)x * width + (u32)(width - 1 - y)] = 0;
-        }
-    }
-    (void)height;
-    for (y = 0; y < 192; y++) {
-        for (x = 0; x < 256; x++) {
-            int sx = ox + x;
-            int sy = oy + y;
-            if (sx < 0 || sy < 0 || sx >= screen_w || sy >= screen_h) {
-                continue;
-            }
-            fb[(u32)sx * width + (u32)(width - 1 - sy)] = pic[(u32)y * 256u + (u32)x];
-        }
-    }
-}
-
 static void Draw_Top(bool new3ds) {
     consoleSelect(&s_top);
     consoleClear();
@@ -194,6 +163,8 @@ int main(int argc, char **argv) {
         Log_Line("3DS", "title pic: %s", TitlePic_Note());
         gfxSetScreenFormat(GFX_TOP, GSP_RGB565_OES);
         gfxSetScreenFormat(GFX_BOTTOM, GSP_RGB565_OES);
+        gfxSetDoubleBuffering(GFX_TOP, true);
+        gfxSetDoubleBuffering(GFX_BOTTOM, true);
     } else if (NitroHost_Nitrofs()) {
         Log_Line("3DS", "title pic: %s", TitlePic_Note());
     }
@@ -210,12 +181,7 @@ int main(int argc, char **argv) {
         Present_Commit(true, true);
         uint32_t flags = Present_Flags();
         if (TitlePic_Ready()) {
-            if (flags & PBW2_SCREEN_TOP) {
-                Blit_Pic(GFX_TOP, TitlePic_Top(), 400, 240);
-            }
-            if (flags & PBW2_SCREEN_BOTTOM) {
-                Blit_Pic(GFX_BOTTOM, TitlePic_Bottom(), 320, 240);
-            }
+            Present_DrawTitle(flags, TitlePic_Top(), TitlePic_Bottom());
         } else {
             if (flags & PBW2_SCREEN_TOP) {
                 Draw_Top(new3ds);

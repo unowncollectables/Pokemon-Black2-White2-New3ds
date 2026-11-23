@@ -49,7 +49,10 @@ bash scripts/n3ds_stage_nitrofs.sh w2 /path/to/extract/w2_us/files
 ```
 
 `git status` after `n3ds_build.sh` should be clean. The count header is
-`build/n3ds/pbw2_build_status.h`.
+`build/n3ds/pbw2_build_status.h`. After pulling a title-picture fix, run
+`python3 tools/box/present-landscape-test.py` if you have a local
+`/tmp/title_top.rgb565` (optional); Azahar should show the logo centered at
+(72, 24) on top and (32, 24) on bottom.
 
 Expect, for about 20 seconds each, no crash and no `.sav`. Separate SD
 directories. Headless steps for this machine are in
@@ -62,10 +65,11 @@ to the staged `nitrofs` directory and `SD_SUBDIR` to `3ds/black2_3ds` or
 - log: `nitrofs a/0/0/2 open`
 - log: `title pic: top is the logo over the title background; bottom is the lower title screen`
 - top screen: the version logo (Pokémon Black 2 or White 2) over that
-  version's title background, in the 256×192 area. Side bars are the wider
-  3DS screen
-- bottom screen: the lower title graphic from the same archive (the Game
-  Freak line on the source art)
+  version's title background, in the 256×192 area centered at **(72, 24)** in
+  the 400×240 landscape picture. Side bars are the wider 3DS panel.
+- bottom screen: the same archive's lower title graphic, centered at **(32, 24)**
+  in 320×240 (the Game Freak line on the source art). `Present_DrawTitle` uses
+  GSP dimensions from `gfxGetFramebuffer`, not hard-coded widths.
 - without NitroFS staged: the text shell, and no title-pic line
 
 `src/system/main.c` is still not linked. This is not the 3D title scene, and
@@ -149,9 +153,10 @@ from game C land in `pbw2_io`. DSi/TWL stays stubbed. Sound stays silent.
    staged and confirm the logo over the title background, the lower screen,
    no crash, and no `.sav`. Then White 2, in its own directory.
 2. Only after that logo is on screen, link `src/system/main.c` as
-   `Pbw2_GameMain` (the shell already owns `main`). Static-link or load
-   overlays 12 (`ov012.bin`, 123,520 bytes) and 27 (`ov027.bin`, 3,776
-   bytes). Keep DSi stubbed and sound silent.
+   `Pbw2_GameMain` (the shell already owns `main`). That needs the Nitro SDK
+   headers under `include/nnsys/` and a link of the compiled game objects, not
+   just `main.c`. Then static-link or load overlays 12 (`ov012.bin`, 123,520
+   bytes) and 27 (`ov027.bin`, 3,776 bytes). Keep DSi stubbed and sound silent.
 3. Do not write the save from the platform when the game starts calling
    `Save_GameWrite`. Remove the refusal in that function at the same time the
    game becomes the caller, and keep the bytes the cartridge format.
