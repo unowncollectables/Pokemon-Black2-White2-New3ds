@@ -476,7 +476,7 @@ typedef struct {
 
 // The user settings that the ARM7 reads from the firmware into the shared memory (NitroSDK's NVRAMConfig), with the
 // console's MAC address after them. Of the settings, the version and the alarm are not named
-#define HW_NVRAM_USER_INFO 0x02fffc80
+typedef struct NVRAMConfig NVRAMConfig;
 
 typedef struct NVRAMConfigOwnerInfo {
     u8 favoriteColor : 4;
@@ -503,7 +503,7 @@ typedef struct NVRAMConfigTpCalibData {
     u8 dy2;
 } NVRAMConfigTpCalibData;
 
-typedef struct NVRAMConfig {
+struct NVRAMConfig {
     u16 unk_00; // the version and the pad byte that follow it, which the code does not read
     NVRAMConfigOwnerInfo owner;
     u8 alarm[6]; // the alarm
@@ -525,7 +525,14 @@ typedef struct NVRAMConfig {
     s64 rtcOffset;
     u32 unk_70;
     u8 macAddress[6];
-} NVRAMConfig;
+};
+
+#ifdef PBW2_N3DS
+extern NVRAMConfig PbW2_NvramUserInfo;
+#define HW_NVRAM_USER_INFO ((u32)(uintptr_t) &PbW2_NvramUserInfo)
+#else
+#define HW_NVRAM_USER_INFO 0x02fffc80
+#endif
 
 void OS_GetOwnerInfo(OSOwnerInfo *info);
 void OS_GetOwnerInfoEx(OSOwnerInfoEx *info);

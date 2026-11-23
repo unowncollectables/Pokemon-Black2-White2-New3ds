@@ -3,6 +3,7 @@
 #include "nitro/os.h"
 #include "stub_log.h"
 
+#include <stdint.h>
 #include <string.h>
 
 OSThreadInfo OSi_ThreadInfo;
@@ -10,9 +11,6 @@ BOOL OSi_IsThreadInitialized;
 
 void OS_SleepThread(OSThreadQueue *queue) {
     (void)queue;
-    PBW2_STUB_LOG("OS_SleepThread", "");
-    extern void svcSleepThread(s64 ns);
-    svcSleepThread(1000000);
 }
 
 void OS_WakeupThread(OSThreadQueue *queue) {

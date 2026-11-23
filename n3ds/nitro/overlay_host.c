@@ -22,6 +22,7 @@ typedef struct {
     u8 *mem;
     u32 ramSize;
     u32 bssSize;
+    u32 dsRamAddress;
     int loaded;
 } HostedOverlay;
 
@@ -54,7 +55,7 @@ static BOOL load_header(u32 id, FSOverlayInfo *info) {
     offset = id * FS_OVERLAY_HEADER_SIZE;
     MI_CpuCopy8(s_table + offset, info, FS_OVERLAY_HEADER_SIZE);
     info->target = MI_PROCESSOR_ARM9;
-    return info->ramAddress != NULL && info->ramSize != 0;
+    return info->ramSize != 0;
 }
 
 void PBW2_OverlayHostInit(void) {
@@ -108,7 +109,7 @@ static HostedOverlay *slot_for(u32 id) {
 }
 
 BOOL FS_LoadOverlayInfo(FSOverlayInfo *info, MIProcessor target, FSOverlayID id) {
-  (void)target;
+    (void)target;
     if (!load_header(id, info)) {
         return FALSE;
     }
@@ -120,6 +121,8 @@ BOOL FS_LoadOverlay(MIProcessor target, FSOverlayID id) {
     HostedOverlay *slot;
     char path[192];
     u32 binarySize;
+    u32 dsAddr;
+    u8 *hostMem;
     BOOL ok;
 
     (void)target;
@@ -129,35 +132,41 @@ BOOL FS_LoadOverlay(MIProcessor target, FSOverlayID id) {
     }
     slot = slot_for(id);
     if (!slot) {
+        Log_Line("overlay", "GFL_OvlLoad id=%u fail (no slot)", (unsigned)id);
+        return FALSE;
+    }
+    dsAddr = (u32)(uintptr_t)info.ramAddress;
+    hostMem = (u8 *)malloc(info.ramSize + info.bssSize);
+    if (!hostMem) {
+        Log_Line("overlay", "GFL_OvlLoad id=%u fail (nomem)", (unsigned)id);
         return FALSE;
     }
     slot->id = id;
     slot->ramSize = info.ramSize;
     slot->bssSize = info.bssSize;
+    slot->dsRamAddress = dsAddr;
+    slot->mem = hostMem;
     binarySize = info.ramSize;
     if (info.flag & FS_OVERLAY_FLAG_COMP) {
         binarySize = info.compressedSize;
     }
-    if (!info.ramAddress) {
-        info.ramAddress = malloc(info.ramSize + info.bssSize);
-        if (!info.ramAddress) {
-            return FALSE;
-        }
-    }
-    slot->mem = info.ramAddress;
     overlay_root(path, sizeof path);
     snprintf(path + strlen(path), sizeof path - strlen(path), "/ov%03u.bin", (unsigned)id);
-    ok = read_file(path, info.ramAddress, binarySize);
+    ok = read_file(path, hostMem, binarySize);
     if (!ok) {
         PBW2_STUB_LOG("FS_LoadOverlay", "id=%u missing %s", (unsigned)id, path);
+        free(hostMem);
+        memset(slot, 0, sizeof *slot);
+        Log_Line("overlay", "GFL_OvlLoad id=%u fail (missing bin)", (unsigned)id);
         return FALSE;
     }
     if (info.bssSize) {
-        MI_CpuFill8(info.ramAddress + info.ramSize, 0, info.bssSize);
+        MI_CpuFill8(hostMem + info.ramSize, 0, info.bssSize);
     }
+    info.ramAddress = hostMem;
     slot->loaded = 1;
-    Log_Line("overlay", "loaded id=%u size=%u bss=%u", (unsigned)id, (unsigned)info.ramSize,
-             (unsigned)info.bssSize);
+    Log_Line("overlay", "GFL_OvlLoad id=%u ok host=%p ds=0x%08x size=%u bss=%u", (unsigned)id, (void *)hostMem,
+             (unsigned)dsAddr, (unsigned)info.ramSize, (unsigned)info.bssSize);
     return TRUE;
 }
 
@@ -169,7 +178,7 @@ BOOL FS_UnloadOverlay(MIProcessor target, FSOverlayID id) {
         if (s_slots[i].loaded && s_slots[i].id == id) {
             slot = &s_slots[i];
             if (slot->mem) {
-                memset(slot->mem, 0, slot->ramSize + slot->bssSize);
+                free(slot->mem);
             }
             memset(slot, 0, sizeof *slot);
             return TRUE;

@@ -159,8 +159,12 @@ linking `lib/nnsys/src/fnd/*`):
 | `HW_OAM` | `gx_layers.c`, `wm_icon.c` — OAM via game GX helpers; host must not touch DS OAM addresses. |
 
 Excluded from closure (host instead): `lib/nitro/src/os/os_arena.c`,
-`spi/pm.c`, all of `pxi/*`. Next hangs are more likely **typed** stubs or
-unmapped literals in pulled Nitro objects than Fnd heaps once r7 is on the box.
+`spi/pm.c`, all of `pxi/*`. Title link still pulls Nitro **CARD**, **SND**,
+**TP** (`spi/tp.c`); they must not sleep on ARM7 FIFO replies. Host
+`pxi_host.c` delivers recv callbacks synchronously on `PXI_SendWordByFifo`;
+`pxi_service.c` completes CARD backup commands against an in-memory shadow
+(0xFF reads, no `.sav` file). `HW_NVRAM_USER_INFO` is host `PbW2_NvramUserInfo`
+with DS-default touch calibration.
 
 ## Recommended next steps
 
