@@ -52,6 +52,26 @@ static BOOL CARDi_TryLockCard(void *arg) {
 // the card
 void CARD_Init(void) {
     CARDiCommon *p = &cardi_common;
+#ifdef PBW2_N3DS
+    if (p->flag == 0) {
+        p->flag = CARD_STAT_INIT;
+        p->src = 0;
+        p->dst = 0;
+        p->len = 0;
+        p->dma = (u32)-1;
+        p->dmaInterface = NULL;
+        p->dcInvalidateThreshold = 0x2400;
+        p->icInvalidateThreshold = 0x400;
+        cardi_rom_base = 0;
+        p->priority = 4;
+        p->callback = NULL;
+        p->callbackArg = NULL;
+        CARDi_InitResourceLock();
+        CARDi_InitCommand();
+        CARD_Enable(TRUE);
+    }
+    return;
+#endif
     if (p->flag == 0) {
         p->flag = CARD_STAT_INIT;
         if (OS_GetBootType() == OS_BOOTTYPE_ROM) {

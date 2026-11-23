@@ -234,6 +234,10 @@ void OS_InitAlarm(void) {
 #if defined(PBW2_LINK_GAME)
 void PbW2_DtcmHostInit(void);
 void PbW2_NvramHostInit(void);
+void PbW2_RomHeaderHostInit(void);
+void PbW2_OsThreadHostInit(void);
+void PXI_Init(void);
+void CARD_Init(void);
 #endif
 
 void OS_Init(void) {
@@ -241,8 +245,12 @@ void OS_Init(void) {
     memset(s_irq, 0, sizeof s_irq);
     OS_InitArena();
 #if defined(PBW2_LINK_GAME)
+    PbW2_OsThreadHostInit();
+    PXI_Init();
+    PbW2_RomHeaderHostInit();
     PbW2_DtcmHostInit();
     PbW2_NvramHostInit();
+    CARD_Init();
 #endif
     s_irq_on = 1;
 }

@@ -166,6 +166,20 @@ Excluded from closure (host instead): `lib/nitro/src/os/os_arena.c`,
 (0xFF reads, no `.sav` file). `HW_NVRAM_USER_INFO` is host `PbW2_NvramUserInfo`
 with DS-default touch calibration.
 
+### Experimental `OS_Init` on New 3DS (`PBW2_LINK_GAME` shell `OS_Init`)
+
+| Step | Host behaviour |
+|------|----------------|
+| `PbW2_OsThreadHostInit` | `OSi_ThreadInfo.current`, CondVar-backed `OS_SleepThread`/`OS_WakeupThread` |
+| `PXI_Init` | FIFO callback table; synchronous ARM7 service in `pxi_service.c` |
+| `PbW2_RomHeaderHostInit` | `PbW2_RomHeaderBuf` / `PbW2_CardRomHeader` (optional `sdmc:…/rom_header.bin`) |
+| `PbW2_DtcmHostInit` | DTCM arena for `GFL_HeapDTCMInit` |
+| `PbW2_NvramHostInit` | Touch calibration in `PbW2_NvramUserInfo` |
+| `CARD_Init` (`PBW2_N3DS` in `card_common.c`) | Resource lock, PXI FS callback, **no** CARD worker thread |
+
+Run `python3 scripts/n3ds_experimental_check.py` before box handoff (compile closure,
+`tp.o` literal scan, experimental link).
+
 ## Recommended next steps
 
 1. On the devkitARM 16 machine, `bash scripts/n3ds_build.sh`. Confirm the

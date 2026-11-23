@@ -83,10 +83,18 @@
 #define HW_CTRDG_ROM 0x08000000
 // The ROM header that the card's boot leaves at the end of main memory, the copy of it that the system keeps, and the
 // header of a DSi game, which the system leaves in the memory the processors share
-#define HW_CARD_ROM_HEADER 0x02fffa80
 #define HW_CARD_ROM_HEADER_SIZE 0x160
+#ifdef PBW2_N3DS
+extern u8 PbW2_RomHeaderBuf[HW_CARD_ROM_HEADER_SIZE];
+extern u8 PbW2_CardRomHeader[HW_CARD_ROM_HEADER_SIZE];
+#define HW_ROM_HEADER_BUF ((u32)PbW2_RomHeaderBuf)
+#define HW_CARD_ROM_HEADER ((u32)PbW2_CardRomHeader)
+#define HW_TWL_ROM_HEADER_BUF ((u32)PbW2_RomHeaderBuf)
+#else
+#define HW_CARD_ROM_HEADER 0x02fffa80
 #define HW_ROM_HEADER_BUF 0x02fffe00
 #define HW_TWL_ROM_HEADER_BUF 0x02ffe000
+#endif
 // The low word of the DSi's title ID, its game code, in the system area
 #define HW_TWL_TITLE_ID 0x02ffe230
 

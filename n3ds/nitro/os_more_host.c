@@ -3,51 +3,7 @@
 #include "nitro/os.h"
 #include "stub_log.h"
 
-#include <stdint.h>
 #include <string.h>
-
-OSThreadInfo OSi_ThreadInfo;
-BOOL OSi_IsThreadInitialized;
-
-void OS_SleepThread(OSThreadQueue *queue) {
-    (void)queue;
-}
-
-void OS_WakeupThread(OSThreadQueue *queue) {
-    (void)queue;
-    PBW2_STUB_LOG("OS_WakeupThread", "");
-}
-
-void OS_WakeupThreadDirect(OSThread *thread) {
-    (void)thread;
-    PBW2_STUB_LOG("OS_WakeupThreadDirect", "");
-}
-
-void OS_CreateThread(OSThread *thread, void (*func)(void *), void *arg, void *stack, u32 stackSize, u32 prio) {
-    (void)func;
-    (void)arg;
-    (void)stack;
-    (void)stackSize;
-    (void)prio;
-    memset(thread, 0, sizeof *thread);
-    PBW2_STUB_LOG("OS_CreateThread", "prio=%lu", (unsigned long)prio);
-}
-
-BOOL OS_SetThreadPriority(OSThread *thread, u32 prio) {
-    (void)thread;
-    (void)prio;
-    return TRUE;
-}
-
-BOOL OS_IsThreadTerminated(const OSThread *thread) {
-    (void)thread;
-    return TRUE;
-}
-
-void OS_SleepThreadDirect(OSThread *thread, OSThreadQueue *queue) {
-    (void)thread;
-    (void)queue;
-}
 
 BOOL OS_IsAlarmAvailable(void) {
     return FALSE;

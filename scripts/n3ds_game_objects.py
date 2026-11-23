@@ -16,6 +16,12 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+CRITICAL_LIB_SOURCES = (
+    "lib/nitro/src/spi/tp.c",
+    "lib/nitro/src/os/os_ownerInfo.c",
+    "lib/nitro/src/os/os_ownerInfoEx.c",
+)
 STATUS = ROOT / "build" / "n3ds" / "pbw2_build_status.h"
 REPORT = ROOT / "build" / "n3ds" / "compile-report.txt"
 
@@ -64,8 +70,11 @@ def compile_one(cc: str, flags: list[str], source: Path, out: Path) -> tuple[str
         if "error:" in line:
             first = line.split("error:", 1)[1].strip()
             break
-    if result.returncode != 0 and not first:
-        first = ((result.stderr or result.stdout or "compile failed").strip().splitlines() or ["compile failed"])[-1]
+    if result.returncode != 0:
+        if out.is_file():
+            out.unlink()
+        if not first:
+            first = ((result.stderr or result.stdout or "compile failed").strip().splitlines() or ["compile failed"])[-1]
     return source.as_posix(), result.returncode, first
 
 
@@ -108,6 +117,14 @@ def compile_game(cc: str, arch_flags: list[str], name: str) -> tuple[int, int, i
     return game_ok, game_n, lib_ok, lib_n, failures + [f"{count}  {reason}" for reason, count in reasons.most_common(15)]
 
 
+def critical_lib_ok(name: str) -> bool:
+    objdir = ROOT / "build" / "n3ds" / name.lower() / "obj"
+    for rel in CRITICAL_LIB_SOURCES:
+        if not (objdir / Path(rel).with_suffix(".o")).is_file():
+            return False
+    return True
+
+
 def write_status(counts: dict[str, tuple[int, int, int, int]]) -> None:
     b2 = counts["BLACK2"]
     w2 = counts["WHITE2"]
@@ -144,6 +161,11 @@ def main() -> int:
         lines.extend(notes)
         if game_ok != game_n:
             failed_src = True
+        if not critical_lib_ok(define):
+            print(f"{define}: CRITICAL lib objects missing (tp/NVRAM ownerInfo)", file=sys.stderr)
+            failed_src = True
+        elif lib_ok != lib_n:
+            print(f"{define}: library compile {lib_ok}/{lib_n} (non-closure failures tolerated)")
     write_status(counts)
     REPORT.parent.mkdir(parents=True, exist_ok=True)
     REPORT.write_text("\n".join(lines) + "\n")
