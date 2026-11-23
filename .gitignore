@@ -19,6 +19,17 @@ build.ninja
 .ninja_*
 objdiff.json
 
+# 3DS port outputs, saves and logs. The ROM stays in orig/ (ignored above).
+*.sav
+*.3dsx
+*.cia
+*.elf
+*.bnr
+*.smdh
+*.lst
+n3ds/build/
+*.log
+
 # Claude Code: per-session state; the project's skills, agents, hooks and settings.json are committed
 .claude/worktrees/
 .claude/settings.local.json

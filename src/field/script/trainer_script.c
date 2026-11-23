@@ -5,8 +5,14 @@
 #include "nitro/os.h"
 #include "save/event_work.h"
 
-// The Trainers whose battles resetRebattleTrainers resets, by Trainer ID less 0x5f0
+// The Trainers whose battles resetRebattleTrainers resets, by Trainer ID less 0x5f0.
+// A const int is not an integer constant expression in C, so GCC rejects the
+// array below. The matching build keeps the const. PBW2_N3DS uses a macro.
+#ifdef PBW2_N3DS
+#define REBATTLE_TRAINER_COUNT 12
+#else
 const int REBATTLE_TRAINER_COUNT = 12;
+#endif
 static const u16 sRebattleTrainers[REBATTLE_TRAINER_COUNT] = { 0x5f,  0x60,  0xb7,  0xb8,  0xb9,  0xba,
                                                                0x128, 0x12b, 0x12e, 0x12f, 0x14d, 0x2f0 };
 

@@ -96,7 +96,38 @@ static void GFL_ArcSysInitArcHandle(FSFile *file, u32 arcId) {
 // slot, which no installed compiler produces from the C, so the maintainer took the assembly exception for this, the
 // last non-matching function. The pool words below are the assert's two strings, sAssertNameAndFormat and its +4.
 // clang-format off
-// style-ok: asm the maintainer's exception for the last non-matching function, which no compiler reproduces from C
+// style-ok: asm the maintainer's exception for the last non-matching function, which no compiler reproduces from C.
+// PBW2_N3DS builds this with GCC, which has no MWCC asm statement. The seeks match the assembly. The matching
+// DS build does not define PBW2_N3DS, so it still compiles the assembly.
+#ifdef PBW2_N3DS
+static u32 ArchiveMoveImageTop(FSFile *file, u32 fileId, u32 offset, u32 size) {
+    u16 headerSize = 0;
+    NarcFATBHeader fatb;
+    u32 fntbSize = 0;
+    NarcFATBEntry entry;
+    u32 fntbOffset;
+    u32 fimgData;
+
+    FS_SeekFile(file, NARC_HEADER_SIZE_OFFSET, FS_SEEK_SET);
+    FS_ReadFile(file, &headerSize, 2);
+    FS_SeekFile(file, headerSize + NARC_BLOCK_SIZE_OFFSET, FS_SEEK_SET);
+    FS_ReadFile(file, &fatb, 6);
+    if (!(fatb.fileCount > fileId)) {
+        GFL_DebugAssertFailEx(sAssertNameAndFormat, 0, sAssertNameAndFormat + 4, fatb.fileCount, fileId);
+    }
+    fntbOffset = headerSize + fatb.size;
+    FS_SeekFile(file, fntbOffset + NARC_BLOCK_SIZE_OFFSET, FS_SEEK_SET);
+    FS_ReadFile(file, &fntbSize, 4);
+    fimgData = fntbOffset + fntbSize + NARC_FIMG_DATA_OFFSET;
+    FS_SeekFile(file, headerSize + NARC_FATB_ENTRIES_OFFSET + fileId * sizeof(NarcFATBEntry), FS_SEEK_SET);
+    FS_ReadFile(file, &entry, sizeof(entry));
+    FS_SeekFile(file, fimgData + entry.start + offset, FS_SEEK_SET);
+    if (size == 0) {
+        size = entry.end - entry.start;
+    }
+    return size;
+}
+#else
 static asm u32 ArchiveMoveImageTop(FSFile *file, u32 fileId, u32 offset, u32 size) {
     push {r4, r5, r6, r7, lr}
     sub sp, #0x24
@@ -181,6 +212,7 @@ SizeDone:
     dcd sAssertNameAndFormat
     dcd sAssertNameAndFormat+4
 }
+#endif
 
 // clang-format on
 

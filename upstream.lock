@@ -1,0 +1,10 @@
+# Pins for this port. The decomp import is the merge parent, not a submodule.
+pokebw2=345b790e6000869b481b79838bb5727309f832fb
+black2_us_sha1=e51e6dfb8678a3d19dcd2a10691b96a569ca0abb
+white2_us_sha1=b5d7490be7b415b8f1e672a53e978a9cc667e56a
+# Sister ports read for the 3DS runtime lessons and the CIA flag pattern.
+# Short SHAs are the ones named in the port brief.
+hgss_port=unowncollectables/Pokemon-HeartGold-SoulSilver-New3ds@4d4d2cb
+platinum_port=unowncollectables/3ds-platinum
+# Native PC/Mac port of this decomp. Reference only; its code is not vendored.
+frigate=CallanCampos/Frigate

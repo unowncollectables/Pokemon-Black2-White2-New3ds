@@ -1,5 +1,7 @@
 # pokebw2
 
+The New 3DS port's handoff is [AGENTS.md](AGENTS.md) and [docs/HANDOFF.md](docs/HANDOFF.md). Read those before changing `n3ds/` or the port docs. The rules below are the matching decompilation's. Both ROMs stay byte for byte when `PBW2_N3DS` is not defined.
+
 A matching decompilation of Pokémon Black 2 and White 2 (NDS/DSi, MWCC `dsi/1.1p1`), aiming at 100% C like
 pokeemerald and then a native PC port. **The README and `docs/` are the source of truth**: setup in the README,
 the workflow and tools in `docs/decompiling.md`, MWCC's behavior in `docs/matching.md`, files, headers and names in

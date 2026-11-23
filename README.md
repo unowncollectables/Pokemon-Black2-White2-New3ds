@@ -1,86 +1,84 @@
-# Pokémon Black 2 and White 2
+# Pokémon Black 2 / White 2 for New 3DS
 
-A work-in-progress decompilation of Pokémon Black 2 and White 2.
-Both USA/Europe ROMs rebuild byte for byte from the same source tree.
+A personal, New 3DS-only native port of Pokémon Black 2 and White 2. The game's
+decompiled C is [fuddlesworth/pokebw2](https://github.com/fuddlesworth/pokebw2)
+at `345b790e6000869b481b79838bb5727309f832fb` (GPL-3.0), imported with its
+history. Both games stay one tree. The matching DS rebuild is unchanged except
+for the delink path fix described below.
 
-## Progress
+This is not a ROM, a CIA, or an emulator. You supply your own US/EU dumps.
+Nothing in git is a cartridge image.
 
-[![Code](https://bytematch.dev/fuddlesworth/pokebw2.svg?mode=shield&measure=matched_code_percent&label=Code)](https://bytematch.dev/fuddlesworth/pokebw2)
-[![Functions](https://bytematch.dev/fuddlesworth/pokebw2.svg?mode=shield&measure=matched_functions&label=Functions)](https://bytematch.dev/fuddlesworth/pokebw2)
-[![Files](https://bytematch.dev/fuddlesworth/pokebw2.svg?mode=shield&measure=complete_units&label=Complete%20files)](https://bytematch.dev/fuddlesworth/pokebw2)
+## What builds here without a ROM
 
-Progress updates automatically from CI. [ByteMatch](https://bytematch.dev/fuddlesworth/pokebw2) shows it for each
-version, for ARM9 main and the overlays, and for the game's code and each library.
+```sh
+export DEVKITPRO=/opt/devkitpro
+export DEVKITARM=$DEVKITPRO/devkitARM
+bash scripts/n3ds_build.sh
+```
 
-## Build
+That writes:
 
-Requires Linux, WSL or macOS, Python 3.11+, ninja, and LLVM (`clang` and `llvm-objcopy` on your `PATH`).
+- `n3ds/build/b2/black2_3ds.elf` and `.3dsx`
+- `n3ds/build/w2/white2_3ds.elf` and `.3dsx`
 
-1. Place your own ROM dumps in `orig/`, using the filenames below.
-2. Configure and build:
+Both shells link. They are the platform, not the game's logo or title screen.
+See [docs/HANDOFF.md](docs/HANDOFF.md) for what is stubbed and what still blocks
+the title screen, and [docs/BUILDING.md](docs/BUILDING.md) for the exact steps.
 
-   ```sh
-   python3 configure.py
-   ninja
-   ```
+The same command compiles every game C file for Black 2 and for White 2
+(1218 of 1218 each). Those objects are not linked into the shell yet.
 
-The first run downloads the remaining tools. Every available version is built and checked against its SHA1.
-ROMs are not included or provided.
+## What needs your ROM
 
-| ROM (USA/Europe, NDSi Enhanced) | Input file | SHA1 |
+Matching DS rebuild, from the decomp. Put your own dumps at:
+
+| Game | File | SHA1 |
 | --- | --- | --- |
-| Black 2 | `orig/baserom_b2_us.nds` | `e51e6dfb8678a3d19dcd2a10691b96a569ca0abb` |
-| White 2 | `orig/baserom_w2_us.nds` | `b5d7490be7b415b8f1e672a53e978a9cc667e56a` |
+| Black 2 (US/EU, NDSi enhanced) | `orig/baserom_b2_us.nds` | `e51e6dfb8678a3d19dcd2a10691b96a569ca0abb` |
+| White 2 (US/EU, NDSi enhanced) | `orig/baserom_w2_us.nds` | `b5d7490be7b415b8f1e672a53e978a9cc667e56a` |
 
-Output: `build/pokeblack2_us.nds` and/or `build/pokewhite2_us.nds`.
-See [Build details](docs/building.md) for macOS setup, toolchain options and modified builds.
+```sh
+python3 configure.py
+ninja
+```
 
-## Contribute
+`configure.py` downloads the compiler tools (MWCC via wibo, dsd). `ninja`
+extracts the ROM locally, rebuilds both games, and checks the SHA1s.
+`orig/`, `extract/`, and `build/` are gitignored. Do not commit them.
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and rules. Claim an overlay's issue before starting work.
-CI compiles every C file for both versions; fork PRs must verify ROM matching locally.
+At the imported commit, each `config/{b2,w2}_us/arm9/delinks.txt` named 66
+sources that had moved (`src/system/savedata/`, `src/system/iss/`, `src/pml/`).
+`ninja` stopped with a missing `build/b2_us/src/system/save_table.o`. Those
+paths now point at the files.
 
-## Documentation
+## CIA
 
-| Guide | Covers |
+This tree does not build or ship a CIA. `n3ds/cia/black2.rsf` and
+`n3ds/cia/white2.rsf` are the HOME Menu metadata: New 3DS, 804 MHz, L2 cache,
+core 2. A banner and an icon are still required before `makerom` can pack a
+CIA. Build that with your own Pokemon 3DS Builder, from the `.elf` above.
+
+| Game | Title ID | Product |
+| --- | --- | --- |
+| Black 2 | `000400000F7D4200` | `CTR-H-B23D` |
+| White 2 | `000400000F7D4300` | `CTR-H-W23D` |
+
+Saves, when the game itself writes them, are `sdmc:/3ds/black2_3ds/black2.sav`
+and `sdmc:/3ds/white2_3ds/white2.sav`. The shell does not create or write them.
+
+## Docs
+
+| Doc | What it is |
 | --- | --- |
-| [Build details](docs/building.md) | Setup and build options |
-| [Decompiling](docs/decompiling.md) | Workflow and tools |
-| [Matching](docs/matching.md) | MWCC behavior and matching techniques |
-| [Code organization](docs/code-organization.md) | Source layout, libraries and names |
-| [Native port notes](docs/porting-notes.md) | Recovered platform assumptions and open porting questions |
-| [Source files](docs/source-files.md) | Overlay files and boundary evidence |
-| [Nonmatching functions](docs/nonmatching-functions.md) | Remaining mismatches |
-| [Game data](docs/data.md) | Data formats and archives |
-| [Cells and animations as JSON](docs/cells-and-animations.md) | The sprites' cells, animations and MCSS files as JSON |
-| [Scripts](docs/scripts.md) | Trainer AI, battle animation and field scripts |
-| [Configs and ROMs](docs/configs.md) | dsd configuration and ROM structure |
-| [Tools](tools/README.md) | Tool reference |
-
-## Credits
-
-This project builds on the work of others:
-
-- **Names:** [swan](https://github.com/ds-pokemon-hacking/swan) by DS Pokémon Hacking, the source of the symbol,
-  type and field names imported here.
-- **References:** [pret](https://github.com/pret)'s
-  [pokeplatinum](https://github.com/pret/pokeplatinum), [pokeheartgold](https://github.com/pret/pokeheartgold),
-  [pokediamond](https://github.com/pret/pokediamond) and [pokeemerald](https://github.com/pret/pokeemerald), whose
-  layout, build and conventions this project follows; ntrtwl's
-  [NitroSDK](https://github.com/ntrtwl/NitroSDK) and [NitroSystem](https://github.com/ntrtwl/NitroSystem)
-  reconstructions; and [aletheia](https://github.com/Project-Holon/aletheia), the Black 1 decompilation, whose map of
-  the SDK libraries' objects placed many of our library files.
-- **Tools:** [ds-decomp](https://github.com/AetiasHax/ds-decomp) and [ds-rom](https://github.com/AetiasHax/ds-rom) by AetiasHax, used through our forks;
-  the MWCC packages from [decomp.aetias.com](https://decomp.aetias.com);
-  [objdiff](https://github.com/encounter/objdiff) and [sjiswrap](https://github.com/encounter/sjiswrap) by encounter;
-  [wibo](https://github.com/decompals/wibo) by decompals; [decomp-permuter](https://github.com/simonlindholm/decomp-permuter)
-  by simonlindholm; [Apicula](https://github.com/scurest/apicula) by scurest, for exporting models; and
-  [ByteMatch](https://bytematch.dev) for progress tracking.
-- **Data and assets:** the cell and animation converter `nitro_cells.py` by Michael Neuberger, from
-  [pokegrey](https://github.com/DeltaDX117/pokegrey); the whole-model writer, new map models and texture imports by
-  bjayers, from [Paper White 2](https://github.com/bjayers/paperwhite2); and the per-species folder layout of
-  [pokeemerald-expansion](https://github.com/rh-hideout/pokeemerald-expansion).
+| [AGENTS.md](AGENTS.md) | Rules and file map for the next session |
+| [docs/HANDOFF.md](docs/HANDOFF.md) | What works, what is stubbed, what blocks title |
+| [docs/PLAN.md](docs/PLAN.md) | Phases from boot through polish |
+| [docs/BUILDING.md](docs/BUILDING.md) | Commands, with and without a ROM |
+| [THIRD_PARTY.md](THIRD_PARTY.md) | Credits |
+| [docs/building.md](docs/building.md) | The decomp's own build notes |
 
 ## License
 
-[GNU GPL v3.0](LICENSE), including the symbol names imported from [swan](docs/code-organization.md#names).
+[GNU GPL v3.0](LICENSE). The decomp's headers stay. New port files are GPL-3.0
+as well.
