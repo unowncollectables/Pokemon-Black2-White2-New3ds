@@ -39,7 +39,13 @@ void MI_CpuCopy8(const void *src, void *dest, u32 size) {
 
 void MI_CpuFill8(void *dest, u8 value, u32 size) {
     if (size && dest) {
+#if defined(PBW2_LINK_GAME)
+        void *d = pbw2_map_ptr(dest);
+        pbw2_note_copy(dest, size);
+        memset(d, value, size);
+#else
         memset(dest, value, size);
+#endif
     }
 }
 
@@ -125,7 +131,14 @@ void MIi_CpuClear16(u16 value, void *dest, u32 size) {
 }
 
 void MIi_CpuCopyFast(const void *src, void *dest, u32 size) {
+#if defined(PBW2_LINK_GAME)
+    void *d = pbw2_map_ptr(dest);
+    const void *s = pbw2_map_ptr(src);
+    pbw2_note_copy(dest, size);
+    memcpy(d, s, size);
+#else
     memcpy(dest, src, size);
+#endif
 }
 
 void MIi_CpuSend32(const void *src, volatile void *dest, u32 size) {

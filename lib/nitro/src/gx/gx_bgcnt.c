@@ -6,27 +6,37 @@
 // ARM code in this Thumb file.
 #include "nitro/gx.h"
 
+#if defined(PBW2_N3DS)
+#include "vram_host_api.h"
+static void *pbw2_vram_host_ptr(void *arm_addr) {
+    return arm_addr ? PbW2_VramMap(arm_addr) : NULL;
+}
+#define VRAM_HOST_PTR(expr) pbw2_vram_host_ptr((void *)(expr))
+#else
+#define VRAM_HOST_PTR(expr) ((void *)(expr))
+#endif
+
 void *G2_GetBG0ScrPtr(void) {
-    return (void *)(((reg_G2_BG0CNT & REG_G2_BG0CNT_SCREENBASE_MASK) >> REG_G2_BG0CNT_SCREENBASE_SHIFT) * 0x800 +
+    return VRAM_HOST_PTR(((reg_G2_BG0CNT & REG_G2_BG0CNT_SCREENBASE_MASK) >> REG_G2_BG0CNT_SCREENBASE_SHIFT) * 0x800 +
                     (HW_BG_VRAM +
                      ((reg_GX_DISPCNT & REG_GX_DISPCNT_BGSCREENOFFSET_MASK) >> REG_GX_DISPCNT_BGSCREENOFFSET_SHIFT) *
                          0x10000));
 }
 
 void *G2S_GetBG0ScrPtr(void) {
-    return (void *)(HW_DB_BG_VRAM +
+    return VRAM_HOST_PTR(HW_DB_BG_VRAM +
                     ((reg_G2S_DB_BG0CNT & REG_G2_BG0CNT_SCREENBASE_MASK) >> REG_G2_BG0CNT_SCREENBASE_SHIFT) * 0x800);
 }
 
 void *G2_GetBG1ScrPtr(void) {
-    return (void *)(((reg_G2_BG1CNT & REG_G2_BG0CNT_SCREENBASE_MASK) >> REG_G2_BG0CNT_SCREENBASE_SHIFT) * 0x800 +
+    return VRAM_HOST_PTR(((reg_G2_BG1CNT & REG_G2_BG0CNT_SCREENBASE_MASK) >> REG_G2_BG0CNT_SCREENBASE_SHIFT) * 0x800 +
                     (HW_BG_VRAM +
                      ((reg_GX_DISPCNT & REG_GX_DISPCNT_BGSCREENOFFSET_MASK) >> REG_GX_DISPCNT_BGSCREENOFFSET_SHIFT) *
                          0x10000));
 }
 
 void *G2S_GetBG1ScrPtr(void) {
-    return (void *)(HW_DB_BG_VRAM +
+    return VRAM_HOST_PTR(HW_DB_BG_VRAM +
                     ((reg_G2S_DB_BG1CNT & REG_G2_BG0CNT_SCREENBASE_MASK) >> REG_G2_BG0CNT_SCREENBASE_SHIFT) * 0x800);
 }
 
@@ -43,14 +53,14 @@ void *G2_GetBG2ScrPtr(void) {
     case GX_BGMODE_2:
     case GX_BGMODE_3:
     case GX_BGMODE_4:
-        return (void *)(HW_BG_VRAM + offset + screenBase * 0x800);
+        return VRAM_HOST_PTR(HW_BG_VRAM + offset + screenBase * 0x800);
     case GX_BGMODE_5:
         if (bgcnt & REG_G2_BG0CNT_COLORMODE_MASK) {
-            return (void *)(HW_BG_VRAM + screenBase * 0x4000);
+            return VRAM_HOST_PTR(HW_BG_VRAM + screenBase * 0x4000);
         }
-        return (void *)(HW_BG_VRAM + offset + screenBase * 0x800);
+        return VRAM_HOST_PTR(HW_BG_VRAM + offset + screenBase * 0x800);
     case GX_BGMODE_6:
-        return (void *)HW_BG_VRAM;
+        return VRAM_HOST_PTR(HW_BG_VRAM);
     default:
         return NULL;
     }
@@ -68,12 +78,12 @@ void *G2S_GetBG2ScrPtr(void) {
     case GX_BGMODE_2:
     case GX_BGMODE_3:
     case GX_BGMODE_4:
-        return (void *)(HW_DB_BG_VRAM + screenBase * 0x800);
+        return VRAM_HOST_PTR(HW_DB_BG_VRAM + screenBase * 0x800);
     case GX_BGMODE_5:
         if (bgcnt & REG_G2_BG0CNT_COLORMODE_MASK) {
-            return (void *)(HW_DB_BG_VRAM + screenBase * 0x4000);
+            return VRAM_HOST_PTR(HW_DB_BG_VRAM + screenBase * 0x4000);
         }
-        return (void *)(HW_DB_BG_VRAM + screenBase * 0x800);
+        return VRAM_HOST_PTR(HW_DB_BG_VRAM + screenBase * 0x800);
     case GX_BGMODE_6:
         return NULL;
     default:
@@ -92,14 +102,14 @@ void *G2_GetBG3ScrPtr(void) {
     case GX_BGMODE_0:
     case GX_BGMODE_1:
     case GX_BGMODE_2:
-        return (void *)(HW_BG_VRAM + offset + screenBase * 0x800);
+        return VRAM_HOST_PTR(HW_BG_VRAM + offset + screenBase * 0x800);
     case GX_BGMODE_3:
     case GX_BGMODE_4:
     case GX_BGMODE_5:
         if (bgcnt & REG_G2_BG0CNT_COLORMODE_MASK) {
-            return (void *)(HW_BG_VRAM + screenBase * 0x4000);
+            return VRAM_HOST_PTR(HW_BG_VRAM + screenBase * 0x4000);
         }
-        return (void *)(HW_BG_VRAM + offset + screenBase * 0x800);
+        return VRAM_HOST_PTR(HW_BG_VRAM + offset + screenBase * 0x800);
     case GX_BGMODE_6:
         return NULL;
     default:
@@ -117,14 +127,14 @@ void *G2S_GetBG3ScrPtr(void) {
     case GX_BGMODE_0:
     case GX_BGMODE_1:
     case GX_BGMODE_2:
-        return (void *)(HW_DB_BG_VRAM + screenBase * 0x800);
+        return VRAM_HOST_PTR(HW_DB_BG_VRAM + screenBase * 0x800);
     case GX_BGMODE_3:
     case GX_BGMODE_4:
     case GX_BGMODE_5:
         if (bgcnt & REG_G2_BG0CNT_COLORMODE_MASK) {
-            return (void *)(HW_DB_BG_VRAM + screenBase * 0x4000);
+            return VRAM_HOST_PTR(HW_DB_BG_VRAM + screenBase * 0x4000);
         }
-        return (void *)(HW_DB_BG_VRAM + screenBase * 0x800);
+        return VRAM_HOST_PTR(HW_DB_BG_VRAM + screenBase * 0x800);
     case GX_BGMODE_6:
         return NULL;
     default:
@@ -140,7 +150,7 @@ void *G2_GetBG0CharPtr(void) {
 }
 
 void *G2S_GetBG0CharPtr(void) {
-    return (void *)(HW_DB_BG_VRAM +
+    return VRAM_HOST_PTR(HW_DB_BG_VRAM +
                     ((reg_G2S_DB_BG0CNT & REG_G2_BG0CNT_CHARBASE_MASK) >> REG_G2_BG0CNT_CHARBASE_SHIFT) * 0x4000);
 }
 
@@ -152,7 +162,7 @@ void *G2_GetBG1CharPtr(void) {
 }
 
 void *G2S_GetBG1CharPtr(void) {
-    return (void *)(HW_DB_BG_VRAM +
+    return VRAM_HOST_PTR(HW_DB_BG_VRAM +
                     ((reg_G2S_DB_BG1CNT & REG_G2_BG0CNT_CHARBASE_MASK) >> REG_G2_BG0CNT_CHARBASE_SHIFT) * 0x4000);
 }
 
@@ -161,7 +171,7 @@ void *G2_GetBG2CharPtr(void) {
     u32 bgcnt = reg_G2_BG2CNT;
 
     if (mode < 5 || !(bgcnt & REG_G2_BG0CNT_COLORMODE_MASK)) {
-        return (void *)(HW_BG_VRAM +
+        return VRAM_HOST_PTR(HW_BG_VRAM +
                         ((reg_GX_DISPCNT & REG_GX_DISPCNT_BGCHAROFFSET_MASK) >> REG_GX_DISPCNT_BGCHAROFFSET_SHIFT) *
                             0x10000 +
                         ((bgcnt & REG_G2_BG0CNT_CHARBASE_MASK) >> REG_G2_BG0CNT_CHARBASE_SHIFT) * 0x4000);
@@ -174,7 +184,7 @@ void *G2S_GetBG2CharPtr(void) {
     u32 bgcnt = reg_G2S_DB_BG2CNT;
 
     if (mode < 5 || !(bgcnt & REG_G2_BG0CNT_COLORMODE_MASK)) {
-        return (void *)(HW_DB_BG_VRAM +
+        return VRAM_HOST_PTR(HW_DB_BG_VRAM +
                         ((bgcnt & REG_G2_BG0CNT_CHARBASE_MASK) >> REG_G2_BG0CNT_CHARBASE_SHIFT) * 0x4000);
     }
     return NULL;
@@ -185,7 +195,7 @@ void *G2_GetBG3CharPtr(void) {
     u32 bgcnt = reg_G2_BG3CNT;
 
     if (mode < 3 || (mode < 6 && !(bgcnt & REG_G2_BG0CNT_COLORMODE_MASK))) {
-        return (void *)(HW_BG_VRAM +
+        return VRAM_HOST_PTR(HW_BG_VRAM +
                         ((reg_GX_DISPCNT & REG_GX_DISPCNT_BGCHAROFFSET_MASK) >> REG_GX_DISPCNT_BGCHAROFFSET_SHIFT) *
                             0x10000 +
                         ((bgcnt & REG_G2_BG0CNT_CHARBASE_MASK) >> REG_G2_BG0CNT_CHARBASE_SHIFT) * 0x4000);
@@ -198,7 +208,7 @@ void *G2S_GetBG3CharPtr(void) {
     u32 bgcnt = reg_G2S_DB_BG3CNT;
 
     if (mode < 3 || (mode < 6 && !(bgcnt & REG_G2_BG0CNT_COLORMODE_MASK))) {
-        return (void *)(HW_DB_BG_VRAM +
+        return VRAM_HOST_PTR(HW_DB_BG_VRAM +
                         ((bgcnt & REG_G2_BG0CNT_CHARBASE_MASK) >> REG_G2_BG0CNT_CHARBASE_SHIFT) * 0x4000);
     }
     return NULL;

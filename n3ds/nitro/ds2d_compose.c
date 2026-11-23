@@ -54,43 +54,49 @@ static u32 engine_obj_vram_base(int is_sub) {
     return is_sub ? HW_DB_OBJ_VRAM : HW_OBJ_VRAM;
 }
 
-static int vramcnt_is_main_bg_bank(u8 bank, u32 bank_index) {
-    u32 mst;
-
-    if ((bank & REG_GX_VRAMCNT_A_E_MASK) == 0 || bank_index >= 4u) {
-        return 0;
-    }
-    mst = bank & 7u;
-    /* Nitro GX_VRAMCNT(1,ofs) uses MST=1; hardware often shows MST=2/3 for A–D main BG. */
-    return mst == 1u || mst == 2u || mst == 3u;
+static u32 vramcnt_mst(u8 bank) {
+    return bank & 7u;
 }
 
-static u32 vramcnt_bank_slot_base(u8 bank) {
-    u32 ofs = ((u32)bank >> REG_GX_VRAMCNT_A_OFS_SHIFT) & 0x1fu;
+static u32 vramcnt_ofs(u8 bank) {
+    return ((u32)bank >> REG_GX_VRAMCNT_A_OFS_SHIFT) & 3u;
+}
 
-    return HW_BG_VRAM + ofs * 0x20000u;
+static u32 vramcnt_map_addr(u8 bank, u32 bank_index) {
+    u32 mst;
+    u32 ofs;
+
+    if ((bank & REG_GX_VRAMCNT_A_E_MASK) == 0) {
+        return 0;
+    }
+    mst = vramcnt_mst(bank);
+    ofs = vramcnt_ofs(bank);
+    if (bank_index < 2u) {
+        if (mst == 1u) {
+            return HW_BG_VRAM + ofs * 0x20000u;
+        }
+        if (mst == 2u) {
+            return HW_OBJ_VRAM + ofs * 0x20000u;
+        }
+        return 0;
+    }
+    if (bank_index < 4u) {
+        if (mst == 1u) {
+            return HW_BG_VRAM + ofs * 0x20000u;
+        }
+        if (mst == 2u) {
+            return HW_OBJ_VRAM + ofs * 0x20000u;
+        }
+        if (mst == 4u) {
+            return HW_DB_BG_VRAM + ofs * 0x20000u;
+        }
+        return 0;
+    }
+    return 0;
 }
 
 static u32 main_bg_linear_addr(u32 byte_off) {
-    u32 vramcnt = *(const u32 *)(pbw2_io + 0x240);
-    u32 i;
-
-    for (i = 0; i < 4u; i++) {
-        u8 bank = (u8)((vramcnt >> (i * 8u)) & 0xffu);
-        u32 slot;
-        u32 slot_start;
-        u32 slot_end;
-
-        if (!vramcnt_is_main_bg_bank(bank, i)) {
-            continue;
-        }
-        slot = ((u32)bank >> REG_GX_VRAMCNT_A_OFS_SHIFT) & 0x1fu;
-        slot_start = slot * 0x20000u;
-        slot_end = slot_start + 0x20000u;
-        if (byte_off >= slot_start && byte_off < slot_end) {
-            return HW_BG_VRAM + byte_off;
-        }
-    }
+    (void)byte_off;
     return HW_BG_VRAM + byte_off;
 }
 
@@ -100,12 +106,10 @@ static void log_vramcnt_banks(const char *tag) {
 
     for (i = 0; i < 4u; i++) {
         u8 bank = (u8)((vramcnt >> (i * 8u)) & 0xffu);
-        u32 mst = bank & 7u;
-        u32 ofs = ((u32)bank >> REG_GX_VRAMCNT_A_OFS_SHIFT) & 0x1fu;
-        u32 map = vramcnt_is_main_bg_bank(bank, i) ? vramcnt_bank_slot_base(bank) : 0u;
 
         Log_Line("GX", "vramcnt %s %c raw=0x%02x mst=%u ofs=%u map=0x%08x", tag, (char)('A' + (int)i),
-                 (unsigned)bank, (unsigned)mst, (unsigned)ofs, (unsigned)map);
+                 (unsigned)bank, (unsigned)vramcnt_mst(bank), (unsigned)vramcnt_ofs(bank),
+                 (unsigned)vramcnt_map_addr(bank, i));
     }
 }
 
@@ -276,7 +280,7 @@ static u32 count_opaque16_at_base(u16 cnt, int bw, int bh) {
     u32 pixels = (u32)bw * (u32)bh;
 
     for (i = 0; i < pixels; i++) {
-        if ((p[i] & 0x8000u) != 0) {
+        if ((p[i] & 0x7fffu) != 0) {
             opaque++;
         }
     }
@@ -364,7 +368,7 @@ static u16 sample_bitmap16(const u8 *regs, int bg, u16 cnt, int is_sub, int bw, 
     addr = is_sub ? (engine_bg_vram_base(1) + byte_off) : main_bg_linear_addr(byte_off);
     p = (const u16 *)(void *)vram_ptr(addr);
     c = p[0];
-    if ((c & 0x8000u) == 0) {
+    if ((c & 0x7fffu) == 0) {
         return 0;
     }
     return rgb555_to_565(c & 0x7fffu);
