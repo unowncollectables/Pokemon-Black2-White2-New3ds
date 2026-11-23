@@ -20,6 +20,7 @@ static u8 s_bg[PBW2_BG_SIZE];
 static u8 s_lcdc[PBW2_LCDC_SIZE];
 static u8 s_oam[PBW2_OAM_SIZE];
 static u32 s_load_bytes;
+static u32 s_bg_scr_upload_off[4];
 static int s_host_ready;
 
 void PbW2_VramHostInit(void) {
@@ -28,7 +29,26 @@ void PbW2_VramHostInit(void) {
     memset(s_lcdc, 0, sizeof s_lcdc);
     memset(s_oam, 0, sizeof s_oam);
     s_load_bytes = 0;
+    memset(s_bg_scr_upload_off, 0, sizeof s_bg_scr_upload_off);
     s_host_ready = 1;
+}
+
+void PbW2_NoteBgScrUpload(int bg, u32 arm_dest) {
+    u32 off;
+
+    if ((unsigned)bg >= 4u || arm_dest < PBW2_BG_BASE || arm_dest >= PBW2_BG_BASE + PBW2_BG_SIZE) {
+        return;
+    }
+    off = arm_dest - PBW2_BG_BASE;
+    off &= ~0x3fffu;
+    s_bg_scr_upload_off[bg] = off;
+}
+
+u32 PbW2_BgScrUploadByteOff(int bg) {
+    if ((unsigned)bg >= 4u) {
+        return 0;
+    }
+    return s_bg_scr_upload_off[bg];
 }
 
 int PbW2_VramHostReady(void) {

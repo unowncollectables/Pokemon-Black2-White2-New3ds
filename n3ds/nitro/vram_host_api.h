@@ -9,4 +9,6 @@ void *PbW2_VramMap(const void *addr);
 void PbW2_VramNoteLoad(u32 bytes);
 u32 PbW2_VramLoadBytes(void);
 int PbW2_VramResolveArm(const void *ptr, u32 *arm_out);
+void PbW2_NoteBgScrUpload(int bg, u32 arm_dest);
+u32 PbW2_BgScrUploadByteOff(int bg);
 #endif

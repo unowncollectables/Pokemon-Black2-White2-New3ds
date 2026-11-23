@@ -50,6 +50,11 @@ BOOL PbW2_TryDmaCopy32(const void *src, void *dest, u32 size) {
         return FALSE;
     }
     log_bg_upload_once(darm, size);
+    if (darm >= 0x06000000u && darm < 0x06020000u) {
+        PbW2_NoteBgScrUpload(2, darm);
+    } else if (darm >= 0x06020000u && darm < 0x06040000u) {
+        PbW2_NoteBgScrUpload(3, darm);
+    }
     PbW2_VramNoteLoad(size);
     arm_src = in_vram_range((uintptr_t)src) ? PbW2_VramMap(src) : src;
     memcpy(PbW2_VramMap((void *)(uintptr_t)darm), arm_src, size);

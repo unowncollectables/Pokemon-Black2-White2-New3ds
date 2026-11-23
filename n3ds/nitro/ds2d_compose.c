@@ -113,19 +113,30 @@ static void log_vramcnt_banks(const char *tag) {
     }
 }
 
+static u32 bitmap_screen_byte_off(u16 cnt, int bg) {
+    u32 slot = (((u32)cnt >> REG_G2_BG0CNT_SCREENBASE_SHIFT) & 0x1fu) * 0x4000u;
+    u32 up = PbW2_BgScrUploadByteOff(bg);
+
+    /* CDemo loads with screen-base 0 while DMA targets +0x4000; follow last upload slot. */
+    if (up != 0u && slot == 0u) {
+        slot = up;
+    }
+    return slot;
+}
+
 static u32 bg_screen_addr(u32 dc, u16 cnt, int is_sub, u32 bgmode, int bg) {
     u32 base = engine_bg_vram_base(is_sub);
-    u32 screen_base = ((u32)cnt >> REG_G2_BG0CNT_SCREENBASE_SHIFT) & 0x1fu;
     u32 off;
 
     if (bg >= 2 && bgmode >= GX_BGMODE_3 && bgmode <= GX_BGMODE_5 && (cnt & REG_G2_BG0CNT_COLORMODE_MASK)) {
-        off = screen_base * 0x4000u;
+        off = bitmap_screen_byte_off(cnt, bg);
         if (!is_sub) {
             return main_bg_linear_addr(off);
         }
         return base + off;
     }
-    off = screen_base * 0x800u;
+    off = ((u32)cnt >> REG_G2_BG0CNT_SCREENBASE_SHIFT) & 0x1fu;
+    off *= 0x800u;
     if (!is_sub) {
         off += ((dc >> REG_GX_DISPCNT_BGSCREENOFFSET_SHIFT) & 7u) * 0x10000u;
     }
@@ -155,6 +166,17 @@ static void read_bg_affine(const u8 *regs, int bg, s16 *pa, s16 *pb, s16 *pc, s1
         *pa = (s16)0x0100;
         *pd = (s16)0x0100;
     }
+}
+
+static void map_bitmap_uv(s16 pa, s16 pb, s16 pc, s16 pd, s32 rx, s32 ry, int x, int y, s32 *tx, s32 *ty) {
+    /* 8.8 affine coeffs; ref in 1/256 px — identity => 1:1 screen to texel. */
+    if (pa == (s16)0x0100 && pb == 0 && pc == 0 && pd == (s16)0x0100) {
+        *tx = x + (rx >> 8);
+        *ty = y + (ry >> 8);
+        return;
+    }
+    *tx = (s32)((((s64)rx + (s64)pa * x + (s64)pb * y) >> 8));
+    *ty = (s32)((((s64)ry + (s64)pc * x + (s64)pd * y) >> 8));
 }
 
 static const u16 *bg_layer_pltt(u32 dc, u16 cnt, int is_sub, int bg) {
@@ -271,9 +293,8 @@ static struct {
     u8 vram_delay;
 } s_mode5_diag;
 
-static u32 count_opaque16_at_base(u16 cnt, int bw, int bh) {
-    u32 screen_base = ((u32)cnt >> REG_G2_BG0CNT_SCREENBASE_SHIFT) & 0x1fu;
-    u32 addr = main_bg_linear_addr(screen_base * 0x4000u);
+static u32 count_opaque16_at_base(int bg, u16 cnt, int bw, int bh) {
+    u32 addr = main_bg_linear_addr(bitmap_screen_byte_off(cnt, bg));
     const u16 *p = (const u16 *)(void *)vram_ptr(addr);
     u32 opaque = 0;
     u32 i;
@@ -287,20 +308,39 @@ static u32 count_opaque16_at_base(u16 cnt, int bw, int bh) {
     return opaque;
 }
 
-static void log_mode5_bitmap(int bg, u16 cnt, u32 bmp_addr, int is16, u32 opaque, const char *phase) {
+static void log_mode5_bitmap(const u8 *regs, int bg, u16 cnt, u32 bmp_addr, int is16, int bw, int bh, u32 opaque,
+                              const char *phase) {
     u32 screen_base = ((u32)cnt >> REG_G2_BG0CNT_SCREENBASE_SHIFT) & 0x1fu;
+    s16 pa;
+    s16 pb;
+    s16 pc;
+    s16 pd;
+    s32 rx;
+    s32 ry;
+    s32 mx;
+    s32 my;
+    u32 mid_i;
     const u16 *samp;
+    u16 mid_c;
 
+    read_bg_affine(regs, bg, &pa, &pb, &pc, &pd, &rx, &ry);
+    map_bitmap_uv(pa, pb, pc, pd, rx, ry, 128, 96, &mx, &my);
+    mid_c = 0;
     samp = NULL;
     if (is16) {
         samp = (const u16 *)(void *)vram_ptr(bmp_addr);
+        if (mx >= 0 && my >= 0 && mx < bw && my < bh) {
+            mid_i = (u32)my * (u32)bw + (u32)mx;
+            mid_c = samp[mid_i];
+        }
     }
     Log_Line("GX",
-             "mode5-%s bg%d cnt=0x%04x prio=%u is16=%d screen=%u addr=0x%08x vram=%u samp=0x%04x,0x%04x,0x%04x,"
-             "0x%04x opaque=%u",
+             "mode5-%s bg%d cnt=0x%04x prio=%u is16=%d screen=%u addr=0x%08x PA=%d PB=%d PC=%d PD=%d refX=%d "
+             "refY=%d mid=%d,%d samp=0x%04x,0x%04x,0x%04x,0x%04x mid_c=0x%04x opaque=%u",
              phase, bg, (unsigned)cnt, (unsigned)(cnt & 3u), is16, (unsigned)screen_base, (unsigned)bmp_addr,
-             (unsigned)PbW2_VramLoadBytes(), samp ? (unsigned)samp[0] : 0u, samp ? (unsigned)samp[1] : 0u,
-             samp ? (unsigned)samp[2] : 0u, samp ? (unsigned)samp[3] : 0u, (unsigned)opaque);
+             (int)pa, (int)pb, (int)pc, (int)pd, (int)rx, (int)ry, (int)mx, (int)my,
+             samp ? (unsigned)samp[0] : 0u, samp ? (unsigned)samp[1] : 0u, samp ? (unsigned)samp[2] : 0u,
+             samp ? (unsigned)samp[3] : 0u, (unsigned)mid_c, (unsigned)opaque);
 }
 
 static void maybe_log_mode5(const u8 *regs, u32 dc, u32 bgmode, int bg, u16 cnt, u32 bmp_addr, int is16, int bw,
@@ -312,7 +352,7 @@ static void maybe_log_mode5(const u8 *regs, u32 dc, u32 bgmode, int bg, u16 cnt,
     if (bgmode != GX_BGMODE_5 || bg != 2) {
         return;
     }
-    opaque = is16 ? count_opaque16_at_base(cnt, bw, bh) : 0u;
+    opaque = is16 ? count_opaque16_at_base(2, cnt, bw, bh) : 0u;
     cnt3 = reg_u16(regs, 0x0e);
     addr3 = bg_screen_addr(dc, cnt3, 0, bgmode, 3);
     if (!s_mode5_diag.logged_at_on) {
@@ -322,8 +362,8 @@ static void maybe_log_mode5(const u8 *regs, u32 dc, u32 bgmode, int bg, u16 cnt,
         }
         s_mode5_diag.mode5_on_frame = s_mode5_diag.compose_frames;
         s_mode5_diag.logged_at_on = 1;
-        log_mode5_bitmap(2, cnt, bmp_addr, is16, opaque, "on");
-        log_mode5_bitmap(3, cnt3, addr3, 1, count_opaque16_at_base(cnt3, 256, 256), "on");
+        log_mode5_bitmap(regs, 2, cnt, bmp_addr, is16, bw, bh, opaque, "on");
+        log_mode5_bitmap(regs, 3, cnt3, addr3, 1, 256, 256, count_opaque16_at_base(3, cnt3, 256, 256), "on");
         return;
     }
     if (!s_mode5_diag.logged_delayed && s_mode5_diag.compose_frames >= s_mode5_diag.mode5_on_frame + 60u) {
@@ -332,8 +372,8 @@ static void maybe_log_mode5(const u8 *regs, u32 dc, u32 bgmode, int bg, u16 cnt,
             s_mode5_diag.vram_delay = 1;
         }
         s_mode5_diag.logged_delayed = 1;
-        log_mode5_bitmap(2, cnt, bmp_addr, is16, opaque, "+60");
-        log_mode5_bitmap(3, cnt3, addr3, 1, count_opaque16_at_base(cnt3, 256, 256), "+60");
+        log_mode5_bitmap(regs, 2, cnt, bmp_addr, is16, bw, bh, opaque, "+60");
+        log_mode5_bitmap(regs, 3, cnt3, addr3, 1, 256, 256, count_opaque16_at_base(3, cnt3, 256, 256), "+60");
     }
 }
 
@@ -346,7 +386,6 @@ static u16 sample_bitmap16(const u8 *regs, int bg, u16 cnt, int is_sub, int bw, 
     s32 ry;
     s32 tx;
     s32 ty;
-    u32 screen_base;
     u32 byte_off;
     u32 addr;
     int wrap;
@@ -354,8 +393,7 @@ static u16 sample_bitmap16(const u8 *regs, int bg, u16 cnt, int is_sub, int bw, 
     u16 c;
 
     read_bg_affine(regs, bg, &pa, &pb, &pc, &pd, &rx, &ry);
-    tx = (s32)((((s64)rx + (s64)pa * x + (s64)pb * y) >> 8));
-    ty = (s32)((((s64)ry + (s64)pc * x + (s64)pd * y) >> 8));
+    map_bitmap_uv(pa, pb, pc, pd, rx, ry, x, y, &tx, &ty);
     wrap = (cnt & (1u << REG_G2_BG2CNT_AREAOVER_SHIFT)) == 0;
     if (wrap) {
         tx &= (s32)(bw - 1);
@@ -363,8 +401,7 @@ static u16 sample_bitmap16(const u8 *regs, int bg, u16 cnt, int is_sub, int bw, 
     } else if (tx < 0 || ty < 0 || tx >= bw || ty >= bh) {
         return 0;
     }
-    screen_base = ((u32)cnt >> REG_G2_BG0CNT_SCREENBASE_SHIFT) & 0x1fu;
-    byte_off = screen_base * 0x4000u + ((u32)ty * (u32)bw + (u32)tx) * 2u;
+    byte_off = bitmap_screen_byte_off(cnt, bg) + ((u32)ty * (u32)bw + (u32)tx) * 2u;
     addr = is_sub ? (engine_bg_vram_base(1) + byte_off) : main_bg_linear_addr(byte_off);
     p = (const u16 *)(void *)vram_ptr(addr);
     c = p[0];
@@ -384,7 +421,6 @@ static u16 sample_bitmap8(const u8 *regs, int bg, u16 cnt, int is_sub, int bw, i
     s32 ry;
     s32 tx;
     s32 ty;
-    u32 screen_base;
     u32 byte_off;
     u32 addr;
     int wrap;
@@ -392,8 +428,7 @@ static u16 sample_bitmap8(const u8 *regs, int bg, u16 cnt, int is_sub, int bw, i
     u8 ci;
 
     read_bg_affine(regs, bg, &pa, &pb, &pc, &pd, &rx, &ry);
-    tx = (s32)((((s64)rx + (s64)pa * x + (s64)pb * y) >> 8));
-    ty = (s32)((((s64)ry + (s64)pc * x + (s64)pd * y) >> 8));
+    map_bitmap_uv(pa, pb, pc, pd, rx, ry, x, y, &tx, &ty);
     wrap = (cnt & (1u << REG_G2_BG2CNT_AREAOVER_SHIFT)) == 0;
     if (wrap) {
         tx &= (s32)(bw - 1);
@@ -401,8 +436,7 @@ static u16 sample_bitmap8(const u8 *regs, int bg, u16 cnt, int is_sub, int bw, i
     } else if (tx < 0 || ty < 0 || tx >= bw || ty >= bh) {
         return 0;
     }
-    screen_base = ((u32)cnt >> REG_G2_BG0CNT_SCREENBASE_SHIFT) & 0x1fu;
-    byte_off = screen_base * 0x4000u + (u32)ty * (u32)bw + (u32)tx;
+    byte_off = bitmap_screen_byte_off(cnt, bg) + (u32)ty * (u32)bw + (u32)tx;
     addr = is_sub ? (engine_bg_vram_base(1) + byte_off) : main_bg_linear_addr(byte_off);
     p = vram_ptr(addr);
     ci = p[0];
@@ -469,16 +503,39 @@ static void draw_bg_layer(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmode
     }
 }
 
+static u32 engine_obj_vram_mapped(int is_sub) {
+    u32 vramcnt;
+    u8 bank;
+    u32 map;
+
+    if (is_sub) {
+        vramcnt = *(const u32 *)(pbw2_io + 0x240);
+        bank = (u8)((vramcnt >> 24) & 0xffu);
+        map = vramcnt_map_addr(bank, 3);
+        if (map != 0u && vramcnt_mst(bank) == 2u) {
+            return map;
+        }
+        return HW_DB_OBJ_VRAM;
+    }
+    vramcnt = *(const u32 *)(pbw2_io + 0x240);
+    bank = (u8)(vramcnt & 0xffu);
+    map = vramcnt_map_addr(bank, 0);
+    if (map != 0u && vramcnt_mst(bank) == 2u) {
+        return map;
+    }
+    return HW_OBJ_VRAM;
+}
+
 static void draw_obj_layer(const u8 *regs, u32 dc, int is_sub, u16 *out) {
     static const u8 spw[3][4] = {{8, 16, 32, 64}, {16, 32, 32, 64}, {8, 8, 16, 32}};
     static const u8 sph[3][4] = {{8, 16, 32, 64}, {8, 8, 16, 32}, {16, 32, 32, 64}};
     u32 oam_base = is_sub ? HW_DB_OAM : HW_OAM;
     const u16 *oam = (const u16 *)(void *)PbW2_VramMap((void *)(uintptr_t)oam_base);
-    const u8 *ovram = vram_ptr(engine_obj_vram_base(is_sub));
+    const u8 *ovram = vram_ptr(engine_obj_vram_mapped(is_sub));
     const u16 *pltt = (dc & REG_GX_DISPCNT_O_MASK) != 0 ? (const u16 *)(void *)vram_ptr(HW_LCDC_VRAM_G)
                                                       : engine_obj_pltt(is_sub);
-    u32 obj1d = dc & 0x10u;
-    u32 obj1d_shift = (dc >> 20) & 3u;
+    u32 obj1d = (dc & REG_GX_DISPCNT_OBJMAP_CH_MASK) != 0u;
+    u32 obj1d_shift = (dc >> REG_GX_DISPCNT_EXOBJ_SHIFT) & 3u;
     int pri;
     int i;
 
@@ -506,7 +563,7 @@ static void draw_obj_layer(const u8 *regs, u32 dc, int is_sub, u16 *out) {
             if (((a[2] >> 10) & 3) != (u32)pri) {
                 continue;
             }
-            if (a[0] & 0x100) {
+            if (((a[0] >> 8) & 3u) == 2u) {
                 continue;
             }
             width = spw[shape][size];
