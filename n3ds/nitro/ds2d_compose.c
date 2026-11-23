@@ -452,7 +452,6 @@ static u16 sample_bitmap8(int is_sub, int bg, u16 cnt, int bw, int bh, int x, in
     s32 ry;
     s32 tx;
     s32 ty;
-    u32 byte_off;
     u32 addr;
     int wrap;
     const u8 *p;

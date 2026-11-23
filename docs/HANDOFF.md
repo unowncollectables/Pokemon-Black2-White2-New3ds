@@ -35,6 +35,30 @@ A host decode of `res/graphics/title` (the same NCGR/NSCR/NCLR layout as
 archive `a/0/2/6`) produced the Black 2 logo on the blue title background
 and the White 2 logo on its background.
 
+## Current LINK_GAME smoke (r28)
+
+`MI_UncompressLZ8` in `n3ds/nitro/mi_host.c` is implemented for `PBW2_LINK_GAME`
+only (default shells stay a no-op stub). It is a C translation of
+`lib/nitro/src/mi/mi_uncompress.c`: DS LZ10 (type `0x10`) and LZ11 (type
+`0x11`). Destinations go through `PbW2_VramMap`.
+
+CDEMO ov264 (`cdemo_control.c` / `cdemo_main.c`): each frame in `a/2/2/0`
+(GF logo) and `a/2/2/2` (opening) is LZ11 with uncompressed size `0x20000`
+(256×256 16bpp). `CDemo_LoadMovieFrame` DMAs the first `0x18000` bytes
+(256×192) via `GX_LoadBG2Scr` / `GX_LoadBG3Scr` at screen offset 0; BG2
+bitmap base is `0x00000`, BG3 is `0x20000`, and the visible buffer is the
+priority-0 plane. Mode-5 compose already matched that. The previous
+scanline garbage was uninitialized heap uploaded because the uncompress
+stub was a no-op.
+
+Azahar 90s Black 2 (no `.sav`): TPC/Nintendo splash, copyright on the top
+LCD, then the Game Freak logo and the Black 2 opening movie full-frame on
+the top LCD. `Title_Init` is reached; the bottom LCD shows "Developed by
+GAME FREAK inc."; the top LCD is still black (Citro3D replay and
+`NNS_G3dDraw` / TexLoad / Bind are not wired). G3 FIFO captured 48 words.
+
+Default shells remain **146976** B, `b7c59f88` / `fd82c634`.
+
 ## What the box should run
 
 ```sh
@@ -259,10 +283,12 @@ rasterizer fed from the same display lists.
   silently, when debugging geometry.
 
 **CDEMO ov264 (double load):** `boot_proc` queues overlay 264 twice (GF logo
-`demo=0`, then opening `demo=2`). Immediate return usually means the script hit
-`CDEMO_CMD_END` (fade/movie state finished), not a missing overlay — check
-`[overlay] GFL_OvlUnload id=264` spacing and `[GX] disp trace` for VRAM growth
-during `CDemo_LoadMovieFrame` (`GX_LoadBG2Scr` / `GX_LoadBG3Scr`).
+`demo=0`, then opening `demo=2`). Frames are LZ11 (`MI_UncompressLZ8`); load
+is `GX_LoadBG2Scr` / `GX_LoadBG3Scr` of `0x18000` at offset 0 into bases
+`0x00000` / `0x20000`, flipped by BG priority. Immediate return usually means
+the script hit `CDEMO_CMD_END` (fade/movie state finished), not a missing
+overlay — check `[overlay] GFL_OvlUnload id=264` spacing and `[GX] disp
+trace` for VRAM growth during `CDemo_LoadMovieFrame`.
 
 ## Maintainer notes
 

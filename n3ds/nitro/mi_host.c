@@ -178,8 +178,72 @@ int MI_CpuComp8(const void *a, const void *b, u32 size) {
 }
 
 void MI_UncompressLZ8(const void *src, void *dest) {
+#if defined(PBW2_LINK_GAME)
+    /* Host C translation of lib/nitro/src/mi/mi_uncompress.c (NitroSDK LZ10/LZ11).
+       The SDK source is MWCC asm with SWPB for DS VRAM; byte stores are fine here. */
+    const u8 *s;
+    u8 *d;
+    u32 header;
+    u32 left;
+    int extended;
+    u32 flags;
+    int bits;
+    u32 base;
+    u32 length;
+    u32 disp;
+    u8 a;
+    u8 b;
+
+    if (src == NULL || dest == NULL) {
+        return;
+    }
+    s = pbw2_map_ptr(src);
+    d = pbw2_map_ptr(dest);
+    header = (u32)s[0] | ((u32)s[1] << 8) | ((u32)s[2] << 16) | ((u32)s[3] << 24);
+    s += 4;
+    left = header >> 8;
+    extended = (header & 0xfu) != 0;
+    while (left > 0) {
+        flags = *s++;
+        bits = 8;
+        while (bits-- > 0 && left > 0) {
+            if (flags & 0x80u) {
+                a = *s;
+                if (!extended) {
+                    base = 3u;
+                } else if (a & 0xe0u) {
+                    base = 1u;
+                } else {
+                    s++;
+                    base = (u32)(a & 0xfu) << 4;
+                    if (a & 0x10u) {
+                        base <<= 8;
+                        b = *s++;
+                        base += ((u32)b << 4) + 0x100u;
+                    }
+                    base += 0x11u;
+                    a = *s;
+                }
+                length = base + ((u32)a >> 4);
+                s++;
+                disp = (((u32)a & 0xfu) << 8) | *s++;
+                disp += 1u;
+                left -= length;
+                while (length-- > 0u) {
+                    *d = *(d - disp);
+                    d++;
+                }
+            } else {
+                *d++ = *s++;
+                left--;
+            }
+            flags <<= 1;
+        }
+    }
+#else
     (void)src;
     (void)dest;
+#endif
 }
 
 void MI_Copy36B(const void *src, void *dest) {
