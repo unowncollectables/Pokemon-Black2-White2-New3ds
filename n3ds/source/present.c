@@ -26,6 +26,10 @@ uint32_t Present_Flags(void) {
 }
 
 void GxShim_Present(uint32_t flags) {
+#if defined(PBW2_LINK_GAME)
+    extern void pbw2_game_notify_present(void);
+    pbw2_game_notify_present();
+#endif
     if (s_logged) {
         return;
     }

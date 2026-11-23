@@ -8,9 +8,16 @@
 
 extern u8 pbw2_io[];
 
+#if defined(PBW2_LINK_GAME)
+#include "pad_host.h"
+#endif
+
 void GX_Init(void) {
     /* Display control and the two engines' first kilobyte. */
     memset(pbw2_io, 0, 0x2000);
+#if defined(PBW2_LINK_GAME)
+    PbW2_PadHostInit();
+#endif
 }
 
 s32 GX_VBlankIntr(BOOL enable) {

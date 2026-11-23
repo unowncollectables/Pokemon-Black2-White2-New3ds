@@ -35,6 +35,10 @@
 #include "system/version.h"
 #include "text/system/title.h"
 
+#ifdef PBW2_N3DS
+#include "log.h"
+#endif
+
 // The title screen: a 3D scene under a camera that follows a curve, with 2D layers over it. The main engine draws to
 // VRAM D through the display capture, blending each frame with the last for a motion blur, and shows VRAM D.
 // A or Start goes on to the start menu, Up, Select and B to deleting the save, and Down, X and Y to the microphone
@@ -314,6 +318,9 @@ const GameProcFunctions TITLE_PROC_FUNCTIONS = { Title_Init, Title_Main, Title_E
 static BOOL Title_Init(GameProc *proc, u32 *state, void *param, void *work) {
     TitleWork *wk;
 
+#ifdef PBW2_N3DS
+    Log_Line("game", "title proc Title_Init enter");
+#endif
     GFL_HeapCreateChild(HEAPID_USER, HEAPID_TITLE, 0x120000);
     wk = GFL_ProcInitSubsystem(proc, sizeof(TitleWork), HEAPID_TITLE);
     MI_CpuFill8(wk, 0, sizeof(TitleWork));

@@ -12,6 +12,10 @@
 #include "nitro/os.h"
 #include "nitro/pm.h"
 
+#ifdef PBW2_N3DS
+#include "log.h"
+#endif
+
 // The keys that reset the game when held together: L, R, START and SELECT
 #define SOFT_RESET_KEYS (PAD_BUTTON_L | PAD_BUTTON_R | PAD_BUTTON_START | PAD_BUTTON_SELECT)
 
@@ -336,6 +340,13 @@ static void sleepSetup(void) {
 // Turns the screens white and resets once the network and the card are idle
 void GFL_HIDDoSoftReset(u32 parameter) {
     SystemUI *ui = GCTX_HIDGetInstance();
+
+#ifdef PBW2_N3DS
+    (void)parameter;
+    Log_Line("game", "GFL_HIDDoSoftReset ignored");
+    setBacklightBothScreens(ui->backlight);
+    return;
+#endif
 
     GX_SetMasterBrightness(16);
     GXS_SetMasterBrightness(16);
