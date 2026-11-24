@@ -57,10 +57,14 @@ LIB_GAME_G2D := \
 LIB_GAME_GFD := \
 	gfd_VramTransferManager.o gfd_FramePlttVramMan.o gfd_FrameTexVramMan.o gfd_LinkedListPlttVramMan.o \
 	gfd_LinkedListTexVramMan.o gfd_PlttVramMan.o gfd_TexVramMan.o gfdi_LinkedListVramMan_Common.o
+LIB_GAME_G3D := \
+	res_struct_accessor.o res_struct_accessor_anm.o kernel.o mem.o anm.o \
+	nsbca.o nsbma.o nsbta.o nsbtp.o nsbva.o
 LIB_GAME_OBJS := \
 	../build/n3ds/$(GAME_SYM)/obj/lib/nitro/src/gx/gx_load2d.o \
 	$(foreach o,$(LIB_GAME_G2D),../build/n3ds/$(GAME_SYM)/obj/lib/nnsys/src/g2d/$(o)) \
-	$(foreach o,$(LIB_GAME_GFD),../build/n3ds/$(GAME_SYM)/obj/lib/nnsys/src/gfd/$(o))
+	$(foreach o,$(LIB_GAME_GFD),../build/n3ds/$(GAME_SYM)/obj/lib/nnsys/src/gfd/$(o)) \
+	$(foreach o,$(LIB_GAME_G3D),../build/n3ds/$(GAME_SYM)/obj/lib/nnsys/src/g3d/$(o))
 CFLAGS += -DPBW2_LINK_GAME=1
 CFLAGS += $(shell for d in $(CURDIR)/../lib/*/include; do echo -I$$d; done)
 SHELL_SRC += source/game_thread.c nitro/mi_host.c nitro/ic_dc_host.c \

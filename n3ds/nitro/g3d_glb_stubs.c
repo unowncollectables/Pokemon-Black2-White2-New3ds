@@ -6,6 +6,10 @@
 #include "nitro/gx.h"
 #include "stub_log.h"
 
+/* The animation library references this state during drawing. The host
+ * still stubs drawing, so there is no active render state. */
+NNSG3dRS *NNS_G3dRS;
+
 void NNS_G3dGlbInit(void) {
 }
 

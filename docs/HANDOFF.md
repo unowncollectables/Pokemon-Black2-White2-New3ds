@@ -276,19 +276,36 @@ Best stills from the last smoke live in
 
 ## 8. Known issues and next steps (priority order)
 
+The first New 3DS hardware run hit an ARM11 data abort on a halfword
+write to the DS master brightness register (`0x0400006c`). The port now
+routes both engines' brightness registers through `pbw2_io`, which the
+2D compositor already reads. Black 2 in Azahar logs the fades and enters
+the start menu, where both screens still render incorrectly. A hardware
+retest is pending.
+
+The linked build passes START to the game. The shell-only build still
+uses START to quit.
+
+Immediate Nitro DMA fills and copies now use host memory transfers. The
+linked build also uses the existing NitroSystem model and animation
+resource code instead of placeholder allocators and accessors.
+Black 2 reached `Title_Init` and entered the title loop in Azahar with
+zero unmapped accesses in the post-patch smoke trace. Menu input and the
+hardware run still need verification.
+
 1. **PRESS START is garbled** on sub OBJ (reads like `PPPPS SSSST`).
    Fix 2D OBJ composition / mapping / 1D char layout before chasing 3D.
 2. **3D Kyurem is missing.** `g3_gecom_host.c` already captures the G3
    FIFO (`[G3] fifo words=48` on title). Still needed: FIFO replay to
-   Citro3D; real `NNS_G3dDraw` / TexLoad / Bind / MTX (not first-call
-   stubs); `GX_SetCapture` to VRAM D (`GX_DISPMODE_VRAM_D`) so the
+   Citro3D, `NNS_G3dDraw`, host texture uploads and matrix operations,
+   and `GX_SetCapture` to VRAM D (`GX_DISPMODE_VRAM_D`) so the
    captured 2D3D+VRAM actually reaches a LCD. Mine SoulSilver
    `g3packet.c` and the Platinum port **first**.
 3. **Audio.** ARM7 is not decompiled. Host NDSP player; this phase is
    silent and must not call `ndspInit` until a real player exists
    (Azahar has no DSP firmware).
-4. **Input** so the user can get past the title (no self-reset, no
-   auto-press of START to skip).
+4. **Start menu.** Verify input and trace the broken rendering after the
+   immediate DMA fix.
 5. **Field**, then **battle**, then **save** (game is the only writer;
    cartridge format), then **comms**.
 6. **Quality-of-life features**, each a default-off Settings toggle.
@@ -410,8 +427,8 @@ PXI FS callback, **no** CARD worker thread).
 ### What is still stubbed
 
 - Sound. NDSP is not started. No ARM7 player, no music.
-- 3D replay. FIFO is captured; Citro3D draw and `NNS_G3dDraw` / TexLoad
-  / Bind / MTX are stubs. `GX_SetCapture` to VRAM D is not wired.
+- 3D replay. FIFO is captured. `NNS_G3dDraw`, host texture uploads,
+  matrix operations, and `GX_SetCapture` to VRAM D still need work.
 - DSi/TWL and the two DSP firmware images (`rom/dsp/*.inc`, ROM-backed,
   not in git).
 - Settings. The screen exists so the next feature has a place. No

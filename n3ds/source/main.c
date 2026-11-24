@@ -184,10 +184,12 @@ int main(int argc, char **argv) {
     while (aptMainLoop()) {
         Input_Scan();
         NitroHost_Frame(Pad_FromHid(hidKeysHeld()));
+#if !defined(PBW2_LINK_GAME)
         if (Input_Quit()) {
             Log_Line("3DS", "START exit");
             break;
         }
+#endif
 
         /* Both screens, one commit. The title pictures use that same pair. */
         Present_Commit(true, true);
