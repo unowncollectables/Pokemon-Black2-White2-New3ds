@@ -2185,8 +2185,13 @@ int G3X_GetBoxTestResult(s32 *result);                            // swan's gfxG
 #else
 #define reg_G2S_DB_BG3PD (*(vu16 *)0x04001036)
 #endif
+#ifdef PBW2_N3DS
+#define reg_GX_MASTER_BRIGHT PBW2_VU16(REG_MASTER_BRIGHT_ADDR)
+#define reg_GXS_DB_MASTER_BRIGHT PBW2_VU16(REG_DB_MASTER_BRIGHT_ADDR)
+#else
 #define reg_GX_MASTER_BRIGHT (*(vu16 *)REG_MASTER_BRIGHT_ADDR)
 #define reg_GXS_DB_MASTER_BRIGHT (*(vu16 *)REG_DB_MASTER_BRIGHT_ADDR)
+#endif
 
 // The default DMA channel of GXi_DmaId
 #define GX_DEFAULT_DMAID 3

@@ -17,16 +17,18 @@
 #define MI_ADDR_AREA_CARTRIDGE 0x08000000
 
 void MIi_DmaFill32(u32 dmaNo, void *dest, u32 data, u32 size, BOOL dmaEnable) {
+#ifdef PBW2_N3DS
+    (void)dmaNo;
+    size &= ~3u;
+    if (dmaEnable && size != 0 && !PbW2_TryDmaFill32(dest, data, size)) {
+        MIi_CpuClear32(data, dest, size);
+    }
+#else
     vu32 *dmaCntp;
 
     if (size == 0) {
         return;
     }
-#ifdef PBW2_N3DS
-    if (PbW2_TryDmaFill32(dest, data, size)) {
-        return;
-    }
-#endif
     dmaCntp = &((vu32 *)REG_DMA0SAD_ADDR)[dmaNo * 3 + 2];
     while (*dmaCntp & MI_DMA_ENABLE) {
     }
@@ -39,19 +41,22 @@ void MIi_DmaFill32(u32 dmaNo, void *dest, u32 data, u32 size, BOOL dmaEnable) {
     }
     while (*dmaCntp & MI_DMA_ENABLE) {
     }
+#endif
 }
 
 void MIi_DmaCopy32(u32 dmaNo, const void *src, void *dest, u32 size, BOOL dmaEnable) {
+#ifdef PBW2_N3DS
+    (void)dmaNo;
+    size &= ~3u;
+    if (dmaEnable && size != 0 && !PbW2_TryDmaCopy32(src, dest, size)) {
+        MIi_CpuCopy32(src, dest, size);
+    }
+#else
     vu32 *dmaCntp;
 
     if (size == 0) {
         return;
     }
-#ifdef PBW2_N3DS
-    if (PbW2_TryDmaCopy32(src, dest, size)) {
-        return;
-    }
-#endif
     MIi_CheckDma0SourceAddress(dmaNo, (u32)src, size, MI_DMA_SRC_INC);
     dmaCntp = &((vu32 *)REG_DMA0SAD_ADDR)[dmaNo * 3 + 2];
     while (*dmaCntp & MI_DMA_ENABLE) {
@@ -65,19 +70,22 @@ void MIi_DmaCopy32(u32 dmaNo, const void *src, void *dest, u32 size, BOOL dmaEna
     }
     while (*dmaCntp & MI_DMA_ENABLE) {
     }
+#endif
 }
 
 void MIi_DmaCopy16(u32 dmaNo, const void *src, void *dest, u32 size, BOOL dmaEnable) {
+#ifdef PBW2_N3DS
+    (void)dmaNo;
+    size &= ~1u;
+    if (dmaEnable && size != 0 && !PbW2_TryDmaCopy16(src, dest, size)) {
+        MIi_CpuCopy16(src, dest, size);
+    }
+#else
     vu32 *dmaCntp;
 
     if (size == 0) {
         return;
     }
-#ifdef PBW2_N3DS
-    if (PbW2_TryDmaCopy16(src, dest, size)) {
-        return;
-    }
-#endif
     MIi_CheckDma0SourceAddress(dmaNo, (u32)src, size, MI_DMA_SRC_INC);
     dmaCntp = &((vu32 *)REG_DMA0SAD_ADDR)[dmaNo * 3 + 2];
     while (*dmaCntp & MI_DMA_ENABLE) {
@@ -89,9 +97,16 @@ void MIi_DmaCopy16(u32 dmaNo, const void *src, void *dest, u32 size, BOOL dmaEna
     }
     while (*dmaCntp & MI_DMA_ENABLE) {
     }
+#endif
 }
 
 void MIi_DmaFill32Async(u32 dmaNo, void *dest, u32 data, u32 size, MIDmaCallback callback, void *arg, BOOL dmaEnable) {
+#ifdef PBW2_N3DS
+    MIi_DmaFill32(dmaNo, dest, data, size, dmaEnable);
+    if (callback != NULL && (dmaEnable || size == 0)) {
+        callback(arg);
+    }
+#else
     if (size == 0) {
         if (callback != NULL) {
             callback(arg);
@@ -119,10 +134,17 @@ void MIi_DmaFill32Async(u32 dmaNo, void *dest, u32 data, u32 size, MIDmaCallback
                                  MI_DMA_SET_NO_DMA0_FIX | MI_DMA_SET_FILL32);
         }
     }
+#endif
 }
 
 void MIi_DmaCopy32Async(u32 dmaNo, const void *src, void *dest, u32 size, MIDmaCallback callback, void *arg,
                         BOOL dmaEnable) {
+#ifdef PBW2_N3DS
+    MIi_DmaCopy32(dmaNo, src, dest, size, dmaEnable);
+    if (callback != NULL && (dmaEnable || size == 0)) {
+        callback(arg);
+    }
+#else
     MIi_CheckDma0SourceAddress(dmaNo, (u32)src, size, MI_DMA_SRC_INC);
     if (size == 0) {
         if (callback != NULL) {
@@ -147,27 +169,15 @@ void MIi_DmaCopy32Async(u32 dmaNo, const void *src, void *dest, u32 size, MIDmaC
             MIi_DmaSetParameters(dmaNo, (u32)src, (u32)dest, MI_DMA_32BIT_BUS | (size >> 2), MI_DMA_SET_NO_DMA0_FIX);
         }
     }
+#endif
 }
 
 void MI_WaitDma(u32 dmaNo) {
-    OSIntrMode enabled = OS_DisableInterrupts();
-
 #ifdef PBW2_N3DS
-    {
-        MIDmaRegs *dmaRegs = (MIDmaRegs *)(void *)PBW2_IO(0x040000b0);
-        while (dmaRegs[dmaNo].cnt & MI_DMA_ENABLE) {
-        }
-        if (dmaNo == 0) {
-            MIDmaRegs *regs = &dmaRegs[dmaNo];
-            regs->src = 0;
-            regs->dest = 0;
-            regs->cnt = MIi_DUMMY_CNT;
-        }
-        OS_RestoreInterrupts(enabled);
-        return;
-    }
-#endif
-
+    // Immediate transfers finish before returning to the caller.
+    (void)dmaNo;
+#else
+    OSIntrMode enabled = OS_DisableInterrupts();
     while (MI_DMA_REGS[dmaNo].cnt & MI_DMA_ENABLE) {
     }
     if (dmaNo == 0) {
@@ -177,9 +187,14 @@ void MI_WaitDma(u32 dmaNo) {
         regs->cnt = MIi_DUMMY_CNT;
     }
     OS_RestoreInterrupts(enabled);
+#endif
 }
 
 void MI_StopDma(u32 dmaNo) {
+#ifdef PBW2_N3DS
+    // Immediate transfers have no outstanding channel to stop.
+    (void)dmaNo;
+#else
     OSIntrMode enabled = OS_DisableInterrupts();
     vu32 *dmaCntp = &MI_DMA_REGS[dmaNo].cnt;
 
@@ -195,6 +210,7 @@ void MI_StopDma(u32 dmaNo) {
         regs->cnt = MIi_DUMMY_CNT;
     }
     OS_RestoreInterrupts(enabled);
+#endif
 }
 
 void MI_StopAllDma(void) {

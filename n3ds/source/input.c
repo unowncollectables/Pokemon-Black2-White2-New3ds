@@ -76,7 +76,9 @@ void Input_Draw(void) {
     printf("\x1b[3;0HZL %s   ZR %s", (s_held & KEY_ZL) ? "held" : "    ", (s_held & KEY_ZR) ? "held" : "    ");
     printf("\x1b[4;0HC-stick %4d %4d", stick.dx, stick.dy);
     printf("\x1b[6;0HL+R+Y settings");
+#if !defined(PBW2_LINK_GAME)
     printf("\x1b[7;0HSTART exits the shell");
+#endif
 }
 
 bool Input_Quit(void) {
