@@ -279,9 +279,8 @@ Best stills from the last smoke live in
 The first New 3DS hardware run hit an ARM11 data abort on a halfword
 write to the DS master brightness register (`0x0400006c`). The port now
 routes both engines' brightness registers through `pbw2_io`, which the
-2D compositor already reads. Black 2 in Azahar logs the fades and enters
-the start menu, where both screens still render incorrectly. A hardware
-retest is pending.
+2D compositor already reads. A hardware retest passed that fade and
+reached start-menu setup after leaving the title screen.
 
 The linked build passes START to the game. The shell-only build still
 uses START to quit.
@@ -290,8 +289,17 @@ Immediate Nitro DMA fills and copies now use host memory transfers. The
 linked build also uses the existing NitroSystem model and animation
 resource code instead of placeholder allocators and accessors.
 Black 2 reached `Title_Init` and entered the title loop in Azahar with
-zero unmapped accesses in the post-patch smoke trace. Menu input and the
-hardware run still need verification.
+zero unmapped accesses in the title-loop smoke trace.
+
+The hardware run then aborted in `StartMenu_SetBlend`, where
+`G2x_SetBlendAlpha_` wrote to the DS `BLDCNT` address (`0x04000050`).
+The shared GX blend helpers now translate both engines' register
+addresses through `pbw2_io`. Retest the start-menu transition on hardware.
+
+Linked builds keep diagnostics in the SD log and initialize the screens
+without a text console. The first game frame takes over both screens,
+and presentation continues through display-off and layer-off transitions
+so a swap cannot reveal an older boot framebuffer.
 
 1. **PRESS START is garbled** on sub OBJ (reads like `PPPPS SSSST`).
    Fix 2D OBJ composition / mapping / 1D char layout before chasing 3D.

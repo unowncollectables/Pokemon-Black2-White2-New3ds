@@ -34,11 +34,10 @@ void GxShim_Present(uint32_t flags) {
 #if defined(PBW2_LINK_GAME)
     static u16 s_top[256 * 192];
     static u16 s_bottom[256 * 192];
-    extern void pbw2_game_notify_present(void);
-
     if (PbW2_VramHostReady()) {
         PbW2_GxDisplayTrace();
-        if (PbW2_GameDisplayReady()) {
+        /* Readiness gates the first game frame. Later frames can intentionally blank the LCDs. */
+        if (PbW2_GameHasPresented() || PbW2_GameDisplayReady()) {
             (void)PbW2_ComposeScreens(s_top, s_bottom);
             if ((flags & PBW2_SCREEN_TOP) != 0) {
                 Present_BlitRGB565(GFX_TOP, s_top, 256, 192);
@@ -83,6 +82,26 @@ static void clear_landscape(u16 *fb, u16 stride, u16 land_w, u16 land_h) {
         }
     }
 }
+
+#if defined(PBW2_LINK_GAME)
+static void clear_screen(gfxScreen_t screen) {
+    u16 stride;
+    u16 width;
+    u16 *fb = landscape_fb(screen, &stride, &width);
+    if (fb != NULL) {
+        memset(fb, 0, (size_t)stride * width * sizeof(*fb));
+    }
+}
+
+void Present_Clear(uint32_t flags) {
+    if (flags & PBW2_SCREEN_TOP) {
+        clear_screen(GFX_TOP);
+    }
+    if (flags & PBW2_SCREEN_BOTTOM) {
+        clear_screen(GFX_BOTTOM);
+    }
+}
+#endif
 
 void Present_BlitRGB565(gfxScreen_t screen, const uint16_t *pic, int pic_w, int pic_h) {
     u16 stride = 0;
