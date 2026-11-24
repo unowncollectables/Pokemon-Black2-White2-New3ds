@@ -65,7 +65,6 @@ void MI_WaitNDma(void) { PBW2_STUB_LOG("link", "MI_WaitNDma"); }
  * in mic_stub.c and returns MIC_RESULT_FATAL_ERROR; MIC_Init is a no-op. */
 void MIC_Init(void) { PBW2_STUB_LOG("link", "MIC_Init"); }
 void NCFG_ReadConfigEx(void) { PBW2_STUB_LOG("link", "NCFG_ReadConfigEx"); }
-void NNS_G3dDraw(void) { PBW2_STUB_LOG("link", "NNS_G3dDraw"); }
 void NNS_SndArcSetFileAddress(void) { PBW2_STUB_LOG("link", "NNS_SndArcSetFileAddress"); }
 void NNS_SndArcSetLoadBlockSize(void) { PBW2_STUB_LOG("link", "NNS_SndArcSetLoadBlockSize"); }
 void NNS_SndArcStrmAllocChannel(void) { PBW2_STUB_LOG("link", "NNS_SndArcStrmAllocChannel"); }

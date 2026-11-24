@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -38,8 +39,8 @@ def main() -> int:
 
         rsp = ROOT / "build" / "n3ds" / game / "game_objects.rsp"
         if rsp.is_file():
-            for line in rsp.read_text().splitlines():
-                p = Path(line.strip())
+            for entry in shlex.split(rsp.read_text()):
+                p = Path(entry)
                 if not p.is_file():
                     print(f"FAIL closure missing: {p}", file=sys.stderr)
                     err = 1

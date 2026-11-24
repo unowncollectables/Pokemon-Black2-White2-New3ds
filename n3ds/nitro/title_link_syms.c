@@ -12,8 +12,6 @@ u16 GXi_VRamLockId;
 u32 GXi_DmaId = GX_DEFAULT_DMAID;
 volatile u64 OSi_TickCounter;
 
-NNSG3dGlb NNS_G3dGlb;
-
 static void *DSProt_StubNop(void *a, void *b) {
     (void)a;
     (void)b;

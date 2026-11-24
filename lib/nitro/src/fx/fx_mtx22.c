@@ -5,7 +5,28 @@
 // these three were hand-written assembly and are asm functions here.
 #include "nitro/fx.h"
 
+#ifdef PBW2_N3DS
+void MTX_Identity22_(MtxFx22 *mtx) {
+    MTX_Scale22_(mtx, FX32_ONE, FX32_ONE);
+}
+
+void MTX_Scale22_(MtxFx22 *mtx, fx32 x, fx32 y) {
+    mtx->_00 = x;
+    mtx->_01 = 0;
+    mtx->_10 = 0;
+    mtx->_11 = y;
+}
+
+void MTX_Rot22_(MtxFx22 *mtx, fx32 sin, fx32 cos) {
+    mtx->_00 = cos;
+    mtx->_01 = sin;
+    mtx->_10 = -sin;
+    mtx->_11 = cos;
+}
+#endif
+
 #pragma thumb off
+#ifndef PBW2_N3DS
 // clang-format off
 asm void MTX_Identity22_(MtxFx22 *mtx) {
     mov r1, #0
@@ -17,9 +38,11 @@ asm void MTX_Identity22_(MtxFx22 *mtx) {
 }
 
 // clang-format on
+#endif
 #pragma thumb on
 
 // Stores through stm with writeback, which MWCC does not generate
+#ifndef PBW2_N3DS
 // clang-format off
 asm void MTX_Scale22_(MtxFx22 *mtx, fx32 x, fx32 y) {
     stmia r0!, {r1}
@@ -31,7 +54,9 @@ asm void MTX_Scale22_(MtxFx22 *mtx, fx32 x, fx32 y) {
 }
 
 // clang-format on
+#endif
 
+#ifndef PBW2_N3DS
 // clang-format off
 asm void MTX_Rot22_(MtxFx22 *mtx, fx32 sin, fx32 cos) {
     str r2, [r0, #0]
@@ -43,6 +68,7 @@ asm void MTX_Rot22_(MtxFx22 *mtx, fx32 sin, fx32 cos) {
 }
 
 // clang-format on
+#endif
 
 void MTX_ScaleApply22(const MtxFx22 *src, MtxFx22 *dest, fx32 x, fx32 y) {
     dest->_00 = (fx32)(((fx64)x * src->_00) >> FX32_SHIFT);

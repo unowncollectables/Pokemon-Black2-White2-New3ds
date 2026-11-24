@@ -244,8 +244,7 @@ Field *Field_Create(GameSystem *gsys, HeapID heapId) {
     u16 areaId;
 
 #ifdef PBW2_N3DS
-    Log_Line("field", "Field_Create enter zone=%u",
-             PlayerState_GetZoneID(GSYS_GetPlayerState(gsys)));
+    Log_Line("field", "Field_Create enter zone=%u", PlayerState_GetZoneID(GSYS_GetPlayerState(gsys)));
 #endif
     field->heapId = heapId;
     field->routineState = 0;
@@ -706,13 +705,14 @@ BOOL Field_CallRoutines(GameSystem *gsys, Field *field) {
 #ifdef PBW2_N3DS
     {
         static u32 s_lastRoutineID = 0xFFFFFFFFu;
-        static u32 s_lastAlternator = 0xFFFFFFFFu;
+        static u32 s_lastPhase = 0xFFFFFFFFu;
 
-        if (field->routineID != s_lastRoutineID || field->routineAlternator != s_lastAlternator) {
+        if (field->framesSinceStart == 1 || field->routineID != s_lastRoutineID ||
+            field->subroutinePhase != s_lastPhase) {
             s_lastRoutineID = field->routineID;
-            s_lastAlternator = field->routineAlternator;
-            Log_Line("field", "Field_CallRoutines routine=%u alt=%u frames=%u", field->routineID,
-                     field->routineAlternator, field->framesSinceStart);
+            s_lastPhase = field->subroutinePhase;
+            Log_Line("field", "Field_CallRoutines routine=%u phase=%u frames=%u", field->routineID,
+                     field->subroutinePhase, field->framesSinceStart);
         }
     }
 #endif

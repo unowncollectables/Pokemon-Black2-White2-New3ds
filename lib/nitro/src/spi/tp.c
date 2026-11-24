@@ -7,6 +7,7 @@
 
 #ifdef PBW2_N3DS
 #include "cp_div_host.h"
+#include "pad_host.h"
 
 static void PbW2_TpCpDiv32(s32 numer_l, u32 denom, u32 *result_out) {
     PbW2_CpSetDivCnt(0);
@@ -292,10 +293,7 @@ void TP_SetCalibrateParam(const TPCalibrateParam *calibrate) {
 // TP_RequestSamplingAsync: asks the ARM7 for one sample
 void TP_RequestSamplingAsync(void) {
 #ifdef PBW2_N3DS
-    tpState.buf.touch = 0;
-    tpState.buf.validity = TP_VALIDITY_INVALID_XY;
-    tpState.buf.x = 0;
-    tpState.buf.y = 0;
+    PbW2_TouchHostRead(&tpState.buf);
     tpState.command_flg &= ~TP_REQUEST_COMMAND_FLAG_SAMPLING;
     tpState.err_flg &= ~TP_REQUEST_COMMAND_FLAG_SAMPLING;
     return;
@@ -340,6 +338,7 @@ u32 TP_WaitRawResult(TPData *result) {
 }
 
 // Sends the command that starts the automatic sampling, in two words. FALSE when the FIFO is full
+#ifndef PBW2_N3DS
 static inline BOOL TPi_AutoSamplingOn(u16 vcount, u16 frequency) {
     if (PXI_SendWordByFifo(PXI_FIFO_TAG_TOUCHPANEL,
                            SPI_PXI_START_BIT | TP_PXI_COMMAND(SPI_PXI_COMMAND_TP_AUTO_ON) | (u8)frequency, FALSE) < 0) {
@@ -350,14 +349,25 @@ static inline BOOL TPi_AutoSamplingOn(u16 vcount, u16 frequency) {
     }
     return TRUE;
 }
+#endif
 
 // TP_RequestAutoSamplingStartAsync: asks the ARM7 to take frequency samples a frame, from the line vcount on, into a
 // ring of count samples. The samples start as empty ones, which have no touch
 void TP_RequestAutoSamplingStartAsync(u16 vcount, u16 frequency, TPData samples[], u16 count) {
+#ifndef PBW2_N3DS
     OSIntrMode enabled;
     u8 sent;
+#endif
     u32 i;
 
+#ifdef PBW2_N3DS
+    (void)vcount;
+    tpState.command_flg &= ~TP_REQUEST_COMMAND_FLAG_AUTO_ON;
+    if (samples == NULL || count == 0 || frequency == 0) {
+        tpState.err_flg |= TP_REQUEST_COMMAND_FLAG_AUTO_ON;
+        return;
+    }
+#endif
     tpState.samplingBufs = samples;
     tpState.index = 0;
     tpState.frequence = frequency;
@@ -366,6 +376,10 @@ void TP_RequestAutoSamplingStartAsync(u16 vcount, u16 frequency, TPData samples[
         tpState.samplingBufs[i].touch = 0;
     }
 
+#ifdef PBW2_N3DS
+    tpState.state = TP_STATE_AUTO_SAMPLING;
+    tpState.err_flg &= ~TP_REQUEST_COMMAND_FLAG_AUTO_ON;
+#else
     enabled = OS_DisableInterrupts();
     sent = TPi_AutoSamplingOn(vcount, frequency);
     if (!sent) {
@@ -379,10 +393,16 @@ void TP_RequestAutoSamplingStartAsync(u16 vcount, u16 frequency, TPData samples[
     tpState.command_flg |= TP_REQUEST_COMMAND_FLAG_AUTO_ON;
     tpState.err_flg &= ~TP_REQUEST_COMMAND_FLAG_AUTO_ON;
     OS_RestoreInterrupts(enabled);
+#endif
 }
 
 // TP_RequestAutoSamplingStopAsync
 void TP_RequestAutoSamplingStopAsync(void) {
+#ifdef PBW2_N3DS
+    tpState.state = TP_STATE_READY;
+    tpState.command_flg &= ~TP_REQUEST_COMMAND_FLAG_AUTO_OFF;
+    tpState.err_flg &= ~TP_REQUEST_COMMAND_FLAG_AUTO_OFF;
+#else
     OSIntrMode enabled = OS_DisableInterrupts();
     BOOL sent = FALSE;
 
@@ -402,6 +422,7 @@ void TP_RequestAutoSamplingStopAsync(void) {
     tpState.command_flg |= TP_REQUEST_COMMAND_FLAG_AUTO_OFF;
     tpState.err_flg &= ~TP_REQUEST_COMMAND_FLAG_AUTO_OFF;
     OS_RestoreInterrupts(enabled);
+#endif
 }
 
 // TP_GetLatestRawPointInAuto: the newest point of the automatic sampling. With one sample a frame, or a ring of one,
@@ -409,6 +430,18 @@ void TP_RequestAutoSamplingStopAsync(void) {
 // sample through the frequency last ones: a sample without touch is the result as it is, and a coordinate that a
 // sample has valid is taken from it (the point's validity is cleared from the second sample on only)
 void TP_GetLatestRawPointInAuto(TPData *point) {
+#ifdef PBW2_N3DS
+    if (tpState.state != TP_STATE_AUTO_SAMPLING) {
+        *point = (TPData){ 0, 0, 0, TP_VALIDITY_INVALID_XY };
+        return;
+    }
+
+    PbW2_TouchHostRead(point);
+    if (++tpState.index == tpState.bufSize) {
+        tpState.index = 0;
+    }
+    tpState.samplingBufs[tpState.index] = *point;
+#else
     int i;
     u32 index;
 
@@ -449,6 +482,7 @@ void TP_GetLatestRawPointInAuto(TPData *point) {
         }
     }
     point->touch = 1;
+#endif
 }
 
 // The index of the newest sample in the buffer of the automatic sampling

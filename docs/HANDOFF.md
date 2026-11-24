@@ -4,14 +4,87 @@ Self-contained notes so another agent can take over this New 3DS port.
 Phases: [PLAN.md](PLAN.md). Build extras: [BUILDING.md](BUILDING.md).
 Short rules pointer: [AGENTS.md](../AGENTS.md).
 
-## 0. Codex handoff — Nov 24, 2026 (cloud-worker run ends here)
+## 0. Nov 24 follow-up — New 3DS boot and map loading
+
+- Black 2 passes `FieldRoutine_Open` and `FieldRoutine_MapLoad` in Azahar
+  and reaches `FieldRoutine_Run` in Aspertia City (zone 427, area 210).
+  The host had installed a static
+  geometry buffer where NNS expected a game-owned DTCM allocation.
+  Releasing it corrupted the DTCM heap before the next allocation.
+  The host now returns only game-owned buffers and records each FIFO
+  packet once. The actor main and movement tables link from their C objects.
+- Map loading used more than 16 open NitroFS files. Each `FSFile` now
+  keeps its own handle and position. Archive bounds checks catch truncated
+  members before allocation. The overlay loader sizes its tracking array
+  from the staged overlay table. Aspertia's C-Gear overlay (ID 80) now
+  loads successfully.
+- The post-fade opening script (0x1e) waited for a fanfare load on a
+  Nitro thread that never started. New 3DS runs both archive-load steps
+  synchronously through the existing sound backend. Black 2 proceeds
+  through the scripted transition from zone 427 to zone 428. After the
+  dialogue, Azahar verifies movement in all four directions. The backend
+  remains silent.
+- Black 2 screenshots show the title logo and the legible, blinking
+  `PRESS START` prompt.
+  The linked build leaves boot presentation to the game. The 2D fixtures
+  cover OBJ tile columns in both color depths, large text BG layouts,
+  brightness modes, keypad, and native touch. Bitmap fixtures cover
+  stride, clipping, wrapping, and opaque black in both color depths.
+  The Black 2 New Game background also renders in Azahar.
+- Both native versions link and pass relocation checks. Black 2 has
+  emulator playthrough coverage. White 2 and physical hardware still
+  need a playthrough. The emulator test build skips the New 3DS speedup
+  request that causes Azahar to abort.
+
+### Black 2 graphics follow-up
+
+- The New Game menu's red and gray background and item outlines render
+  cleanly in Azahar. Full LCDC resets now clear the host's BG and OBJ
+  views when all nine banks are mapped to LCDC. Previously, letters and
+  tiles from the last scene remained in those views. The compositor also
+  applies the menu's background alpha blend against the layer below.
+- The port links the SDK camera and projection math and global geometry
+  setup. Matrix and blend pixel fixtures pass on ARM11. The field uses
+  world-to-screen projection for its dialogue. The Black 2 replay reaches
+  movement after the opening with these changes. The map transition trace
+  still includes two direct reads of the DS VBlank counter.
+
+### Black 2 geometry and rasterization
+
+- The linked game now uses NitroSystem's `NNS_G3dDraw` and material and
+  joint command dispatch. Black 2's title sends model vertex commands to
+  the host in Azahar. The FIFO decoder accepts packets split across
+  multiple writes and tracks projection, position, vector, and texture
+  matrices. The ARM11 fixture verifies packed transforms, stack restore,
+  and matrix readback. A playthrough with the model path enabled reaches
+  the house and verifies D-pad movement in all four directions.
+- The ARM11 rasterizer assembles and clips primitives, samples DS texture
+  and palette banks, and publishes a 256×192 layer at the GX buffer swap.
+  The compositor resolves main BG0 and display capture into VRAM D.
+  Azahar shows Kyurem and the blue title scene on the lower screen.
+- The Nitro SDK's immediate geometry calls reach the same host interpreter
+  as packed display lists. A synchronous, conservative GX box test reports
+  visible bounds to the field chunk culler. The opening Aspertia City
+  flyover now shows terrain, stairs, trees, and water in Azahar. The
+  playable field renders the buildings, paths, and NPC during the first
+  dialogue. The latest replay reached that dialogue and ended before it
+  cleared, so its movement check remains open. The earlier replay checked
+  movement in all four directions before field visibility was restored.
+  An ARM11 fixture covers box visibility, a translated box, clipping,
+  depth, palette lookup, and capture to VRAM D.
+- The CPU renderer approximates lighting and translucent blending. Fog,
+  toon shading, some texture-coordinate generation modes, exact capture
+  blending, and PICA200 acceleration remain open. SoulSilver's
+  `g3gpu.c` and `shaders/g3.v.pica` are the acceleration reference.
+
+### Muse handoff — Nov 24, 2026
 
 Nate handed this job to GPT/Codex on a big model, working from GitHub main.
 This snapshot pushes the local `ghost/b2w2-working` tip (4692909fd + this
 note) to main as one commit; the full 31-commit history stays on that
 local branch.
 
-### Where it stands
+#### Original field checkpoint
 - Branch tip: `ghost/b2w2-working` @ 4692909fd ("Slice 2j: finer logging
   around GFL_G3DSysCreate"), tree clean. The 2j change is diagnostic
   logging only — no behaviour change.
@@ -31,43 +104,19 @@ local branch.
   (logo-on-bottom early is correct; switch to MAIN_SUB at title frame
   1740; the real game's attract loop re-runs boot_proc).
 
-### Still open (priority order)
-1. **FieldRoutine_Open hang (live blocker):** routine 0 dispatched once,
-   last `[field]` lines `G2D done`, `ClAct done`, then nothing — hang is
-   in BGSysSetBGEnabledA/B, BmpWin_InitAllocator,
-   GFL_TextRndInitColorIndexLUT, or GFL_G3DSysCreate. Gut: a host
-   wait/sync primitive that never fires, or VRAM-bank state — a
-   stub/host gap, NOT the 3D replay. After it: MapLoad/Run routines,
-   then Slice 3 actor tables (FIELD_ACTOR_MAIN_VTABLES /
-   ACTOR_MOVE_CODE_FUNCTION_TABLES still void-function stubs; must be
-   real before actor-draw runs). OS_WaitInterrupt has no host impl yet.
-2. **PRESS START:** 1D OBJ column-term bug confirmed in code
-   (draw_obj_layer, n3ds/nitro/ds2d_compose.c ~617-650): the (px>>3)
-   term is missing from the 1D address, so sprites wider than 8px
-   repeat their first tile column. Fix: add (px>>3)*(bpp8?64:32) in
-   both 8bpp/4bpp paths + a capture to confirm. Caveat: two settled
-   title captures show NO PRESS START at all (bottom band (128,96)
-   pixel-checked pure white) — if the fix doesn't make it appear,
-   the actor itself (TitleObj_Init, sub-engine ClAct actor at 128,96)
-   is the next suspect.
-3. **3D title (Kyurem) + field 3D + wide/sharp — the Citro3D 3D replay:**
-   g3_intercept.c captures the DS G3 FIFO into a 16K-word ring, but
-   PbW2_G3Compose is a no-op stub. Needs a Citro3D packet interpreter
-   + title display path (no DISPMODE_VRAM_D handling yet). Reference:
-   SoulSilver's ~8,000-line 3D stack (can't copy wholesale — different
-   host). DAYS of focused work, biggest remaining item.
-4. **QOL: still ZERO ported** (inventory: 55 features, 49 apply; the
+#### Still open (priority order)
+1. **Field play:** Black 2 responds to the D-pad after the opening
+   transition and dialogue. Verify field rendering and controls on a
+   physical New 3DS.
+2. **3D parity and speed:** Kyurem renders. Verify the field across maps,
+   complete the missing GX effects, and measure frame time on hardware
+   before carrying the rendering path over to PICA200.
+3. **QOL: still ZERO ported** (inventory: 55 features, 49 apply; the
    inventory lives outside this repo in the cloud workspace). Order once
    the field walks: settings first, cheap host-side items, wide/sharp
    after the replay.
 
-### Timeline sizing (best estimate at this checkpoint)
-- PRESS START: hours. Field walk: hang fix hours once 2j pinpoints the
-  step; MapLoad/Run days of closure grind; walking within days.
-- 3D title: days. Full "boot-to-field looks right": a week+ of worker
-  sessions; VM restarts are the wildcard.
-
-### Codex's first job: the Slice 2j verify run (NOT started)
+#### Original Slice 2j verification recipe
 Azahar, --new3ds, --prestage <sd-stage>/3ds, 620 s, --hold 1,
 --press "$(cat slice2_press.txt)" (123 presses: A every 6 s + START
 every 24 s to 360 s, then D-pad walk cycle + A every 10 s, 380-615 s),
@@ -78,7 +127,7 @@ reliable progress source (driver log is buffered). Continuous mode
 captures ONLY once, at the end — the end frame of a 620 s run is the
 white fade; use short runs for title captures.
 
-### Pickup notes (do not re-derive)
+#### Pickup notes
 - Build: PBW2_LINK_GAME=1 bash scripts/n3ds_build.sh -j2 b2, with
   PATH=/opt/devkitpro/devkitARM/bin:$PATH prefixed (reloc-check calls
   arm-none-eabi-readelf bare). ~8-10 min at -j2. Closure:
@@ -339,8 +388,7 @@ Title 2D: sub BG3 (`a/0/2/6` files 0/1/2) is the Pokémon Black 2 logo +
 ice; sub BG2 (file 3) is scrolling ice; sub OBJ should be PRESS START;
 main BG3 (files 8/9/10) is "Developed by GAME FREAK inc." Main display
 mode is `GX_DISPMODE_VRAM_D` with `GX_SetCapture` of 2D3D+VRAM to bank D
-for motion blur — capture and Citro3D replay are **not** wired, so the
-3D Kyurem is missing.
+for motion blur. The CPU rasterizer and VRAM capture show Kyurem in Azahar.
 
 ## 6. Milestone history (r18–r29)
 
@@ -406,14 +454,13 @@ without a text console. The first game frame takes over both screens,
 and presentation continues through display-off and layer-off transitions
 so a swap cannot reveal an older boot framebuffer.
 
-1. **PRESS START is garbled** on sub OBJ (reads like `PPPPS SSSST`).
-   Fix 2D OBJ composition / mapping / 1D char layout before chasing 3D.
-2. **3D Kyurem is missing.** `g3_gecom_host.c` already captures the G3
-   FIFO (`[G3] fifo words=48` on title). Still needed: FIFO replay to
-   Citro3D, `NNS_G3dDraw`, host texture uploads and matrix operations,
-   and `GX_SetCapture` to VRAM D (`GX_DISPMODE_VRAM_D`) so the
-   captured 2D3D+VRAM actually reaches a LCD. Mine SoulSilver
-   `g3packet.c` and the Platinum port **first**.
+1. **2D presentation.** Black 2's title prompt is legible in Azahar after
+   the OBJ tile indexing fix. Verify the title, menu, and transitions on
+   New 3DS hardware and run the same checks on White 2.
+2. **3D presentation.** The CPU renderer and display capture show Kyurem
+   in Azahar. Compare lighting and capture to the DS title, verify the
+   field, and profile the renderer on New 3DS. SoulSilver and Platinum
+   remain the references for Citro3D acceleration.
 3. **Audio.** ARM7 is not decompiled. Host NDSP player; this phase is
    silent and must not call `ndspInit` until a real player exists
    (Azahar has no DSP firmware).

@@ -115,20 +115,14 @@ static void log_vramcnt_banks(const char *tag) {
     }
 }
 
-#define BMP16_ROW_STRIDE 512u
 #define BMP16_SLOT_BYTES 0x4000u
 
 static u32 bitmap_vram_base_byte(u16 cnt) {
     return (((u32)cnt >> REG_G2_BG0CNT_SCREENBASE_SHIFT) & 0x1fu) * BMP16_SLOT_BYTES;
 }
 
-static u32 bitmap16_texel_addr(u16 cnt, int is_sub, int tx, int ty) {
-    u32 off = bitmap_vram_base_byte(cnt) + (u32)ty * BMP16_ROW_STRIDE + (u32)tx * 2u;
-
-    if (is_sub) {
-        return engine_bg_vram_base(1) + off;
-    }
-    return main_bg_linear_addr(off);
+static u32 bitmap_texel_addr(u16 cnt, int is_sub, int width, int tx, int ty, u32 pixel_bytes) {
+    return engine_bg_vram_base(is_sub) + bitmap_vram_base_byte(cnt) + ((u32)ty * (u32)width + (u32)tx) * pixel_bytes;
 }
 
 static u32 bg_screen_addr(u32 dc, u16 cnt, int is_sub, u32 bgmode, int bg) {
@@ -218,23 +212,49 @@ static const u16 *bg_layer_pltt(u32 dc, u16 cnt, int is_sub, int bg) {
 }
 
 static u32 bg_char_addr(u32 dc, u16 cnt, int is_sub) {
-    u32 vramcnt = *(const u32 *)(pbw2_io + 0x240);
-    u8 bank = is_sub ? (u8)((vramcnt >> 16) & 0xffu) : (u8)((vramcnt >> 8) & 0xffu);
-    u32 mapped = vramcnt_map_addr(bank, is_sub ? 3 : 1);
-    u32 base = mapped != 0u ? mapped : engine_bg_vram_base(is_sub);
     u32 off = ((u32)(cnt >> 2) & 0xfu) * 0x4000u;
 
     if (!is_sub) {
         off += ((dc >> REG_GX_DISPCNT_BGCHAROFFSET_SHIFT) & 7u) * 0x10000u;
     }
-    return base + off;
+    return engine_bg_vram_base(is_sub) + off;
 }
 
-static void compose_text_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmode, u16 *out) {
+typedef struct {
+    u16 colors[256 * 192];
+    u8 planes[256 * 192];
+    u16 first;
+    u16 second;
+    u16 eva;
+    u16 evb;
+} BgBlend;
+
+static unsigned blend_channel(unsigned a, unsigned b, const BgBlend *blend) {
+    unsigned color = (a * blend->eva + b * blend->evb) >> 4;
+    return color > 31 ? 31 : color;
+}
+
+static inline void put_bg_pixel(u16 *out, BgBlend *blend, unsigned i, unsigned plane, u16 color) {
+    u16 visible = color;
+    if (blend != NULL) {
+        if ((blend->first & plane) && (blend->second & blend->planes[i])) {
+            u16 below = blend->colors[i];
+            unsigned r = blend_channel(color >> 11, below >> 11, blend);
+            unsigned g = blend_channel((color >> 6) & 31, (below >> 6) & 31, blend);
+            unsigned b = blend_channel(color & 31, below & 31, blend);
+            visible = (u16)((r << 11) | (g << 6) | b);
+        }
+        /* A foreground layer blends against the original color of the layer beneath it. */
+        blend->colors[i] = color;
+        blend->planes[i] = (u8)plane;
+    }
+    out[i] = visible;
+}
+
+static void compose_text_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmode, u16 *out, BgBlend *blend) {
     u16 cnt = reg_u16(regs, 8 + bg * 2);
     int pw = ((cnt >> 14) & 1) ? 64 : 32;
     int ph = ((cnt >> 14) & 2) ? 64 : 32;
-    u32 mapw = (u32)pw * 8;
     const u16 *map = (const u16 *)(void *)vram_ptr(bg_screen_addr(dc, cnt, is_sub, bgmode, bg));
     const u8 *chars = vram_ptr(bg_char_addr(dc, cnt, is_sub));
     const u16 *pltt = bg_layer_pltt(dc, cnt, is_sub, bg);
@@ -253,12 +273,14 @@ static void compose_text_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmo
     for (y = 0; y < 192; y++) {
         u32 vofs = (y + vofs_base) & (ph * 8 - 1);
         u32 row = vofs / 8;
-        u32 ty = vofs & 7;
         for (x = 0; x < 256; x++) {
             u32 hofs = (x + hofs_base) & (pw * 8 - 1);
             u32 col = hofs / 8;
             u32 tx = hofs & 7;
-            u16 sc = map[row * (mapw / 8) + col];
+            u32 ty = vofs & 7;
+            /* Large text maps are laid out in 32-by-32 tile screen blocks. */
+            u32 block = (row >> 5) * (u32)(pw >> 5) + (col >> 5);
+            u16 sc = map[block * 1024u + (row & 31u) * 32u + (col & 31u)];
             u32 tile = sc & 0x3ffu;
             u32 pal = sc >> 12;
             u32 flip_h = sc & 0x0400u;
@@ -284,9 +306,9 @@ static void compose_text_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmo
                 continue;
             }
             if (cnt & 0x80u) {
-                out[y * 256 + x] = rgb555_to_565(pltt[pix]);
+                put_bg_pixel(out, blend, y * 256 + x, 1u << bg, rgb555_to_565(pltt[pix]));
             } else {
-                out[y * 256 + x] = rgb555_to_565(pltt[pal * 16u + pix]);
+                put_bg_pixel(out, blend, y * 256 + x, 1u << bg, rgb555_to_565(pltt[pal * 16u + pix]));
             }
         }
     }
@@ -320,11 +342,9 @@ static struct {
     u32 mode5_on_frame;
     u8 logged_at_on;
     u8 logged_delayed;
-    u8 vram_on;
-    u8 vram_delay;
 } s_mode5_diag;
 
-static u32 count_opaque16_at_base(u16 cnt, int bh) {
+static u32 count_opaque16_at_base(u16 cnt, int bw, int bh) {
     u32 addr = main_bg_linear_addr(bitmap_vram_base_byte(cnt));
     const u16 *p = (const u16 *)(void *)vram_ptr(addr);
     u32 opaque = 0;
@@ -332,9 +352,9 @@ static u32 count_opaque16_at_base(u16 cnt, int bh) {
     int x;
 
     for (y = 0; y < bh; y++) {
-        const u16 *row = &p[(u32)y * (BMP16_ROW_STRIDE / 2u)];
-        for (x = 0; x < 256; x++) {
-            if ((row[x] & 0x7fffu) != 0) {
+        const u16 *row = &p[(u32)y * (u32)bw];
+        for (x = 0; x < bw; x++) {
+            if (row[x] & 0x8000u) {
                 opaque++;
             }
         }
@@ -361,8 +381,8 @@ static void log_mode5_bitmap(const u8 *regs, int bg, u16 cnt, u32 bmp_addr, int 
     mid_c = 0;
     samp = NULL;
     if (is16) {
-        u32 mid_addr = bitmap16_texel_addr(cnt, 0, mx, my);
         if (mx >= 0 && my >= 0 && mx < bw && my < bh) {
+            u32 mid_addr = bitmap_texel_addr(cnt, 0, bw, mx, my, 2);
             const u16 *mp = (const u16 *)(void *)vram_ptr(mid_addr);
             mid_c = mp[0];
         }
@@ -383,32 +403,25 @@ static void maybe_log_mode5(const u8 *regs, u32 dc, u32 bgmode, int bg, u16 cnt,
     u16 cnt3;
     u32 addr3;
 
-    if (bgmode != GX_BGMODE_5 || bg != 2) {
+    if (bgmode != GX_BGMODE_5 || bg != 2 || s_mode5_diag.logged_delayed ||
+        (s_mode5_diag.logged_at_on && s_mode5_diag.compose_frames - s_mode5_diag.mode5_on_frame < 60u)) {
         return;
     }
-    opaque = is16 ? count_opaque16_at_base(cnt, bh) : 0u;
+    opaque = is16 ? count_opaque16_at_base(cnt, bw, bh) : 0u;
     cnt3 = reg_u16(regs, 0x0e);
     addr3 = bg_screen_addr(dc, cnt3, 0, bgmode, 3);
     if (!s_mode5_diag.logged_at_on) {
-        if (!s_mode5_diag.vram_on) {
-            log_vramcnt_banks("on");
-            s_mode5_diag.vram_on = 1;
-        }
+        log_vramcnt_banks("on");
         s_mode5_diag.mode5_on_frame = s_mode5_diag.compose_frames;
         s_mode5_diag.logged_at_on = 1;
         log_mode5_bitmap(regs, 2, cnt, bmp_addr, is16, bw, bh, opaque, "on");
-        log_mode5_bitmap(regs, 3, cnt3, addr3, 1, 256, 256, count_opaque16_at_base(cnt3, 256), "on");
+        log_mode5_bitmap(regs, 3, cnt3, addr3, 1, 256, 256, count_opaque16_at_base(cnt3, 256, 256), "on");
         return;
     }
-    if (!s_mode5_diag.logged_delayed && s_mode5_diag.compose_frames >= s_mode5_diag.mode5_on_frame + 60u) {
-        if (!s_mode5_diag.vram_delay) {
-            log_vramcnt_banks("+60");
-            s_mode5_diag.vram_delay = 1;
-        }
-        s_mode5_diag.logged_delayed = 1;
-        log_mode5_bitmap(regs, 2, cnt, bmp_addr, is16, bw, bh, opaque, "+60");
-        log_mode5_bitmap(regs, 3, cnt3, addr3, 1, 256, 256, count_opaque16_at_base(cnt3, 256), "+60");
-    }
+    log_vramcnt_banks("+60");
+    s_mode5_diag.logged_delayed = 1;
+    log_mode5_bitmap(regs, 2, cnt, bmp_addr, is16, bw, bh, opaque, "+60");
+    log_mode5_bitmap(regs, 3, cnt3, addr3, 1, 256, 256, count_opaque16_at_base(cnt3, 256, 256), "+60");
 }
 
 static u16 sample_bitmap16(int is_sub, int bg, u16 cnt, int bw, int bh, int x, int y) {
@@ -427,20 +440,17 @@ static u16 sample_bitmap16(int is_sub, int bg, u16 cnt, int bw, int bh, int x, i
 
     read_bg_affine(is_sub, bg, &pa, &pb, &pc, &pd, &rx, &ry);
     map_bitmap_uv(pa, pb, pc, pd, rx, ry, x, y, &tx, &ty);
-    wrap = (cnt & (1u << REG_G2_BG2CNT_AREAOVER_SHIFT)) == 0;
+    wrap = (cnt & (1u << REG_G2_BG2CNT_AREAOVER_SHIFT)) != 0;
     if (wrap) {
         tx &= (s32)(bw - 1);
         ty &= (s32)(bh - 1);
     } else if (tx < 0 || ty < 0 || tx >= bw || ty >= bh) {
         return 0;
     }
-    addr = bitmap16_texel_addr(cnt, is_sub, (int)tx, (int)ty);
+    addr = bitmap_texel_addr(cnt, is_sub, bw, tx, ty, 2);
     p = (const u16 *)(void *)vram_ptr(addr);
     c = p[0];
-    if ((c & 0x7fffu) == 0) {
-        return 0;
-    }
-    return rgb555_to_565(c & 0x7fffu);
+    return c;
 }
 
 static u16 sample_bitmap8(int is_sub, int bg, u16 cnt, int bw, int bh, int x, int y, const u16 *pltt) {
@@ -459,28 +469,23 @@ static u16 sample_bitmap8(int is_sub, int bg, u16 cnt, int bw, int bh, int x, in
 
     read_bg_affine(is_sub, bg, &pa, &pb, &pc, &pd, &rx, &ry);
     map_bitmap_uv(pa, pb, pc, pd, rx, ry, x, y, &tx, &ty);
-    wrap = (cnt & (1u << REG_G2_BG2CNT_AREAOVER_SHIFT)) == 0;
+    wrap = (cnt & (1u << REG_G2_BG2CNT_AREAOVER_SHIFT)) != 0;
     if (wrap) {
         tx &= (s32)(bw - 1);
         ty &= (s32)(bh - 1);
     } else if (tx < 0 || ty < 0 || tx >= bw || ty >= bh) {
         return 0;
     }
-    addr = bitmap_vram_base_byte(cnt) + (u32)ty * BMP16_ROW_STRIDE + (u32)tx;
-    if (is_sub) {
-        addr += engine_bg_vram_base(1);
-    } else {
-        addr = main_bg_linear_addr(addr);
-    }
+    addr = bitmap_texel_addr(cnt, is_sub, bw, tx, ty, 1);
     p = vram_ptr(addr);
     ci = p[0];
     if (ci == 0) {
         return 0;
     }
-    return rgb555_to_565(pltt[ci]);
+    return pltt[ci] | 0x8000u;
 }
 
-static void compose_bitmap_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmode, u16 *out) {
+static void compose_bitmap_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmode, u16 *out, BgBlend *blend) {
     u16 cnt = reg_u16(regs, 8 + bg * 2);
     const u16 *pltt;
     u32 bmp_addr;
@@ -509,8 +514,8 @@ static void compose_bitmap_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bg
             for (x = 0; x < 256; x++) {
                 u16 pix = sample_bitmap16(is_sub, bg, cnt, bw, bh, x, y);
 
-                if (pix != 0) {
-                    out[y * 256 + x] = pix;
+                if (pix & 0x8000u) {
+                    put_bg_pixel(out, blend, y * 256 + x, 1u << bg, rgb555_to_565(pix));
                 }
             }
         }
@@ -519,21 +524,21 @@ static void compose_bitmap_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bg
             for (x = 0; x < 256; x++) {
                 u16 pix = sample_bitmap8(is_sub, bg, cnt, bw, bh, x, y, pltt);
 
-                if (pix != 0) {
-                    out[y * 256 + x] = pix;
+                if (pix & 0x8000u) {
+                    put_bg_pixel(out, blend, y * 256 + x, 1u << bg, rgb555_to_565(pix));
                 }
             }
         }
     }
 }
 
-static void draw_bg_layer(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmode, u16 *out) {
+static void draw_bg_layer(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmode, u16 *out, BgBlend *blend) {
     u16 cnt = reg_u16(regs, 8 + bg * 2);
 
     if (bg >= 2 && bgmode >= 3 && (cnt & REG_G2_BG0CNT_COLORMODE_MASK)) {
-        compose_bitmap_bg(regs, dc, is_sub, bg, bgmode, out);
+        compose_bitmap_bg(regs, dc, is_sub, bg, bgmode, out, blend);
     } else {
-        compose_text_bg(regs, dc, is_sub, bg, bgmode, out);
+        compose_text_bg(regs, dc, is_sub, bg, bgmode, out, blend);
     }
 }
 
@@ -587,6 +592,10 @@ static void draw_obj_layer(const u8 *regs, u32 dc, int is_sub, u16 *out) {
             int ypos;
             int xo;
             int yo;
+            u32 tile_bytes;
+            u32 tile_base;
+            u32 tile_row_bytes;
+            int bpp8;
 
             if (shape > 2) {
                 continue;
@@ -602,23 +611,29 @@ static void draw_obj_layer(const u8 *regs, u32 dc, int is_sub, u16 *out) {
             }
             width = spw[shape][size];
             height = sph[shape][size];
+            bpp8 = (a[0] & 0x2000) != 0;
+            tile_bytes = bpp8 ? 64u : 32u;
+            tile_base = (u32)(a[2] & 0x3ffu) << (5u + (obj1d ? obj1d_shift : 0u));
+            tile_row_bytes = obj1d ? (u32)(width >> 3) * tile_bytes : 0x400u;
             xs = a[1] & 0x1ff;
             ypos = a[0] & 255;
             if (xs >= 256) {
                 xs -= 512;
             }
+            if (ypos >= 192) {
+                ypos -= 256;
+            }
             for (yo = 0; yo < height; yo++) {
                 int y = ypos + yo;
+                u32 py = (a[1] & 0x2000) ? (height - 1 - yo) : yo;
+                u32 row = tile_base + (py >> 3) * tile_row_bytes + (py & 7u) * (tile_bytes >> 3);
                 if (y < 0 || y >= 192) {
                     continue;
                 }
                 for (xo = 0; xo < width; xo++) {
                     int x = xs + xo;
-                    u32 tile = a[2] & 0x3ff;
-                    u32 bpp8 = (a[0] & 0x2000) != 0;
                     u32 addr;
                     u32 px;
-                    u32 py;
                     u8 nib;
                     u32 ci;
 
@@ -626,31 +641,16 @@ static void draw_obj_layer(const u8 *regs, u32 dc, int is_sub, u16 *out) {
                         continue;
                     }
                     px = (a[1] & 0x1000) ? (width - 1 - xo) : xo;
-                    py = (a[1] & 0x2000) ? (height - 1 - yo) : yo;
-                    if (obj1d) {
-                        u32 shift = 5u + obj1d_shift + (bpp8 ? 1u : 0u);
-                        u32 block = (u32)(width >> 3) * (bpp8 ? 64u : 32u);
-                        addr = (tile << shift) + (u32)(py >> 3) * block;
-                    } else {
-                        addr = (tile + (py >> 3) * 0x20u) << 5;
-                    }
+                    addr = row + (px >> 3) * tile_bytes;
                     if (bpp8) {
-                        if (obj1d) {
-                            addr += ((py & 7) << 3) + (px & 7);
-                        } else {
-                            addr += ((py & 7) << 3) + ((px & ~7) << 3) + (px & 7);
-                        }
+                        addr += px & 7u;
                         ci = ovram[addr & 0x3ffffu];
                         if (ci == 0) {
                             continue;
                         }
                         out[y * 256 + x] = rgb555_to_565(pltt[ci]);
                     } else {
-                        if (obj1d) {
-                            addr += ((py & 7) << 2) + ((px & 7) >> 1);
-                        } else {
-                            addr += ((py & 7) << 2) + ((px & ~7) << 2) + ((px & 7) >> 1);
-                        }
+                        addr += (px & 7u) >> 1;
                         nib = ovram[addr & 0x3ffffu];
                         ci = (px & 1) ? (nib >> 4) : (nib & 0x0f);
                         if (ci == 0) {
@@ -665,33 +665,91 @@ static void draw_obj_layer(const u8 *regs, u32 dc, int is_sub, u16 *out) {
 }
 
 static void apply_master_bright(u16 *fb, u16 reg) {
-    unsigned mode = (reg >> 14) & 3u;
-    unsigned amt = reg & 0x1fu;
-    u32 i;
-    u32 n = 256u * 192u;
+    u16 mode = reg & REG_GX_MASTER_BRIGHT_E_MOD_MASK;
+    u32 factor = reg & REG_GX_MASTER_BRIGHT_E_VALUE_MASK;
+    int brighten = mode == REG_GX_MASTER_BRIGHT_MODE_UP;
 
-    if (mode == 0 || amt == 0) {
+    if (factor == 0 || (!brighten && mode != REG_GX_MASTER_BRIGHT_MODE_DOWN)) {
         return;
     }
-    for (i = 0; i < n; i++) {
+    if (factor >= 16) {
+        memset(fb, brighten ? 0xff : 0, 256u * 192u * sizeof(*fb));
+        return;
+    }
+    for (u32 i = 0; i < 256u * 192u; i++) {
         u16 p = fb[i];
         u32 r = (p >> 11) & 0x1f;
-        u32 g = (p >> 6) & 0x1f;
+        u32 g = (p >> 5) & 0x3f;
         u32 b = p & 0x1f;
-        if (mode == 2) {
-            r = r + amt > 31 ? 31 : r + amt;
-            g = g + amt > 31 ? 31 : g + amt;
-            b = b + amt > 31 ? 31 : b + amt;
-        } else if (mode == 3) {
-            r = r > amt ? r - amt : 0;
-            g = g > amt ? g - amt : 0;
-            b = b > amt ? b - amt : 0;
+        if (brighten) {
+            r += (31u - r) * factor >> 4;
+            g += (63u - g) * factor >> 4;
+            b += (31u - b) * factor >> 4;
+        } else {
+            r -= r * factor >> 4;
+            g -= g * factor >> 4;
+            b -= b * factor >> 4;
         }
-        fb[i] = (u16)((r << 11) | (g << 6) | b);
+        fb[i] = (u16)((r << 11) | (g << 5) | b);
+    }
+}
+
+static void capture_main(u16 *out, u32 dc) {
+    u32 capture = reg_GX_DISPCAPCNT;
+    unsigned displayBank = (dc >> 18) & 3;
+    unsigned displayMode = (dc & REG_GX_DISPCNT_MODE_MASK) >> REG_GX_DISPCNT_MODE_SHIFT;
+    u16 *source = PbW2_VramMap((void *)(uintptr_t)(HW_LCDC_VRAM_A + displayBank * 0x20000));
+
+    if ((capture & REG_GX_DISPCAPCNT_E_MASK) && !(capture & (1u << REG_GX_DISPCAPCNT_SRCB_SHIFT))) {
+        static const unsigned heights[] = {128, 64, 128, 192};
+        unsigned size = (capture >> REG_GX_DISPCAPCNT_WSIZE_SHIFT) & 3;
+        unsigned width = size ? 256 : 128;
+        unsigned destBank = (capture >> REG_GX_DISPCAPCNT_DEST_SHIFT) & 3;
+        const u8 banks[] = {reg_GX_VRAMCNT_A, reg_GX_VRAMCNT_B, reg_GX_VRAMCNT_C, reg_GX_VRAMCNT_D};
+        unsigned mode = (capture >> REG_GX_DISPCAPCNT_MOD_SHIFT) & 3;
+        unsigned eva = capture & 31;
+        unsigned evb = (capture >> REG_GX_DISPCAPCNT_EVB_SHIFT) & 31;
+        unsigned writeOffset = ((capture >> 18) & 3) * 0x4000;
+        unsigned readOffset = displayMode == 2 ? 0 : ((capture >> 26) & 3) * 0x4000;
+        const u16 *input = out;
+        if (capture & (1u << REG_GX_DISPCAPCNT_SRCA_SHIFT)) {
+            static u16 capture3d[256 * 192];
+            memset(capture3d, 0, sizeof capture3d);
+            PbW2_G3Compose(1, capture3d);
+            input = capture3d;
+        }
+        if (eva > 16) eva = 16;
+        if (evb > 16) evb = 16;
+        if (banks[destBank] == GX_VRAMCNT_LCDC) {
+            u16 *dest = PbW2_VramMap((void *)(uintptr_t)(HW_LCDC_VRAM_A + destBank * 0x20000));
+            for (unsigned y = 0; y < heights[size]; ++y) {
+                for (unsigned x = 0; x < width; ++x) {
+                    unsigned i = y * width + x;
+                    u16 rgb = input[y * 256 + x];
+                    u16 a = (rgb >> 11) | ((rgb >> 1) & 0x03e0) | ((rgb & 31) << 10) | 0x8000;
+                    u16 b = banks[displayBank] == GX_VRAMCNT_LCDC ? source[(readOffset + i) & 0xffff] : 0;
+                    u16 pixel = mode == 0 ? a : b;
+                    if (mode >= 2) {
+                        pixel = (a | b) & 0x8000;
+                        for (unsigned shift = 0; shift < 15; shift += 5) {
+                            unsigned channel = ((((a >> shift) & 31) * eva) + (((b >> shift) & 31) * evb)) >> 4;
+                            pixel |= (channel > 31 ? 31 : channel) << shift;
+                        }
+                    }
+                    dest[(writeOffset + i) & 0xffff] = pixel;
+                }
+            }
+        }
+        if (reg_GX_DISPCAPCNT == capture) reg_GX_DISPCAPCNT = capture & ~REG_GX_DISPCAPCNT_E_MASK;
+    }
+    if (displayMode == 2) {
+        for (unsigned i = 0; i < 256 * 192; ++i) out[i] = rgb555_to_565(source[i]);
     }
 }
 
 static void compose_engine(const u8 *regs, int is_sub, u16 *out) {
+    static BgBlend bg_blend;
+    BgBlend *blend = NULL;
     u32 dc = reg_u32(regs, 0);
     u32 bgmode = dc & REG_GX_DISPCNT_BGMODE_MASK;
     u16 backdrop;
@@ -699,17 +757,30 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out) {
     int bg;
     u32 i;
 
-    if (dc & 0x80u) {
-        memset(out, 0, 256u * 192u * 2u);
-        return;
-    }
-    if ((dc & REG_GX_DISPCNT_MODE_MASK) == 0) {
-        memset(out, 0, 256u * 192u * 2u);
+    if ((dc & 0x80u) || (dc & REG_GX_DISPCNT_MODE_MASK) == 0) {
+        memset(out, 0xff, 256u * 192u * sizeof(*out));
         return;
     }
     backdrop = rgb555_to_565(engine_bg_pltt(is_sub)[0]);
     for (i = 0; i < 256u * 192u; i++) {
         out[i] = backdrop;
+    }
+    u16 bldcnt = reg_u16(regs, 0x50);
+    if ((bldcnt & REG_G2_BLDCNT_EFFECT_MASK) == REG_G2_BLDCNT_EFFECT_ALPHA) {
+        u16 alpha = reg_u16(regs, 0x52);
+        blend = &bg_blend;
+        blend->first = bldcnt & 0x3f;
+        blend->second = (bldcnt >> 8) & 0x3f;
+        blend->eva = alpha & 31;
+        blend->evb = (alpha >> 8) & 31;
+        if (blend->eva > 16) {
+            blend->eva = 16;
+        }
+        if (blend->evb > 16) {
+            blend->evb = 16;
+        }
+        memcpy(blend->colors, out, sizeof(blend->colors));
+        memset(blend->planes, 1u << 5, sizeof(blend->planes));
     }
     for (pri = 3; pri >= 0; pri--) {
         for (bg = 0; bg < 4; bg++) {
@@ -720,11 +791,15 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out) {
             if ((cnt & 3u) != (u32)pri) {
                 continue;
             }
-            draw_bg_layer(regs, dc, is_sub, bg, bgmode, out);
+            if (bg == 0 && !is_sub && (dc & REG_GX_DISPCNT_BG02D3D_MASK)) {
+                PbW2_G3Compose(1, out);
+            } else {
+                draw_bg_layer(regs, dc, is_sub, bg, bgmode, out, blend);
+            }
         }
     }
     draw_obj_layer(regs, dc, is_sub, out);
-    PbW2_G3Compose(is_sub ? 0 : 1, out);
+    if (!is_sub) capture_main(out, dc);
     apply_master_bright(out, reg_u16(regs, 0x6cu));
 }
 
@@ -771,10 +846,11 @@ int PbW2_GameDisplayReady(void) {
 
 void PbW2_GxDisplayTrace(void) {
     static u32 s_frames;
-    static int s_logged_ready;
+    static int s_last_ready = -1;
+    int ready = PbW2_GameDisplayReady();
 
     s_frames++;
-    if ((s_frames % 60u) != 0u && s_logged_ready) {
+    if ((s_frames % 60u) != 0u && ready == s_last_ready) {
         return;
     }
     {
@@ -787,11 +863,9 @@ void PbW2_GxDisplayTrace(void) {
                  (unsigned)PbW2_VramLoadBytes(), (unsigned)dc, (unsigned)sub,
                  (unsigned)*(const u16 *)(pbw2_io + 0x08), (unsigned)*(const u16 *)(pbw2_io + 0x0e),
                  (unsigned)reg_u16(pbw2_io, 0x6cu), (unsigned)vramcnt, (unsigned)(pwr & 0xffffu),
-                 PbW2_GameDisplayReady());
+                 ready);
     }
-    if (PbW2_GameDisplayReady()) {
-        s_logged_ready = 1;
-    }
+    s_last_ready = ready;
 }
 
 #endif

@@ -5,6 +5,10 @@
 #include "nitro/os.h"
 #include "nnsys/fnd.h"
 
+#ifdef PBW2_N3DS
+#include "log.h"
+#endif
+
 // The heap API over heapsys.c, which stops the game when the heap system fails. The debug messages the failures printed
 // are compiled out, which leaves the calls that computed their arguments
 
@@ -219,6 +223,9 @@ static BOOL GFL_HeapDebugCopyFileName(char *dest, const char *file) {
 static void GFL_HeapDumpAllocFailure(HeapID heapId, u32 size, const char *file, u16 line) {
     NNSFndHeapHandle heap = GFL_HeapGetValidHeapBase(heapId);
 
+#ifdef PBW2_N3DS
+    Log_Line("heap", "allocation failed heap=%u size=%u at %s:%u", heapId, size, file, line);
+#endif
     NNS_FndGetTotalFreeSizeForExpHeap(heap);
     NNS_FndGetAllocatableSizeForExpHeapEx(heap, 4);
     GFL_HeapDumpOnFailure(heapId);
@@ -291,13 +298,21 @@ static void GFL_HeapDumpProc(void *block, NNSFndHeapHandle heap, u32 param) {
 
 // Prints a heap's sizes and its allocated blocks
 void GFL_HeapDumpOnFailure(HeapID heapId) {
+#ifdef PBW2_N3DS
+    Log_Line("heap", "heap check failed heap=%u allocations=%u", heapId, GFL_HeapGetAllocationCount(heapId));
+#endif
     GFL_HeapGetSize(heapId);
     GFL_HeapGetFreeSizeCore(heapId);
     GFL_HeapGetHighestAllocatableSize(heapId);
     GFL_HeapGetAllocationCount(heapId);
+#ifdef PBW2_N3DS
+    // Stop the game thread without tearing down libctru under the presentation thread.
+    OS_Terminate();
+#else
     exit(1);
     NNS_FndVisitAllocatedForExpHeap(GFL_HeapGetValidHeapBase(heapId), GFL_HeapDumpProc, 0);
     exit(0);
+#endif
 }
 
 void GFL_HeapDTCMInit(u32 size) {

@@ -4,6 +4,10 @@
 #include "gfl/std.h"
 #include "nitro/fs.h"
 
+#ifdef PBW2_N3DS
+#include "log.h"
+#endif
+
 // A NARC starts with a header whose size is at offset 0xc. The blocks follow it: FATB, the start and end of each file
 // in FIMG, then FNTB and FIMG. Each block starts with its magic and size
 #define NARC_HEADER_SIZE_OFFSET 0xc
@@ -89,6 +93,12 @@ static void GFL_ArcSysInitArcHandle(FSFile *file, u32 arcId) {
         size -= sArcSys.table.ranges[arcId].start;
         FS_CreateFileFromMemory(file, (void *)sArcSys.table.ranges[arcId].start, size);
     }
+#ifdef PBW2_N3DS
+    if (!FS_IsFile(file)) {
+        Log_Line("arc", "could not open archive %u (result %d)", arcId, FS_GetResultCode(file));
+        OS_Terminate();
+    }
+#endif
 }
 
 // Seeks to the data of a file of an archive, at offset into it, and returns its size, or size if it is not 0.
@@ -318,7 +328,18 @@ void *GFL_ArcToolReadHeapNew(ArcTool *handle, u32 fileId, HeapID heapId) {
     }
     FS_SeekFile(&handle->file, handle->fatbOffset + NARC_FATB_ENTRIES_OFFSET + fileId * sizeof(NarcFATBEntry),
                 FS_SEEK_SET);
+#ifdef PBW2_N3DS
+    u32 dataBase = handle->fimgOffset + NARC_FIMG_DATA_OFFSET;
+    u32 archiveSize = FS_GetFileLength(&handle->file);
+    if (FS_ReadFile(&handle->file, &entry, sizeof(entry)) != sizeof(entry) || dataBase > archiveSize ||
+        entry.end < entry.start || entry.end > archiveSize - dataBase) {
+        Log_Line("arc", "invalid member %u in archive of %u bytes", fileId, archiveSize);
+        OS_Terminate();
+        return NULL;
+    }
+#else
     FS_ReadFile(&handle->file, &entry, sizeof(NarcFATBEntry));
+#endif
     FS_SeekFile(&handle->file, handle->fimgOffset + NARC_FIMG_DATA_OFFSET + entry.start, FS_SEEK_SET);
     data = GFL_HeapAllocate(heapId, entry.end - entry.start, FALSE, sArcFileName, 619);
     if (data != NULL) {

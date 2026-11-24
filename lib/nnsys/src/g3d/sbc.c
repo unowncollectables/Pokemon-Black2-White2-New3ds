@@ -591,9 +591,9 @@ void NNSi_G3dFuncSbc_BB(NNSG3dRS *rs, u32 opt) {
         VecFx32 *scale = &sBBCmd.scale;
 
         NNS_G3dGeFlushBuffer();
-        reg_G3X_GXFIFO = 0x151110; // MTX_MODE, MTX_PUSH, MTX_IDENTITY
-        reg_G3X_GXFIFO = 0;
-        reg_G3X_GXFIFO = 0;
+        G3_WRITE_FIFO(0x151110); // MTX_MODE, MTX_PUSH, MTX_IDENTITY
+        G3_WRITE_FIFO(0);
+        G3_WRITE_FIFO(0);
         while (G3X_GetClipMtx(&clip) != 0) {
         }
 
@@ -617,16 +617,16 @@ void NNSi_G3dFuncSbc_BB(NNSG3dRS *rs, u32 opt) {
         scale->z = VEC_Mag((const VecFx32 *)clip.m[2]);
 
         if (NNS_G3dGlb.flag & NNS_G3D_GLB_FLAG_FLUSH_WVP) {
-            reg_G3X_GXFIFO = 0x171012; // MTX_POP, MTX_MODE, MTX_LOAD_4x3
+            G3_WRITE_FIFO(0x171012); // MTX_POP, MTX_MODE, MTX_LOAD_4x3
             MIi_CpuSend32(&sBBCmd.popNum, &reg_G3X_GXFIFO, 2 * sizeof(u32));
             MIi_CpuSend32(NNS_G3dGlbGetInvWV(), &reg_G3X_GXFIFO, sizeof(MtxFx43));
-            reg_G3X_GXFIFO = 0x1b19; // MTX_MULT_4x3, MTX_SCALE
+            G3_WRITE_FIFO(0x1b19); // MTX_MULT_4x3, MTX_SCALE
             MIi_CpuSend32(sBBCmd.axis, &reg_G3X_GXFIFO, sizeof(BillboardCmd) - 3 * sizeof(u32));
         } else if (NNS_G3dGlb.flag & NNS_G3D_GLB_FLAG_FLUSH_VP) {
-            reg_G3X_GXFIFO = 0x171012; // MTX_POP, MTX_MODE, MTX_LOAD_4x3
+            G3_WRITE_FIFO(0x171012); // MTX_POP, MTX_MODE, MTX_LOAD_4x3
             MIi_CpuSend32(&sBBCmd.popNum, &reg_G3X_GXFIFO, 2 * sizeof(u32));
             MIi_CpuSend32(NNS_G3dGlbGetInvV(), &reg_G3X_GXFIFO, sizeof(MtxFx43));
-            reg_G3X_GXFIFO = 0x1b19; // MTX_MULT_4x3, MTX_SCALE
+            G3_WRITE_FIFO(0x1b19); // MTX_MULT_4x3, MTX_SCALE
             MIi_CpuSend32(sBBCmd.axis, &reg_G3X_GXFIFO, sizeof(BillboardCmd) - 3 * sizeof(u32));
         } else {
             MIi_CpuSend32(&sBBCmd, &reg_G3X_GXFIFO, sizeof(BillboardCmd));
@@ -685,9 +685,9 @@ void NNSi_G3dFuncSbc_BBY(NNSG3dRS *rs, u32 opt) {
         VecFx32 *scale = &sBBYCmd.scale;
 
         NNS_G3dGeFlushBuffer();
-        reg_G3X_GXFIFO = 0x151110; // MTX_MODE, MTX_PUSH, MTX_IDENTITY
-        reg_G3X_GXFIFO = 0;
-        reg_G3X_GXFIFO = 0;
+        G3_WRITE_FIFO(0x151110); // MTX_MODE, MTX_PUSH, MTX_IDENTITY
+        G3_WRITE_FIFO(0);
+        G3_WRITE_FIFO(0);
         while (G3X_GetClipMtx(&clip) != 0) {
         }
 
@@ -721,16 +721,16 @@ void NNSi_G3dFuncSbc_BBY(NNSG3dRS *rs, u32 opt) {
         VEC_CrossProduct(xAxis, yAxis, zAxis);
 
         if (NNS_G3dGlb.flag & NNS_G3D_GLB_FLAG_FLUSH_WVP) {
-            reg_G3X_GXFIFO = 0x171012; // MTX_POP, MTX_MODE, MTX_LOAD_4x3
+            G3_WRITE_FIFO(0x171012); // MTX_POP, MTX_MODE, MTX_LOAD_4x3
             MIi_CpuSend32(&sBBYCmd.popNum, &reg_G3X_GXFIFO, 2 * sizeof(u32));
             MIi_CpuSend32(NNS_G3dGlbGetInvWV(), &reg_G3X_GXFIFO, sizeof(MtxFx43));
-            reg_G3X_GXFIFO = 0x1b19; // MTX_MULT_4x3, MTX_SCALE
+            G3_WRITE_FIFO(0x1b19); // MTX_MULT_4x3, MTX_SCALE
             MIi_CpuSend32(sBBYCmd.axis, &reg_G3X_GXFIFO, sizeof(BillboardCmd) - 3 * sizeof(u32));
         } else if (NNS_G3dGlb.flag & NNS_G3D_GLB_FLAG_FLUSH_VP) {
-            reg_G3X_GXFIFO = 0x171012; // MTX_POP, MTX_MODE, MTX_LOAD_4x3
+            G3_WRITE_FIFO(0x171012); // MTX_POP, MTX_MODE, MTX_LOAD_4x3
             MIi_CpuSend32(&sBBYCmd.popNum, &reg_G3X_GXFIFO, 2 * sizeof(u32));
             MIi_CpuSend32(NNS_G3dGlbGetInvV(), &reg_G3X_GXFIFO, sizeof(MtxFx43));
-            reg_G3X_GXFIFO = 0x1b19; // MTX_MULT_4x3, MTX_SCALE
+            G3_WRITE_FIFO(0x1b19); // MTX_MULT_4x3, MTX_SCALE
             MIi_CpuSend32(sBBYCmd.axis, &reg_G3X_GXFIFO, sizeof(BillboardCmd) - 3 * sizeof(u32));
         } else {
             MIi_CpuSend32(&sBBYCmd, &reg_G3X_GXFIFO, sizeof(BillboardCmd));
@@ -765,10 +765,10 @@ void NNSi_G3dFuncSbc_NODEMIX(NNSG3dRS *rs, u32 opt) {
 
     MI_CpuClearFast(&sum, sizeof(sum));
     NNS_G3dGeFlushBuffer();
-    reg_G3_MTX_MODE = GX_MTXMODE_PROJECTION;
-    reg_G3_MTX_STORE = 1;
-    reg_G3_MTX_IDENTITY = 0;
-    reg_G3_MTX_MODE = GX_MTXMODE_POSITION_VECTOR;
+    G3_WRITE_COMMAND(reg_G3_MTX_MODE, G3OP_MTX_MODE, GX_MTXMODE_PROJECTION);
+    G3_WRITE_COMMAND(reg_G3_MTX_STORE, G3OP_MTX_STORE, 1);
+    G3_WRITE_COMMAND(reg_G3_MTX_IDENTITY, G3OP_MTX_IDENTITY, 0);
+    G3_WRITE_COMMAND(reg_G3_MTX_MODE, G3OP_MTX_MODE, GX_MTXMODE_POSITION_VECTOR);
 
     for (i = 0; i < numMtx; i++) {
         // NitroSDK's u32, which is unsigned long
@@ -778,8 +778,8 @@ void NNSi_G3dFuncSbc_NODEMIX(NNSG3dRS *rs, u32 opt) {
 
         if (!isCached) {
             rs->isEvpCached[jointID >> 5] |= 1 << (jointID & 0x1f);
-            reg_G3_MTX_RESTORE = p[0];
-            reg_G3_MTX_MODE = GX_MTXMODE_POSITION;
+            G3_WRITE_COMMAND(reg_G3_MTX_RESTORE, G3OP_MTX_RESTORE, p[0]);
+            G3_WRITE_COMMAND(reg_G3_MTX_MODE, G3OP_MTX_MODE, GX_MTXMODE_POSITION);
             G3_MultMtx43(&evpMtx[jointID].invM);
         }
 
@@ -798,7 +798,7 @@ void NNSi_G3dFuncSbc_NODEMIX(NNSG3dRS *rs, u32 opt) {
         if (!isCached) {
             while (G3X_GetClipMtx(clip) != 0) {
             }
-            reg_G3_MTX_MODE = GX_MTXMODE_POSITION_VECTOR;
+            G3_WRITE_COMMAND(reg_G3_MTX_MODE, G3OP_MTX_MODE, GX_MTXMODE_POSITION_VECTOR);
             G3_MultMtx33(&evpMtx[jointID].invN);
         }
 
@@ -835,12 +835,12 @@ void NNSi_G3dFuncSbc_NODEMIX(NNSG3dRS *rs, u32 opt) {
     // Loads the normal matrix as a 4x3 one, so the load reads three words past sum. Only the position matrix takes that
     // translation, and the next load replaces it
     G3_LoadMtx43((const MtxFx43 *)&sum.invN);
-    reg_G3_MTX_MODE = GX_MTXMODE_POSITION;
+    G3_WRITE_COMMAND(reg_G3_MTX_MODE, G3OP_MTX_MODE, GX_MTXMODE_POSITION);
     G3_LoadMtx43(&sum.invM);
-    reg_G3_MTX_MODE = GX_MTXMODE_PROJECTION;
-    reg_G3_MTX_RESTORE = 1;
-    reg_G3_MTX_MODE = GX_MTXMODE_POSITION_VECTOR;
-    reg_G3_MTX_STORE = rs->c[1];
+    G3_WRITE_COMMAND(reg_G3_MTX_MODE, G3OP_MTX_MODE, GX_MTXMODE_PROJECTION);
+    G3_WRITE_COMMAND(reg_G3_MTX_RESTORE, G3OP_MTX_RESTORE, 1);
+    G3_WRITE_COMMAND(reg_G3_MTX_MODE, G3OP_MTX_MODE, GX_MTXMODE_POSITION_VECTOR);
+    G3_WRITE_COMMAND(reg_G3_MTX_STORE, G3OP_MTX_STORE, rs->c[1]);
     rs->c += 3 * (rs->c[2] + 1);
 }
 
@@ -1016,13 +1016,13 @@ void NNSi_G3dFuncSbc_PRJMAP(NNSG3dRS *rs, u32 opt) {
             }
 
             NNS_G3dGeFlushBuffer();
-            reg_G3_MTX_MODE = GX_MTXMODE_PROJECTION;
-            reg_G3_MTX_PUSH = 0;
-            reg_G3_MTX_IDENTITY = 0;
+            G3_WRITE_COMMAND(reg_G3_MTX_MODE, G3OP_MTX_MODE, GX_MTXMODE_PROJECTION);
+            G3_WRITE_COMMAND(reg_G3_MTX_PUSH, G3OP_MTX_PUSH, 0);
+            G3_WRITE_COMMAND(reg_G3_MTX_IDENTITY, G3OP_MTX_IDENTITY, 0);
             while (G3X_GetClipMtx(&clip) != 0) {
             }
-            reg_G3_MTX_POP = 1;
-            reg_G3_MTX_MODE = GX_MTXMODE_TEXTURE;
+            G3_WRITE_COMMAND(reg_G3_MTX_POP, G3OP_MTX_POP, 1);
+            G3_WRITE_COMMAND(reg_G3_MTX_MODE, G3OP_MTX_MODE, GX_MTXMODE_TEXTURE);
             NNS_G3dGeLoadMtx44(&clip);
             NNS_G3dGeTexCoord(clip.m[3][0] >> 4, clip.m[3][1] >> 4);
         }

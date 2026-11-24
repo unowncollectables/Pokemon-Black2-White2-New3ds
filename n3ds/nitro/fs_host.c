@@ -5,6 +5,7 @@
  * Opening is by path. The ROM's archive tables are not required for that.
  * No Frigate source is copied. */
 #include "nitro/fs.h"
+#include "log.h"
 
 #if defined(PBW2_WHITE2)
 #define PBW2_SD_DIR "sdmc:/3ds/white2_3ds"
@@ -12,19 +13,10 @@
 #define PBW2_SD_DIR "sdmc:/3ds/black2_3ds"
 #endif
 
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
-#define FS_SLOTS 16
-
-typedef struct {
-    int used;
-    FILE *fp;
-    u32 length;
-    u32 position;
-} FsSlot;
-
-static FsSlot s_slots[FS_SLOTS];
 static int s_ready;
 static char s_root[96];
 
@@ -45,13 +37,6 @@ static const char *bare_path(const char *path) {
     return path;
 }
 
-static FsSlot *slot_of(FSFile *file) {
-    if (!file || !file->argument) {
-        return NULL;
-    }
-    return file->argument;
-}
-
 #if defined(PBW2_LINK_GAME)
 void FSi_InitOverlay(void);
 #endif
@@ -59,7 +44,6 @@ void FSi_InitOverlay(void);
 void FS_Init(u32 dma) {
     (void)dma;
     root_path();
-    memset(s_slots, 0, sizeof s_slots);
     s_ready = 1;
 #if defined(PBW2_LINK_GAME)
     FSi_InitOverlay();
@@ -80,9 +64,8 @@ void FS_InitFile(FSFile *file) {
 BOOL FS_OpenFile(FSFile *file, const char *path) {
     const char *bare;
     char full[256];
-    FsSlot *slot = NULL;
-    int i;
-    long end;
+    FILE *fp;
+    long end = -1;
     FS_InitFile(file);
     if (!s_ready) {
         FS_Init(0);
@@ -92,86 +75,98 @@ BOOL FS_OpenFile(FSFile *file, const char *path) {
         file->error = FS_RESULT_INVALID_PARAMETER;
         return FALSE;
     }
-    for (i = 0; i < FS_SLOTS; i++) {
-        if (!s_slots[i].used) {
-            slot = &s_slots[i];
-            break;
-        }
-    }
-    if (!slot) {
-        file->error = FS_RESULT_FAILURE;
-        return FALSE;
-    }
     snprintf(full, sizeof full, "%s/%s", s_root, bare);
-    slot->fp = fopen(full, "rb");
-    if (!slot->fp) {
+    fp = fopen(full, "rb");
+    if (!fp) {
         file->error = FS_RESULT_NO_ENTRY;
+        Log_Line("FS", "open failed: %s", bare);
         return FALSE;
     }
-    if (fseek(slot->fp, 0, SEEK_END) != 0) {
-        fclose(slot->fp);
-        slot->fp = NULL;
+    if (fseek(fp, 0, SEEK_END) == 0) {
+        end = ftell(fp);
+    }
+    if (end < 0 || end > INT32_MAX || fseek(fp, 0, SEEK_SET) != 0) {
+        fclose(fp);
         file->error = FS_RESULT_FAILURE;
         return FALSE;
     }
-    end = ftell(slot->fp);
-    fseek(slot->fp, 0, SEEK_SET);
-    slot->used = 1;
-    slot->length = end < 0 ? 0 : (u32)end;
-    slot->position = 0;
-    file->argument = slot;
+    file->argument = fp;
+    file->body.file.bottom = (s32)end;
+    file->prop = &file->body;
     file->stat = FS_FILE_STATUS_IS_FILE;
     file->error = FS_RESULT_SUCCESS;
     return TRUE;
 }
 
 s32 FS_ReadFile(FSFile *file, void *dest, s32 size) {
-    FsSlot *slot = slot_of(file);
-    size_t n;
-    if (!slot || !slot->fp || size < 0) {
+    if (!file || !FS_IsFile(file) || size < 0 || (size > 0 && !dest)) {
         if (file) {
-            file->error = FS_RESULT_FAILURE;
+            file->error = FS_RESULT_INVALID_PARAMETER;
         }
         return -1;
     }
-    n = fread(dest, 1, (size_t)size, slot->fp);
-    slot->position += (u32)n;
+    FSFileRange *range = &file->body.file;
+    s32 remaining = range->bottom - range->position;
+    if (size > remaining) {
+        size = remaining;
+    }
     file->error = FS_RESULT_SUCCESS;
-    return (s32)n;
+    if (size == 0) {
+        return 0;
+    }
+    FILE *fp = file->argument;
+    if (fp) {
+        size = (s32)fread(dest, 1, (size_t)size, fp);
+        if (ferror(fp)) {
+            file->error = FS_RESULT_FAILURE;
+        }
+    } else {
+        /* Memory files borrow their bytes for the lifetime of the handle. */
+        const u8 *bytes = file->arg.readFile.buffer;
+        memmove(dest, bytes + range->position, (size_t)size);
+    }
+    range->position += size;
+    return size;
 }
 
 BOOL FS_SeekFile(FSFile *file, s32 offset, FSSeekFileMode whence) {
-    FsSlot *slot = slot_of(file);
-    int mode;
-    if (!slot || !slot->fp) {
+    if (!file || !FS_IsFile(file)) {
         return FALSE;
     }
-    mode = whence == FS_SEEK_CUR ? SEEK_CUR : whence == FS_SEEK_END ? SEEK_END : SEEK_SET;
-    if (fseek(slot->fp, offset, mode) != 0) {
+    FSFileRange *range = &file->body.file;
+    s64 position = offset;
+    if (whence == FS_SEEK_END) {
+        position += range->bottom;
+    } else if (whence != FS_SEEK_SET) {
+        position += range->position;
+    }
+    if (position < 0 || position > range->bottom) {
+        file->error = FS_RESULT_INVALID_PARAMETER;
+        return FALSE;
+    }
+    FILE *fp = file->argument;
+    if (fp && fseek(fp, (long)position, SEEK_SET) != 0) {
         file->error = FS_RESULT_FAILURE;
         return FALSE;
     }
-    slot->position = (u32)ftell(slot->fp);
+    range->position = (s32)position;
     file->error = FS_RESULT_SUCCESS;
     return TRUE;
 }
 
 BOOL FS_CloseFile(FSFile *file) {
-    FsSlot *slot = slot_of(file);
-    if (!slot) {
+    if (!file || !FS_IsFile(file)) {
         return FALSE;
     }
-    if (slot->fp) {
-        fclose(slot->fp);
-    }
-    memset(slot, 0, sizeof *slot);
+    FILE *fp = file->argument;
+    int result = fp ? fclose(fp) : 0;
     FS_InitFile(file);
-    return TRUE;
+    file->error = result == 0 ? FS_RESULT_SUCCESS : FS_RESULT_FAILURE;
+    return result == 0;
 }
 
 u32 FS_GetFileLength(FSFile *file) {
-    FsSlot *slot = slot_of(file);
-    return slot ? slot->length : 0;
+    return file && FS_IsFile(file) ? (u32)file->body.file.bottom : 0;
 }
 
 u32 FS_GetLength(FSFile *file) {
@@ -179,16 +174,21 @@ u32 FS_GetLength(FSFile *file) {
 }
 
 u32 FS_GetFilePosition(FSFile *file) {
-    FsSlot *slot = slot_of(file);
-    return slot ? slot->position : 0;
+    return file && FS_IsFile(file) ? (u32)file->body.file.position : 0;
 }
 
 BOOL FS_CreateFileFromMemory(FSFile *file, void *data, u32 size) {
-    (void)data;
-    (void)size;
     FS_InitFile(file);
-    file->error = FS_RESULT_UNSUPPORTED;
-    return FALSE;
+    if ((data == NULL && size != 0) || size > INT32_MAX) {
+        file->error = FS_RESULT_INVALID_PARAMETER;
+        return FALSE;
+    }
+    file->arg.readFile.buffer = data;
+    file->body.file.bottom = (s32)size;
+    file->prop = &file->body;
+    file->stat = FS_FILE_STATUS_IS_FILE;
+    file->error = FS_RESULT_SUCCESS;
+    return TRUE;
 }
 
 int pbw2_fs_probe(u32 *size_out) {

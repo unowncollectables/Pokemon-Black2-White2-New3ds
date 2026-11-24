@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import re
+import shlex
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -106,8 +108,11 @@ EXCLUDE_LIB_NITRO_FILES = {
     "lib/nitro/src/os/os_tick.c",
     "lib/nitro/src/os/os_timer.c",
     "lib/nitro/src/gx/gx_load2d.c",
-    "lib/nitro/src/fx/fx_atanidx.c",
     "lib/nitro/src/fx/fx_cp.c",
+    "lib/nitro/src/fx/fx_mtx22.c",
+    "lib/nitro/src/fx/fx_mtx33.c",
+    "lib/nitro/src/fx/fx_mtx43.c",
+    "lib/nitro/src/fx/fx_mtx44.c",
     "lib/nitro/src/spi/pm.c",
 }
 
@@ -158,10 +163,8 @@ def lib_nitro_path_ok(src: str) -> bool:
 
 
 def lib_nnsys_path_ok(src: str) -> bool:
-    # Exact files only: the g3d tree cannot be taken whole — glbstate.c
-    # defines NNS_G3dGlb (hosted in title_link_syms.c) and util.c defines
-    # NNS_G3dInit (hosted in g3_gecom_host.c); model.c and snd_heap.c are
-    # the clean ones. Their missing siblings live in g3d_glb_stubs.c.
+    # The Makefile links the selected geometry and animation objects.
+    # util.c still shares NNS_G3dInit with the host geometry buffer.
     if src in {
         "lib/nnsys/src/g3d/model.c",
         "lib/nnsys/src/snd/snd_heap.c",
@@ -193,33 +196,29 @@ def closure_paths(game: str) -> list[Path]:
     if not game_main.is_file():
         raise SystemExit(f"missing {game_main}")
     index = symbol_index(objdir)
-    chosen: dict[Path, None] = {game_main: None}
-    changed = True
-    while changed:
-        changed = False
-        need: set[str] = set()
-        for obj in chosen:
-            need |= nm_undefined(obj)
-        for sym in sorted(need):
+    chosen = {game_main}
+    pending = [game_main]
+    while pending:
+        for sym in nm_undefined(pending.pop()):
             if sym.startswith("__aeabi_"):
                 continue
             path = index.get(sym)
             if path and path not in chosen:
-                chosen[path] = None
-                changed = True
+                chosen.add(path)
+                pending.append(path)
     return sorted(chosen)
 
 
 def write_rsp(game: str) -> int:
     paths = closure_paths(game)
     out = ROOT / "build" / "n3ds" / game.lower() / "game_objects.rsp"
-    out.write_text("\n".join(str(p) for p in paths) + "\n")
+    out.write_text("\n".join(shlex.quote(path.as_posix()) for path in paths) + "\n")
     print(f"{game}: {len(paths)} objects in {out.relative_to(ROOT)}")
     return len(paths)
 
 
 def main() -> int:
-    subprocess.run([str(ROOT / "scripts" / "n3ds_gen_nitro_stubs.py")], check=False)
+    subprocess.run([sys.executable, str(ROOT / "scripts" / "n3ds_gen_nitro_stubs.py")], check=True)
     for game in ("BLACK2", "WHITE2"):
         write_rsp(game)
     return 0

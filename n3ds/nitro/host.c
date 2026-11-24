@@ -48,6 +48,12 @@ void NitroHost_Frame(uint32_t pad_held) {
     pbw2_vblank();
 }
 
+#if defined(PBW2_LINK_GAME)
+void NitroHost_SetTouch(uint16_t x, uint16_t y, bool pressed) {
+    PbW2_TouchHostUpdate(x, y, pressed);
+}
+#endif
+
 bool NitroHost_Nitrofs(void) {
     return s_nitrofs != 0;
 }

@@ -3,6 +3,7 @@
 #include "nitro/cp.h"
 #include "stub_log.h"
 
+#include <stdint.h>
 #include <string.h>
 
 static u16 s_div_cnt;
@@ -57,4 +58,29 @@ u32 PbW2_CpGetResultL(void) {
 
 u32 PbW2_CpGetDivCnt(void) {
     return s_div_cnt;
+}
+
+void PbW2_CpDivImm64_32(u64 numer, u32 denom) {
+    s64 signedNumer = (s64)numer;
+    s32 signedDenom = (s32)denom;
+    s64 result = 0;
+    if (signedDenom != 0) {
+        result = signedNumer == INT64_MIN && signedDenom == -1 ? INT64_MIN : signedNumer / signedDenom;
+    }
+    reg_CP_DIV_RESULT = (u64)result;
+}
+
+u32 PbW2_CpSqrt64(u64 value) {
+    u64 root = 0;
+    u64 bit = 1ULL << 62;
+
+    for (; bit != 0; bit >>= 2) {
+        if (value >= root + bit) {
+            value -= root + bit;
+            root = (root >> 1) + bit;
+        } else {
+            root >>= 1;
+        }
+    }
+    return (u32)root;
 }

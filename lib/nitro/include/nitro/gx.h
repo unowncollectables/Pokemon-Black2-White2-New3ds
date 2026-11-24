@@ -850,9 +850,18 @@ typedef enum {
 #define G3OP_MTX_MULT_3x3 0x1a
 #define G3OP_MTX_SCALE 0x1b
 #define G3OP_MTX_TRANS 0x1c
+#define G3OP_COLOR 0x20
+#define G3OP_NORMAL 0x21
 #define G3OP_TEXCOORD 0x22
+#define G3OP_VTX_16 0x23
+#define G3OP_VTX_10 0x24
 #define G3OP_POLYGON_ATTR 0x29
 #define G3OP_TEXIMAGE_PARAM 0x2a
+#define G3OP_TEXPLTT_BASE 0x2b
+#define G3OP_DIF_AMB 0x30
+#define G3OP_SPE_EMI 0x31
+#define G3OP_LIGHT_VECTOR 0x32
+#define G3OP_LIGHT_COLOR 0x33
 #define G3OP_BEGIN 0x40
 #define G3OP_END 0x41
 #define G3OP_BOX_TEST 0x70
@@ -1261,7 +1270,11 @@ static inline void G3X_AlphaTest(BOOL enable, int ref) {
     if (enable) {
         reg_G3X_DISP3DCNT = (u16)((reg_G3X_DISP3DCNT & ~(REG_G3X_DISP3DCNT_RO_MASK | REG_G3X_DISP3DCNT_GO_MASK)) |
                                   REG_G3X_DISP3DCNT_ATE_MASK);
+#ifdef PBW2_N3DS
+        PBW2_VU16(0x04000340) = (u16)ref;
+#else
         *(vu16 *)0x04000340 = (u16)ref;
+#endif
     } else {
         reg_G3X_DISP3DCNT &= ~(REG_G3X_DISP3DCNT_ATE_MASK | REG_G3X_DISP3DCNT_RO_MASK | REG_G3X_DISP3DCNT_GO_MASK);
     }
@@ -1286,108 +1299,135 @@ static inline void G3X_EdgeMarking(BOOL enable) {
 }
 
 static inline void G3X_SetFogColor(GXRgb rgb, int alpha) {
+#ifdef PBW2_N3DS
+    PBW2_VU32(0x04000358) = (u32)(rgb | (alpha << 16));
+#else
     *(vu32 *)0x04000358 = (u32)(rgb | (alpha << 16));
+#endif
 }
+
+#ifdef PBW2_N3DS
+#include "g3_intercept.h"
+#define G3_WRITE_COMMAND(reg, opcode, value) PbW2_G3Command(opcode, (const u32[]){ value })
+#define G3_WRITE_FIFO(value) PbW2_G3FifoWord(value)
+#else
+#define G3_WRITE_COMMAND(reg, opcode, value) reg = value
+#define G3_WRITE_FIFO(value) reg_G3X_GXFIFO = value
+#endif
 
 // Swaps the geometry engine's buffers at the next vertical blank, with how it sorts translucent polygons and whether
 // it depth tests with Z or W
 static inline void G3_SwapBuffers(GXSortMode am, GXBufferMode zw) {
-    reg_G3_SWAP_BUFFERS = am | (zw << 1);
+    G3_WRITE_COMMAND(reg_G3_SWAP_BUFFERS, 0x50, am | (zw << 1));
 }
 
 static inline void G3_ViewPort(int x1, int y1, int x2, int y2) {
-    reg_G3_VIEWPORT = GX_PACK_VIEWPORT_PARAM(x1, y1, x2, y2);
+    G3_WRITE_COMMAND(reg_G3_VIEWPORT, 0x60, GX_PACK_VIEWPORT_PARAM(x1, y1, x2, y2));
 }
 
 static inline void G3_MtxMode(GXMtxMode mode) {
-    reg_G3_MTX_MODE = mode;
+    G3_WRITE_COMMAND(reg_G3_MTX_MODE, G3OP_MTX_MODE, mode);
 }
 
 static inline void G3_PushMtx(void) {
-    reg_G3_MTX_PUSH = 0;
+    G3_WRITE_COMMAND(reg_G3_MTX_PUSH, G3OP_MTX_PUSH, 0);
 }
 
 static inline void G3_PopMtx(int num) {
-    reg_G3_MTX_POP = num;
+    G3_WRITE_COMMAND(reg_G3_MTX_POP, G3OP_MTX_POP, num);
 }
 
 static inline void G3_StoreMtx(int num) {
-    reg_G3_MTX_STORE = (u32)num;
+    G3_WRITE_COMMAND(reg_G3_MTX_STORE, G3OP_MTX_STORE, (u32)num);
 }
 
 static inline void G3_RestoreMtx(int num) {
-    reg_G3_MTX_RESTORE = (u32)num;
+    G3_WRITE_COMMAND(reg_G3_MTX_RESTORE, G3OP_MTX_RESTORE, (u32)num);
 }
 
 static inline void G3_Identity(void) {
-    reg_G3_MTX_IDENTITY = 0;
+    G3_WRITE_COMMAND(reg_G3_MTX_IDENTITY, G3OP_MTX_IDENTITY, 0);
 }
 
 static inline void G3_Translate(fx32 x, fx32 y, fx32 z) {
+#ifdef PBW2_N3DS
+    PbW2_G3Command(G3OP_MTX_TRANS, (const u32[]){ (u32)x, (u32)y, (u32)z });
+#else
     reg_G3_MTX_TRANS = (u32)x;
     reg_G3_MTX_TRANS = (u32)y;
     reg_G3_MTX_TRANS = (u32)z;
+#endif
 }
 
 static inline void G3_Scale(fx32 x, fx32 y, fx32 z) {
+#ifdef PBW2_N3DS
+    PbW2_G3Command(G3OP_MTX_SCALE, (const u32[]){ (u32)x, (u32)y, (u32)z });
+#else
     reg_G3_MTX_SCALE = (u32)x;
     reg_G3_MTX_SCALE = (u32)y;
     reg_G3_MTX_SCALE = (u32)z;
+#endif
 }
 
 static inline void G3_PolygonAttr(int light, GXPolygonMode polyMode, GXCull cullMode, int polygonID, int alpha,
                                   int misc) {
-    reg_G3_POLYGON_ATTR = GX_PACK_POLYGONATTR_PARAM(light, polyMode, cullMode, polygonID, alpha, misc);
+    G3_WRITE_COMMAND(reg_G3_POLYGON_ATTR, G3OP_POLYGON_ATTR,
+                     GX_PACK_POLYGONATTR_PARAM(light, polyMode, cullMode, polygonID, alpha, misc));
 }
 
 static inline void G3_TexImageParam(GXTexFmt texFmt, GXTexGen texGen, GXTexSizeS s, GXTexSizeT t, GXTexRepeat repeat,
                                     GXTexFlip flip, GXTexPlttColor0 pltt0, u32 addr) {
-    reg_G3_TEXIMAGE_PARAM = GX_PACK_TEXIMAGE_PARAM(texFmt, texGen, s, t, repeat, flip, pltt0, addr);
+    G3_WRITE_COMMAND(reg_G3_TEXIMAGE_PARAM, G3OP_TEXIMAGE_PARAM,
+                     GX_PACK_TEXIMAGE_PARAM(texFmt, texGen, s, t, repeat, flip, pltt0, addr));
 }
 
 static inline void G3_TexPlttBase(u32 addr, GXTexFmt texFmt) {
-    reg_G3_TEXPLTT_BASE = GX_PACK_TEXPLTTBASE_PARAM(addr, texFmt);
+    G3_WRITE_COMMAND(reg_G3_TEXPLTT_BASE, G3OP_TEXPLTT_BASE, GX_PACK_TEXPLTTBASE_PARAM(addr, texFmt));
 }
 
 static inline void G3_MaterialColorDiffAmb(GXRgb diffuse, GXRgb ambient, BOOL IsSetVtxColor) {
-    reg_G3_DIF_AMB = GX_PACK_DIFFAMB_PARAM(diffuse, ambient, IsSetVtxColor);
+    G3_WRITE_COMMAND(reg_G3_DIF_AMB, G3OP_DIF_AMB, GX_PACK_DIFFAMB_PARAM(diffuse, ambient, IsSetVtxColor));
 }
 
 static inline void G3_MaterialColorSpecEmi(GXRgb specular, GXRgb emission, BOOL IsShininess) {
-    reg_G3_SPE_EMI = GX_PACK_SPECEMI_PARAM(specular, emission, IsShininess);
+    G3_WRITE_COMMAND(reg_G3_SPE_EMI, G3OP_SPE_EMI, GX_PACK_SPECEMI_PARAM(specular, emission, IsShininess));
 }
 
 static inline void G3_Begin(GXBegin primitive) {
-    reg_G3_BEGIN_VTXS = (u32)primitive;
+    G3_WRITE_COMMAND(reg_G3_BEGIN_VTXS, G3OP_BEGIN, (u32)primitive);
 }
 
 static inline void G3_End(void) {
-    reg_G3_END_VTXS = 0;
+    G3_WRITE_COMMAND(reg_G3_END_VTXS, G3OP_END, 0);
 }
 
 static inline void G3_Normal(fx16 x, fx16 y, fx16 z) {
-    reg_G3_NORMAL = GX_VECFX10(GX_FX16_FX10(x), GX_FX16_FX10(y), GX_FX16_FX10(z));
+    G3_WRITE_COMMAND(reg_G3_NORMAL, G3OP_NORMAL, GX_VECFX10(GX_FX16_FX10(x), GX_FX16_FX10(y), GX_FX16_FX10(z)));
 }
 
 static inline void G3_TexCoord(fx32 s, fx32 t) {
-    reg_G3_TEXCOORD = GX_ST(s, t);
+    G3_WRITE_COMMAND(reg_G3_TEXCOORD, G3OP_TEXCOORD, GX_ST(s, t));
 }
 
 static inline void G3_Color(GXRgb rgb) {
-    reg_G3_COLOR = rgb;
+    G3_WRITE_COMMAND(reg_G3_COLOR, G3OP_COLOR, rgb);
 }
 
 static inline void G3_LightVector(GXLightId lightID, fx16 x, fx16 y, fx16 z) {
-    reg_G3_LIGHT_VECTOR = GX_PACK_LIGHTVECTOR_PARAM(lightID, x, y, z);
+    G3_WRITE_COMMAND(reg_G3_LIGHT_VECTOR, G3OP_LIGHT_VECTOR, GX_PACK_LIGHTVECTOR_PARAM(lightID, x, y, z));
 }
 
 static inline void G3_LightColor(GXLightId lightID, GXRgb rgb) {
-    reg_G3_LIGHT_COLOR = GX_PACK_LIGHTCOLOR_PARAM(lightID, rgb);
+    G3_WRITE_COMMAND(reg_G3_LIGHT_COLOR, G3OP_LIGHT_COLOR, GX_PACK_LIGHTCOLOR_PARAM(lightID, rgb));
 }
 
 static inline void G3_Vtx(fx16 x, fx16 y, fx16 z) {
+#ifdef PBW2_N3DS
+    PbW2_G3Command(G3OP_VTX_16, (const u32[]){ (u16)x | ((u32)(u16)y << 16), (u16)z });
+#else
     reg_G3_VTX_16 = (u32)((u16)x | ((u16)y << 16));
     reg_G3_VTX_16 = (u32)(u16)z;
+#endif
 }
 #ifdef PBW2_N3DS
 #define reg_G2_BG2PA PBW2_VU16(0x04000020)
@@ -1396,7 +1436,8 @@ static inline void G3_Vtx(fx16 x, fx16 y, fx16 z) {
 #endif
 // A vertex with 10-bit coordinates, of 6 fractional bits
 static inline void G3_Vtx10(fx16 x, fx16 y, fx16 z) {
-    reg_G3_VTX_10 = (u32)((x >> 6) & 0x3ff) | ((u32)((y >> 6) & 0x3ff) << 10) | ((u32)((z >> 6) & 0x3ff) << 20);
+    G3_WRITE_COMMAND(reg_G3_VTX_10, G3OP_VTX_10,
+                     (u32)((x >> 6) & 0x3ff) | ((u32)((y >> 6) & 0x3ff) << 10) | ((u32)((z >> 6) & 0x3ff) << 20));
 }
 
 // The BG registers of both engines. The sub engine's are at the main engine's address plus 0x1000

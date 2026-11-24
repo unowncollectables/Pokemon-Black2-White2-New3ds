@@ -12,35 +12,30 @@ presents with the frame's screen flags.
 
 ## Boot
 
-The shell in `n3ds/` links for both games and asks for the New 3DS clock.
-`n3ds/nitro/` has OS, IRQ, arenas, pad bits, RTC, a path filesystem, and
-`GX_Init` that clears the host IO buffer. When NitroFS is staged, the shell
-draws the version logo over the title background from `a/0/2/6`, and the
-lower title screen under it.
-
-Still to do before the title process: confirm that picture in Azahar, then
-link `src/system/main.c` as `Pbw2_GameMain` and overlays 12 and 27. The shell
-keeps `main`. The other overlays follow. DSi entry points stay stubs. ARM7
-audio stays silent.
+The production shell in `n3ds/` asks for the New 3DS clock and starts
+`Pbw2_GameMain` when the game is linked. Black 2 runs the original boot,
+title, and New Game flow in Azahar. Physical hardware and White 2
+playthroughs remain open. The ARM7 audio backend is silent.
 
 The user's ROM is read at runtime for the filesystem, and at build time only
 by `python3 configure.py && ninja` for the matching DS ROM. It is not committed.
 
 ## Video
 
-DS 2D engines and the geometry engine, presented on the 3DS. Both screens use
-one `Present_Commit` per frame. Wide view and sharp game text come later, in
-Quality, and they use those same flags. The sister ports' renderer is the
-lesson for present order and thread lifetime, not the function table: this
-game calls Nitro GX, not pspoke.
+The host composites both DS 2D engines and the CPU-rendered geometry layer.
+The Black 2 title uses the same VRAM capture and display path as the DS game.
+Finish geometry effects, compare with DS rendering, and measure frame
+timing on hardware. The sister ports are references for PICA200
+acceleration, presentation order, and thread lifetime. Wide view and sharp
+game text follow the baseline renderer.
 
 ## Save and field
 
 The game writes `black2.sav` or `white2.sav` in its own SD directory. The
 platform opens that file only when the game asks, and does not create it on
-boot. Field movement, menus, and the overworld come after the title screen
-can be passed. Continue must round-trip the same bytes a DS cart or an R4
-would.
+boot. Black 2 reaches the opening field and responds to the D-pad after the
+dialogue. Verify travel between maps, menus, and Continue. Continue must
+round-trip the same bytes a DS cart or an R4 would.
 
 ## Battle
 
@@ -70,7 +65,15 @@ Online work does not touch the save except through the game's own commands.
 
 ## Quality
 
-Each of these is a Settings toggle, default off, until it has been played:
+Keep the original boot and game progression as the baseline. Use
+SoulSilver's shipped `kCfgDefaults` in `platform/psp_ctru.c` for compatible
+Settings options. Keep new options off until verified in B2W2.
+Start with its 60 fps presentation, wide layouts, sharp text, even audio,
+and controls. Use the corresponding Gen 5 flows for party and PC access,
+Repel prompts, and other gameplay options. The Gen 5 save and reset rules
+still apply to any shortcut.
+
+Initial candidates:
 
 - Sharp text, both screens, using the frame's present flags.
 - Wide view.

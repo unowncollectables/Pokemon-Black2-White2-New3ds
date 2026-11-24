@@ -104,6 +104,7 @@ void G3X_SetFog(BOOL enabled, GXFogBlend alphaMode, GXFogSlope depthShift, int o
     }
 }
 
+#ifndef PBW2_N3DS
 int G3X_GetClipMtx(MtxFx44 *dest) {
     if (reg_G3X_GXSTAT & REG_G3X_GXSTAT_B_MASK) {
         return -1;
@@ -119,6 +120,7 @@ int G3X_GetVectorMtx(MtxFx33 *dest) {
     MI_Copy36B((const void *)&reg_G3X_VECMTX_RESULT_0, dest);
     return 0;
 }
+#endif
 
 void G3X_SetEdgeColorTable(const GXRgb *table) {
     MI_CpuCopy16(table, (void *)&reg_G3X_EDGE_COLOR_0, 16);

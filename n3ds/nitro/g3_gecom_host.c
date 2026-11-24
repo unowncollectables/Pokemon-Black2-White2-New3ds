@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-/* Host NNS geometry buffer; records G3 packets for Citro3D replay (HGSS g3packet pattern). */
+/* Host NNS geometry buffer for packed G3 commands. */
 #include "nnsys/g3d.h"
 
 #if defined(PBW2_LINK_GAME)
@@ -8,23 +8,8 @@
 #include "nitro/gx.h"
 #include "nitro/mi.h"
 
-#include <string.h>
-
-#define PBW2_G3_COMBUF_WORDS 512u
-
-static NNSG3dGeBuffer s_ge_buf;
+/* Only buffers supplied by the game are returned to its DTCM allocator. */
 static NNSG3dGeBuffer *s_ge_active;
-static volatile u8 s_dma_async;
-
-static void ge_record_words(const u32 *words, u32 count) {
-    if (words != NULL && count != 0) {
-        PbW2_G3RecordFifo(words, count);
-    }
-}
-
-static void ge_flush_to_fifo(const u32 *data, u32 words) {
-    ge_record_words(data, words);
-}
 
 BOOL NNS_G3dGeIsBufferExist(void) {
     return s_ge_active != NULL;
@@ -47,17 +32,12 @@ NNSG3dGeBuffer *NNS_G3dGeReleaseBuffer(void) {
 
 void NNS_G3dGeFlushBuffer(void) {
     if (s_ge_active != NULL && s_ge_active->idx != 0) {
-        ge_record_words(s_ge_active->data, s_ge_active->idx);
-        ge_flush_to_fifo(s_ge_active->data, s_ge_active->idx);
+        PbW2_G3RecordFifo(s_ge_active->data, s_ge_active->idx);
         s_ge_active->idx = 0;
     }
-    s_dma_async = 0;
 }
 
 void NNS_G3dGeBufferOP_N(u32 op, const u32 *args, u32 num) {
-    u32 packet[66];
-    u32 n;
-
     if (s_ge_active != NULL) {
         if (s_ge_active->idx + 1u + num <= NNS_G3D_SIZE_COMBUFFER) {
             s_ge_active->data[s_ge_active->idx++] = op;
@@ -69,17 +49,8 @@ void NNS_G3dGeBufferOP_N(u32 op, const u32 *args, u32 num) {
         }
         NNS_G3dGeFlushBuffer();
     }
-    n = 1u + num;
-    if (n <= 66u) {
-        packet[0] = op;
-        if (num != 0 && args != NULL) {
-            memcpy(packet + 1, args, num * sizeof(u32));
-        }
-        ge_record_words(packet, n);
-    }
-    if (num != 0 && args != NULL) {
-        ge_record_words(args, num);
-    }
+    PbW2_G3RecordFifo(&op, 1);
+    PbW2_G3RecordFifo(args, num);
 }
 
 void NNS_G3dGeSendDL(const void *list, u32 size) {
@@ -95,18 +66,13 @@ void NNS_G3dGeSendDL(const void *list, u32 size) {
         return;
     }
     NNS_G3dGeFlushBuffer();
-    ge_record_words(dl, words);
-    ge_flush_to_fifo(dl, words);
-}
-
-void PbW2_G3GeProvideDefaultBuffer(void) {
-    if (s_ge_active == NULL) {
-        NNS_G3dGeSetBuffer(&s_ge_buf);
-    }
+    PbW2_G3RecordFifo(dl, words);
 }
 
 void NNS_G3dInit(void) {
-    PbW2_G3GeProvideDefaultBuffer();
+    G3X_Init();
+    NNS_G3dGlbInit();
+    G3X_SetFifoIntrCond(GX_FIFOINTR_COND_EMPTY);
 }
 
 #endif

@@ -3,6 +3,10 @@
 
 #include "types.h"
 
+#ifdef PBW2_N3DS
+#include "cp_div_host.h"
+#endif
+
 // Snapshot of the divider and square-root hardware registers.
 typedef struct {
     u64 div_numer;
@@ -60,8 +64,12 @@ typedef struct {
 #define CP_SQRT_64BIT_MODE 1
 
 static inline void CP_SetDivImm64_32(u64 numer, u32 denom) {
+#ifdef PBW2_N3DS
+    PbW2_CpDivImm64_32(numer, denom);
+#else
     *(u64 *)REG_DIV_NUMER_ADDR = numer;
     *(u64 *)REG_DIV_DENOM_ADDR = denom;
+#endif
 }
 
 static inline void CP_SetDiv64_32(u64 numer, u32 denom) {

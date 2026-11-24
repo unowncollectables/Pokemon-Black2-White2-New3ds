@@ -6,6 +6,7 @@
 
 #if defined(PBW2_LINK_GAME)
 #include "g3_intercept.h"
+#include "nitro/gx.h"
 #include "nitro/mi.h"
 #include "vram_host.h"
 
@@ -107,6 +108,11 @@ void MIi_CpuClear32(u32 value, void *dest, u32 size) {
 }
 
 void MIi_CpuClearFast(u32 value, void *dest, u32 size) {
+#if defined(PBW2_LINK_GAME)
+    if (value == 0 && (uintptr_t)dest == HW_LCDC_VRAM && size == HW_LCDC_VRAM_SIZE) {
+        PbW2_VramClearLcdcAliases();
+    }
+#endif
     MIi_CpuClear32(value, dest, size);
 }
 
@@ -181,7 +187,7 @@ void MIi_CpuCopyFast(const void *src, void *dest, u32 size) {
 
 void MIi_CpuSend32(const void *src, volatile void *dest, u32 size) {
 #if defined(PBW2_LINK_GAME)
-    if ((uintptr_t)dest == (uintptr_t)REG_GXFIFO_ADDR) {
+    if ((uintptr_t)dest == (uintptr_t)REG_GXFIFO_ADDR || dest == &reg_G3X_GXFIFO) {
         PbW2_G3RecordFifo(src, size / sizeof(u32));
         return;
     }
@@ -270,7 +276,17 @@ void MI_UncompressLZ8(const void *src, void *dest) {
 }
 
 void MI_Copy36B(const void *src, void *dest) {
+#if defined(PBW2_LINK_GAME)
+    if (dest == (void *)&reg_G3X_GXFIFO) {
+        PbW2_G3RecordFifo(src, 9);
+        return;
+    }
+#endif
     MI_CpuCopy8(src, dest, 36);
+}
+
+void MI_Copy48B(const void *src, void *dest) {
+    MI_CpuCopy8(src, dest, 48);
 }
 
 void MI_Copy64B(const void *src, void *dest) {

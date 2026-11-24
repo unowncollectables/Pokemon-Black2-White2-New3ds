@@ -5,7 +5,39 @@
 #include "nitro/fx.h"
 #include "nitro/mi.h"
 
+#ifdef PBW2_N3DS
+void MTX_Identity33_(MtxFx33 *mtx) {
+    MTX_Scale33_(mtx, FX32_ONE, FX32_ONE, FX32_ONE);
+}
+
+void MTX_Copy33To44_(const MtxFx33 *src, MtxFx44 *dst) {
+    *dst = (MtxFx44){ .m = {
+                          { src->m[0][0], src->m[0][1], src->m[0][2], 0 },
+                          { src->m[1][0], src->m[1][1], src->m[1][2], 0 },
+                          { src->m[2][0], src->m[2][1], src->m[2][2], 0 },
+                          { 0, 0, 0, FX32_ONE },
+                      } };
+}
+
+void MTX_Scale33_(MtxFx33 *mtx, fx32 x, fx32 y, fx32 z) {
+    *mtx = (MtxFx33){ .m = { { x, 0, 0 }, { 0, y, 0 }, { 0, 0, z } } };
+}
+
+void MTX_RotX33_(MtxFx33 *mtx, fx32 sin, fx32 cos) {
+    *mtx = (MtxFx33){ .m = { { FX32_ONE, 0, 0 }, { 0, cos, sin }, { 0, -sin, cos } } };
+}
+
+void MTX_RotY33_(MtxFx33 *mtx, fx32 sin, fx32 cos) {
+    *mtx = (MtxFx33){ .m = { { cos, 0, -sin }, { 0, FX32_ONE, 0 }, { sin, 0, cos } } };
+}
+
+void MTX_RotZ33_(MtxFx33 *mtx, fx32 sin, fx32 cos) {
+    *mtx = (MtxFx33){ .m = { { cos, sin, 0 }, { -sin, cos, 0 }, { 0, 0, FX32_ONE } } };
+}
+#endif
+
 #pragma thumb off
+#ifndef PBW2_N3DS
 // clang-format off
 asm void MTX_Identity33_(MtxFx33 *mtx) {
     mov r2, #0x1000
@@ -20,8 +52,10 @@ asm void MTX_Identity33_(MtxFx33 *mtx) {
 }
 
 // clang-format on
+#endif
 
 // Copies through ldm and stm with writeback, which MWCC does not generate
+#ifndef PBW2_N3DS
 // clang-format off
 asm void MTX_Copy33To44_(const MtxFx33 *src, MtxFx44 *dst) {
     stmdb sp!, {r4}
@@ -42,9 +76,11 @@ asm void MTX_Copy33To44_(const MtxFx33 *src, MtxFx44 *dst) {
 }
 
 // clang-format on
+#endif
 #pragma thumb on
 
 // Stores through stm with writeback, which MWCC does not generate
+#ifndef PBW2_N3DS
 // clang-format off
 asm void MTX_Scale33_(MtxFx33 *mtx, fx32 x, fx32 y, fx32 z) {
     stmia r0!, {r1}
@@ -59,6 +95,7 @@ asm void MTX_Scale33_(MtxFx33 *mtx, fx32 x, fx32 y, fx32 z) {
 }
 
 // clang-format on
+#endif
 
 #pragma thumb off
 void MTX_ScaleApply33(const MtxFx33 *src, MtxFx33 *dest, fx32 x, fx32 y, fx32 z) {
@@ -74,6 +111,7 @@ void MTX_ScaleApply33(const MtxFx33 *src, MtxFx33 *dest, fx32 x, fx32 y, fx32 z)
 }
 #pragma thumb on
 
+#ifndef PBW2_N3DS
 // clang-format off
 asm void MTX_RotX33_(MtxFx33 *mtx, fx32 sin, fx32 cos) {
     mov r3, #1
@@ -93,7 +131,9 @@ asm void MTX_RotX33_(MtxFx33 *mtx, fx32 sin, fx32 cos) {
 }
 
 // clang-format on
+#endif
 
+#ifndef PBW2_N3DS
 // clang-format off
 asm void MTX_RotY33_(MtxFx33 *mtx, fx32 sin, fx32 cos) {
     str r2, [r0, #0]
@@ -113,7 +153,9 @@ asm void MTX_RotY33_(MtxFx33 *mtx, fx32 sin, fx32 cos) {
 }
 
 // clang-format on
+#endif
 
+#ifndef PBW2_N3DS
 // clang-format off
 asm void MTX_RotZ33_(MtxFx33 *mtx, fx32 sin, fx32 cos) {
     stmia r0!, {r2}
@@ -131,6 +173,7 @@ asm void MTX_RotZ33_(MtxFx33 *mtx, fx32 sin, fx32 cos) {
 }
 
 // clang-format on
+#endif
 
 #pragma thumb off
 void MTX_RotAxis33(MtxFx33 *mtx, const VecFx32 *axis, fx32 sin, fx32 cos) {

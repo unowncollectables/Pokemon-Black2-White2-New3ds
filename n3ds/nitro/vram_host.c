@@ -4,6 +4,7 @@
 #if defined(PBW2_LINK_GAME)
 
 #include "types.h"
+#include "nitro/gx.h"
 #include <stdint.h>
 #include <string.h>
 
@@ -35,6 +36,17 @@ void PbW2_VramHostInit(void) {
     memset(s_bg_scr_upload_off, 0, sizeof s_bg_scr_upload_off);
     PbW2_AffineTrackInit();
     s_host_ready = 1;
+}
+
+void PbW2_VramClearLcdcAliases(void) {
+    /* A reset through the LCDC window clears the same banks used by BG and OBJ. */
+    if (reg_GX_VRAMCNT_A == GX_VRAMCNT_LCDC && reg_GX_VRAMCNT_B == GX_VRAMCNT_LCDC &&
+        reg_GX_VRAMCNT_C == GX_VRAMCNT_LCDC && reg_GX_VRAMCNT_D == GX_VRAMCNT_LCDC &&
+        reg_GX_VRAMCNT_E == GX_VRAMCNT_LCDC && reg_GX_VRAMCNT_F == GX_VRAMCNT_LCDC &&
+        reg_GX_VRAMCNT_G == GX_VRAMCNT_LCDC && reg_GX_VRAMCNT_H == GX_VRAMCNT_LCDC &&
+        reg_GX_VRAMCNT_I == GX_VRAMCNT_LCDC) {
+        memset(s_bg, 0, sizeof s_bg);
+    }
 }
 
 void PbW2_NoteBgScrUpload(int bg, u32 arm_dest) {

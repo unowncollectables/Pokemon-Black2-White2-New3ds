@@ -4,43 +4,38 @@
 #if defined(PBW2_LINK_GAME)
 
 #include "nitro/hw.h"
-#include "nitro/os.h"
-
-#include <string.h>
-
-extern u8 pbw2_io[];
 
 /* DS KEYINPUT is active-low; PAD_Read XORs with 0x2fff. */
-#define PAD_KEYINPUT_IO_OFFSET 0x130u
-#define PAD_MASK (0x2fffu)
+#define PAD_KEYINPUT_MASK 0x03ffu
+#define PAD_XY_MASK 0x0c00u
+#define PAD_DEBUG_RELEASED 0x2000u
 
 vu16 PbW2_ButtonXyBuf;
+static u32 s_touch;
 
 void PbW2_PadHostInit(void) {
-    vu16 *key = (vu16 *)(void *)(pbw2_io + PAD_KEYINPUT_IO_OFFSET);
+    PbW2_PadHostUpdate(0);
+    PbW2_TouchHostUpdate(0, 0, FALSE);
+}
 
-    /* All buttons released (active-low ones). */
-    *key = 0xffffu;
-    /* X/Y released (bits 10–11), lid open (bit 15 clear). */
-    PbW2_ButtonXyBuf = 0x0c00u;
+void PbW2_TouchHostUpdate(u16 x, u16 y, BOOL pressed) {
+    /* The host calibration uses 16 raw units per game pixel. Publish the whole sample at once. */
+    u32 sample = pressed ? ((u32)x << 4) | ((u32)y << 16) | (1u << 24) : 0u;
+    __atomic_store_n(&s_touch, sample, __ATOMIC_RELAXED);
+}
+
+void PbW2_TouchHostRead(TPData *point) {
+    u32 sample = __atomic_load_n(&s_touch, __ATOMIC_RELAXED);
+    point->x = (u16)(sample & 0xfffu);
+    point->y = (u16)((sample >> 12) & 0xfffu);
+    point->touch = (u16)(sample >> 24);
+    point->validity = point->touch ? TP_VALIDITY_VALID : TP_VALIDITY_INVALID_XY;
 }
 
 void PbW2_PadHostUpdate(u32 pad_active_high) {
-    u32 down = pad_active_high & PAD_MASK;
-    u32 face_xy = down & (0x400u | 0x800u);
-    u32 key_down = down & ~(0x400u | 0x800u);
-    vu16 *key = (vu16 *)(void *)(pbw2_io + PAD_KEYINPUT_IO_OFFSET);
-    u16 xy;
-
-    *key = (u16)(~(key_down)&0xffffu);
-    xy = 0x0c00u;
-    if (face_xy & 0x400u) {
-        xy &= (u16) ~(1u << 10);
-    }
-    if (face_xy & 0x800u) {
-        xy &= (u16) ~(1u << 11);
-    }
-    PbW2_ButtonXyBuf = xy;
+    /* PAD_Read ORs the two registers, so KEYINPUT leaves X/Y bits clear. */
+    reg_PAD_KEYINPUT = (u16)(~pad_active_high & PAD_KEYINPUT_MASK);
+    PbW2_ButtonXyBuf = (u16)((~pad_active_high & PAD_XY_MASK) | PAD_DEBUG_RELEASED);
 }
 
 #endif

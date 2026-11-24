@@ -64,10 +64,11 @@ LIB_GAME_GFD := \
 	gfd_VramTransferManager.o gfd_FramePlttVramMan.o gfd_FrameTexVramMan.o gfd_LinkedListPlttVramMan.o \
 	gfd_LinkedListTexVramMan.o gfd_PlttVramMan.o gfd_TexVramMan.o gfdi_LinkedListVramMan_Common.o
 LIB_GAME_G3D := \
-	res_struct_accessor.o res_struct_accessor_anm.o kernel.o mem.o anm.o \
-	nsbca.o nsbma.o nsbta.o nsbtp.o nsbva.o
+	res_struct_accessor.o res_struct_accessor_anm.o kernel.o mem.o anm.o glbstate.o util.o \
+	nsbca.o nsbma.o nsbta.o nsbtp.o nsbva.o sbc.o cgtool.o basic.o maya.o si3d.o 3dsmax.o xsi.o
 LIB_GAME_OBJS := \
 	../build/n3ds/$(GAME_SYM)/obj/lib/nitro/src/gx/gx_load2d.o \
+	$(foreach size,22 33 43 44,../build/n3ds/$(GAME_SYM)/obj/lib/nitro/src/fx/fx_mtx$(size).o) \
 	$(foreach o,$(LIB_GAME_G2D),../build/n3ds/$(GAME_SYM)/obj/lib/nnsys/src/g2d/$(o)) \
 	$(foreach o,$(LIB_GAME_GFD),../build/n3ds/$(GAME_SYM)/obj/lib/nnsys/src/gfd/$(o)) \
 	$(foreach o,$(LIB_GAME_G3D),../build/n3ds/$(GAME_SYM)/obj/lib/nnsys/src/g3d/$(o))
@@ -77,9 +78,9 @@ SHELL_SRC += source/game_thread.c nitro/mi_host.c nitro/ic_dc_host.c \
 	nitro/os_more_host.c nitro/os_thread_host.c nitro/rom_header_host.c nitro/pm_host.c nitro/pxi_host.c \
 	nitro/pxi_service.c nitro/cp_div_host.c nitro/nvram_host.c nitro/dtcm_host.c nitro/link_syms.c nitro/overlay_host.c \
 	nitro/overlay_ids.c nitro/overlay_id_decode_gen.c nitro/nitro_stubs.c nitro/nns_title_stubs.c nitro/title_link_syms.c \
-	nitro/g3_gx_stub.c nitro/g3d_glb_stubs.c nitro/mtx_stub.c nitro/link_stubs.c nitro/proc_stubs.c nitro/net_stubs.c \
+	nitro/g3_gx_stub.c nitro/fx_host.c nitro/link_stubs.c nitro/proc_stubs.c nitro/net_stubs.c \
 	nitro/snd_silent.c nitro/mic_stub.c nitro/mb_stub.c nitro/wm_stub.c nitro/twl_stub.c nitro/pad_host.c nitro/vram_host.c nitro/vram_dma.c nitro/affine_track.c nitro/ds2d_compose.c \
-	nitro/g3_intercept.c nitro/g3_gecom_host.c
+	nitro/g3_intercept.c nitro/g3_gecom_host.c nitro/g3_raster.c
 GAME_RSP := $(CURDIR)/../build/n3ds/$(shell echo $(GAME) | tr A-Z a-z)/game_objects.rsp
 GAME_LDFLAGS := @$(GAME_RSP)
 else

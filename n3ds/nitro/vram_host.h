@@ -7,6 +7,7 @@
 #if defined(PBW2_LINK_GAME)
 
 void PbW2_VramHostInit(void);
+void PbW2_VramClearLcdcAliases(void);
 int PbW2_VramHostReady(void);
 
 #endif

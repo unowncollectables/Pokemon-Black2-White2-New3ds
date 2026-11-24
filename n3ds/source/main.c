@@ -82,6 +82,21 @@ static u32 Pad_FromHid(u32 held) {
     return pad;
 }
 
+#if defined(PBW2_LINK_GAME)
+static void UpdateTouch(u32 held) {
+    touchPosition touch = {0};
+    if (held & KEY_TOUCH) {
+        hidTouchRead(&touch);
+        /* The 256x192 game image is centered on the 320x240 touch screen. */
+        if (touch.px >= 32 && touch.px < 288 && touch.py >= 24 && touch.py < 216) {
+            NitroHost_SetTouch(touch.px - 32, touch.py - 24, true);
+            return;
+        }
+    }
+    NitroHost_SetTouch(0, 0, false);
+}
+#endif
+
 #if !defined(PBW2_LINK_GAME)
 static void Draw_Top(bool new3ds) {
     consoleSelect(&s_top);
@@ -189,21 +204,24 @@ int main(int argc, char **argv) {
 #if defined(PBW2_LINK_GAME)
     GameThread_Start();
     Log_Line("3DS", "game thread %s", GameThread_Started() ? "running" : "pending");
-#endif
+#else
     if (TitlePic_Load()) {
         Log_Line("3DS", "title pic: %s", TitlePic_Note());
-#if !defined(PBW2_LINK_GAME)
         gfxSetScreenFormat(GFX_TOP, GSP_RGB565_OES);
         gfxSetScreenFormat(GFX_BOTTOM, GSP_RGB565_OES);
         gfxSetDoubleBuffering(GFX_TOP, true);
         gfxSetDoubleBuffering(GFX_BOTTOM, true);
-#endif
     } else if (NitroHost_Nitrofs()) {
         Log_Line("3DS", "title pic: %s", TitlePic_Note());
     }
+#endif
 
     while (aptMainLoop()) {
         Input_Scan();
+        u32 held = hidKeysHeld();
+#if defined(PBW2_LINK_GAME)
+        UpdateTouch(held);
+#endif
         /* Emulate the DS VCOUNT register. It is shadowed in pbw2_io and
          * nothing ever wrote it, so GX_GetVCount() always returned 0.
          * The MCSS palette-load task only runs on scanlines 192-200
@@ -213,7 +231,7 @@ int main(int argc, char **argv) {
          * transition. VBlank TCBs run at the start of the frame, i.e.
          * line 192 on a real DS, so report that here. */
         PBW2_VU16(0x04000006) = 192;
-        NitroHost_Frame(Pad_FromHid(hidKeysHeld()));
+        NitroHost_Frame(Pad_FromHid(held));
 #if !defined(PBW2_LINK_GAME)
         if (Input_Quit()) {
             Log_Line("3DS", "START exit");
@@ -221,25 +239,25 @@ int main(int argc, char **argv) {
         }
 #endif
 
-        /* Both screens, one commit. The title pictures use that same pair. */
+        /* Both screens, one commit. */
         Present_Commit(true, true);
         uint32_t flags = Present_Flags();
-        if (PbW2_ShellShouldDrawTitle() && TitlePic_Ready()) {
+#if defined(PBW2_LINK_GAME)
+        if (!PbW2_GameHasPresented()) {
+            Present_Clear(flags);
+        }
+#else
+        if (TitlePic_Ready()) {
             Present_DrawTitle(flags, TitlePic_Top(), TitlePic_Bottom());
         } else {
-#if defined(PBW2_LINK_GAME)
-            if (!PbW2_GameHasPresented()) {
-                Present_Clear(flags);
-            }
-#else
             if (flags & PBW2_SCREEN_TOP) {
                 Draw_Top(new3ds);
             }
             if (flags & PBW2_SCREEN_BOTTOM) {
                 Draw_Bottom();
             }
-#endif
         }
+#endif
         GxShim_Present(flags);
 
         gfxFlushBuffers();

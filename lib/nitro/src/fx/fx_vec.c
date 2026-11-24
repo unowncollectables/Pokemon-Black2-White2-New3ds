@@ -4,6 +4,10 @@
 #include "nitro/cp.h"
 #include "nitro/fx.h"
 
+#ifdef PBW2_N3DS
+#include "cp_div_host.h"
+#endif
+
 void VEC_Add(const VecFx32 *a, const VecFx32 *b, VecFx32 *ab) {
     ab->x = a->x + b->x;
     ab->y = a->y + b->y;
@@ -57,22 +61,30 @@ fx32 VEC_Mag(const VecFx32 *v) {
     fx64 sum = (fx64)v->x * v->x;
     sum += (fx64)v->y * v->y;
     sum += (fx64)v->z * v->z;
+#ifdef PBW2_N3DS
+    return (fx32)(((u64)PbW2_CpSqrt64((u64)sum << 2) + 1) >> 1);
+#else
     reg_CP_SQRTCNT = 1;
     reg_CP_SQRT_PARAM = sum << 2;
     while (reg_CP_SQRTCNT & REG_CP_BUSY_MASK) {
     }
     return ((fx32)reg_CP_SQRT_RESULT + 1) >> 1;
+#endif
 }
 
 fx32 VEC_Fx16Mag(const VecFx16 *v) {
     fx64 sum = v->x * v->x;
     sum += v->y * v->y;
     sum += v->z * v->z;
+#ifdef PBW2_N3DS
+    return (fx32)(((u64)PbW2_CpSqrt64((u64)sum << 2) + 1) >> 1);
+#else
     reg_CP_SQRTCNT = 1;
     reg_CP_SQRT_PARAM = sum << 2;
     while (reg_CP_SQRTCNT & REG_CP_BUSY_MASK) {
     }
     return ((fx32)reg_CP_SQRT_RESULT + 1) >> 1;
+#endif
 }
 
 void VEC_Normalize(const VecFx32 *src, VecFx32 *dest) {
@@ -83,10 +95,15 @@ void VEC_Normalize(const VecFx32 *src, VecFx32 *dest) {
     value = (fx64)src->x * src->x;
     value += (fx64)src->y * src->y;
     value += (fx64)src->z * src->z;
+#ifdef PBW2_N3DS
+    len = (s32)PbW2_CpSqrt64((u64)value << 2);
+    value = value == 0 ? 0 : (1LL << (FX32_SHIFT + FX32_SHIFT + 32)) / value;
+#else
     CP_SetDiv64_64(1LL << (FX32_SHIFT + FX32_SHIFT + 32), (u64)value);
     CP_SetSqrt64((u64)(value << 2));
     len = (s32)CP_GetSqrtResult32();
     value = CP_GetDivResult64();
+#endif
     value = value * len;
     dest->x = (fx32)((value * src->x + (1LL << (32 + FX32_SHIFT))) >> (32 + FX32_SHIFT + 1));
     dest->y = (fx32)((value * src->y + (1LL << (32 + FX32_SHIFT))) >> (32 + FX32_SHIFT + 1));
@@ -101,10 +118,15 @@ void VEC_Fx16Normalize(const VecFx16 *src, VecFx16 *dest) {
     value = src->x * src->x;
     value += src->y * src->y;
     value += src->z * src->z;
+#ifdef PBW2_N3DS
+    len = (s32)PbW2_CpSqrt64((u64)value << 2);
+    value = value == 0 ? 0 : (1LL << (FX32_SHIFT + FX32_SHIFT + 32)) / value;
+#else
     CP_SetDiv64_64(1LL << (FX32_SHIFT + FX32_SHIFT + 32), (u64)value);
     CP_SetSqrt64((u64)(value << 2));
     len = (s32)CP_GetSqrtResult32();
     value = CP_GetDivResult64();
+#endif
     value = value * len;
     dest->x = (fx16)((value * src->x + (1LL << (32 + FX32_SHIFT))) >> (32 + FX32_SHIFT + 1));
     dest->y = (fx16)((value * src->y + (1LL << (32 + FX32_SHIFT))) >> (32 + FX32_SHIFT + 1));
@@ -124,11 +146,15 @@ fx32 VEC_Distance(const VecFx32 *a, const VecFx32 *b) {
     fx64 sum = (fx64)dx * dx;
     sum += (fx64)dy * dy;
     sum += (fx64)dz * dz;
+#ifdef PBW2_N3DS
+    return (fx32)(((u64)PbW2_CpSqrt64((u64)sum << 2) + 1) >> 1);
+#else
     reg_CP_SQRTCNT = 1;
     reg_CP_SQRT_PARAM = sum << 2;
     while (reg_CP_SQRTCNT & REG_CP_BUSY_MASK) {
     }
     return ((fx32)reg_CP_SQRT_RESULT + 1) >> 1;
+#endif
 }
 
 #pragma thumb on

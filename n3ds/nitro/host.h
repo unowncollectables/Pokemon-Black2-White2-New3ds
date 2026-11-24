@@ -10,6 +10,9 @@
 void NitroHost_Init(void);
 /* One frame. pad_held uses the game's PAD_BUTTON_* / PAD_KEY_* bits. */
 void NitroHost_Frame(uint32_t pad_held);
+#if defined(PBW2_LINK_GAME)
+void NitroHost_SetTouch(uint16_t x, uint16_t y, bool pressed);
+#endif
 
 bool NitroHost_Nitrofs(void);
 uint32_t NitroHost_ProbeBytes(void);

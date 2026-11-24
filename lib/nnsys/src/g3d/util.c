@@ -27,11 +27,13 @@ void NNS_G3dGetCurrentMtx(MtxFx43 *pos, MtxFx33 *nrm) {
     G3_MtxMode(GX_MTXMODE_POSITION_VECTOR);
 }
 
+#ifndef PBW2_N3DS
 void NNS_G3dInit(void) {
     G3X_Init();
     NNS_G3dGlbInit();
     G3X_SetFifoIntrCond(GX_FIFOINTR_COND_EMPTY);
 }
+#endif
 
 // Where a point of the world is on the screen, in the viewport of the global state, and whether it is within it: 0
 // when it is, or -1. The point goes through the camera matrix and then the projection matrix, and its x and y are

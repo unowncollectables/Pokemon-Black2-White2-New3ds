@@ -6,7 +6,31 @@
 #include "nitro/fx.h"
 #include "nitro/mi.h"
 
+#ifdef PBW2_N3DS
+void MTX_Identity43_(MtxFx43 *mtx) {
+    MTX_Scale43_(mtx, FX32_ONE, FX32_ONE, FX32_ONE);
+}
+
+void MTX_Copy43To44_(const MtxFx43 *src, MtxFx44 *dst) {
+    MTX_Copy33To44_(&src->rt.rot, dst);
+    dst->m[3][0] = src->rt.trans.x;
+    dst->m[3][1] = src->rt.trans.y;
+    dst->m[3][2] = src->rt.trans.z;
+}
+
+void MTX_Scale43_(MtxFx43 *mtx, fx32 x, fx32 y, fx32 z) {
+    MTX_Scale33_(&mtx->rt.rot, x, y, z);
+    mtx->rt.trans = (VecFx32){ 0, 0, 0 };
+}
+
+void MTX_RotY43_(MtxFx43 *mtx, fx32 sin, fx32 cos) {
+    MTX_RotY33_(&mtx->rt.rot, sin, cos);
+    mtx->rt.trans = (VecFx32){ 0, 0, 0 };
+}
+#endif
+
 #pragma thumb off
+#ifndef PBW2_N3DS
 // clang-format off
 asm void MTX_Identity43_(MtxFx43 *mtx) {
     mov r2, #0x1000
@@ -22,7 +46,9 @@ asm void MTX_Identity43_(MtxFx43 *mtx) {
 }
 
 // clang-format on
+#endif
 
+#ifndef PBW2_N3DS
 // clang-format off
 asm void MTX_Copy43To44_(const MtxFx43 *src, MtxFx44 *dst) {
     stmdb sp!, {r4}
@@ -41,8 +67,10 @@ asm void MTX_Copy43To44_(const MtxFx43 *src, MtxFx44 *dst) {
 }
 
 // clang-format on
+#endif
 #pragma thumb on
 
+#ifndef PBW2_N3DS
 // clang-format off
 asm void MTX_Scale43_(MtxFx43 *mtx, fx32 x, fx32 y, fx32 z) {
     stmia r0!, {r1}
@@ -59,6 +87,7 @@ asm void MTX_Scale43_(MtxFx43 *mtx, fx32 x, fx32 y, fx32 z) {
 }
 
 // clang-format on
+#endif
 
 #pragma thumb off
 void MTX_ScaleApply43(const MtxFx43 *src, MtxFx43 *dest, fx32 x, fx32 y, fx32 z) {
@@ -69,6 +98,7 @@ void MTX_ScaleApply43(const MtxFx43 *src, MtxFx43 *dest, fx32 x, fx32 y, fx32 z)
 }
 #pragma thumb on
 
+#ifndef PBW2_N3DS
 // clang-format off
 asm void MTX_RotY43_(MtxFx43 *mtx, fx32 sin, fx32 cos) {
     str r1, [r0, #0x18]
@@ -87,6 +117,7 @@ asm void MTX_RotY43_(MtxFx43 *mtx, fx32 sin, fx32 cos) {
 }
 
 // clang-format on
+#endif
 
 #pragma thumb off
 void MTX_RotAxis43(MtxFx43 *mtx, const VecFx32 *axis, fx32 sin, fx32 cos) {

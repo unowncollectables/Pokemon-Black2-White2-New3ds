@@ -7,7 +7,27 @@
 #include "nitro/cp.h"
 #include "nitro/fx.h"
 
+#ifdef PBW2_N3DS
+void MTX_Identity44_(MtxFx44 *mtx) {
+    *mtx = (MtxFx44){ .m = {
+                          { FX32_ONE, 0, 0, 0 },
+                          { 0, FX32_ONE, 0, 0 },
+                          { 0, 0, FX32_ONE, 0 },
+                          { 0, 0, 0, FX32_ONE },
+                      } };
+}
+
+void MTX_Copy44To43_(const MtxFx44 *src, MtxFx43 *dst) {
+    for (int row = 0; row < 4; row++) {
+        for (int col = 0; col < 3; col++) {
+            dst->m[row][col] = src->m[row][col];
+        }
+    }
+}
+#endif
+
 #pragma thumb off
+#ifndef PBW2_N3DS
 // clang-format off
 asm void MTX_Identity44_(MtxFx44 *mtx) {
     mov r2, #0x1000
@@ -24,7 +44,9 @@ asm void MTX_Identity44_(MtxFx44 *mtx) {
 }
 
 // clang-format on
+#endif
 
+#ifndef PBW2_N3DS
 // clang-format off
 asm void MTX_Copy44To43_(const MtxFx44 *src, MtxFx43 *dst) {
     ldmia r0!, {r2, r3, ip}
@@ -43,6 +65,7 @@ asm void MTX_Copy44To43_(const MtxFx44 *src, MtxFx43 *dst) {
 }
 
 // clang-format on
+#endif
 
 void MTX_Concat44(const MtxFx44 *a, const MtxFx44 *b, MtxFx44 *ab) {
     MtxFx44 tmp;
@@ -218,15 +241,23 @@ void MTX_OrthoW(fx32 t, fx32 b, fx32 l, fx32 r, fx32 n, fx32 f, fx32 scaleW, Mtx
     mtx->m[2][3] = 0;
     mtx->m[3][3] = scaleW;
     invWidth = FX_GetDivResultFx64c();
+#ifdef PBW2_N3DS
+    CP_SetDivImm64_32((u64)FX32_ONE << 32, (u32)(t - b));
+#else
     reg_CP_DIV_NUMER = 0x100000000000LL;
     reg_CP_DIV_DENOM = (u32)(t - b);
+#endif
     if (scaleW != FX32_ONE) {
         invWidth = invWidth * scaleW / FX32_ONE;
     }
     mtx->m[0][0] = (fx32)((invWidth * (2 * FX32_ONE) + 0x80000000LL) >> 32);
     invHeight = FX_GetDivResultFx64c();
+#ifdef PBW2_N3DS
+    CP_SetDivImm64_32((u64)FX32_ONE << 32, (u32)(n - f));
+#else
     reg_CP_DIV_NUMER = 0x100000000000LL;
     reg_CP_DIV_DENOM = (u32)(n - f);
+#endif
     if (scaleW != FX32_ONE) {
         invHeight = invHeight * scaleW / FX32_ONE;
     }

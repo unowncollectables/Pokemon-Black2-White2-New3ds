@@ -52,7 +52,7 @@ u32 MATH_CountPopulation(u32 mask) {
 
 
 def main() -> int:
-    OUT.write_text("/* SPDX-License-Identifier: GPL-3.0-or-later */\n" + BODY.strip() + "\n")
+    OUT.write_text("/* SPDX-License-Identifier: GPL-3.0-or-later */\n" + BODY.strip() + "\n", newline="\n")
     print(f"wrote {OUT.relative_to(ROOT)}")
     return 0
 

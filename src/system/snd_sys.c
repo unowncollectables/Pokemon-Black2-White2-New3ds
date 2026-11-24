@@ -90,7 +90,9 @@ static SndPlayerState g_SndPlayerStates[SND_PLAYER_COUNT];
 static NNSSndArc sSndArc;
 OSThread g_GFLSndThread;
 static SNDTrackInfo sTrackInfo[SND_TRACK_COUNT];
+#ifndef PBW2_N3DS
 static u32 sThreadStack[SND_THREAD_STACK_SIZE / sizeof(u32)];
+#endif
 u8 g_GFLSndHeap[SND_HEAP_SIZE];
 
 void GFL_SndInit(void) {
@@ -575,6 +577,17 @@ static void GFL_SndThreadProc1(void *arg) {
 static void StartLoadThread(u32 seq, int kind) {
     sThreadSeq = seq;
     StopLoadThread();
+#ifdef PBW2_N3DS
+    // The native sound backend completes archive loads synchronously.
+    switch (kind) {
+    case SND_THREAD_LOAD_SEQ:
+        GFL_SndThreadProc2(&sThreadSeq);
+        break;
+    case SND_THREAD_LOAD_WAVE:
+        GFL_SndThreadProc1(&sThreadSeq);
+        break;
+    }
+#else
     switch (kind) {
     case SND_THREAD_LOAD_SEQ:
         OS_CreateThread(&g_GFLSndThread, GFL_SndThreadProc2, &sThreadSeq, sThreadStack + NELEMS(sThreadStack),
@@ -587,6 +600,7 @@ static void StartLoadThread(u32 seq, int kind) {
     }
     OS_WakeupThreadDirect(&g_GFLSndThread);
     sThread = &g_GFLSndThread;
+#endif
 }
 
 static void StopLoadThread(void) {

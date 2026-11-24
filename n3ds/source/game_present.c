@@ -6,7 +6,7 @@
 static volatile int s_game_has_presented;
 
 void pbw2_game_system_init_done(void) {
-    /* Legacy hook; shell title is gated on first present instead. */
+    /* The compositor publishes the first frame when display data is ready. */
 }
 
 #if defined(PBW2_LINK_GAME)
@@ -20,8 +20,4 @@ void pbw2_game_notify_present(void) {
         s_game_has_presented = 1;
         Log_Line("GX", "first game present (display on + VRAM loaded)");
     }
-}
-
-int PbW2_ShellShouldDrawTitle(void) {
-    return !s_game_has_presented;
 }
