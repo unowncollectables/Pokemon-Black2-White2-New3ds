@@ -41,7 +41,11 @@ esac
 
 mkdir -p "$dest"
 # Copy the file tree. Do not follow links that point at the ROM itself.
-cp -a "$src"/. "$dest"/
+# --no-preserve=ownership: plain `cp -a` fails in containers/VMs where
+# chown is not permitted (the copy itself succeeds, but cp exits non-zero
+# and `set -e` aborts the stage). Ownership is meaningless on a FAT SD card
+# anyway; mode and timestamps are still preserved.
+cp -r --preserve=mode,timestamps --no-preserve=ownership "$src"/. "$dest"/
 files=$(find "$dest" -type f | wc -l)
 probe=0
 if [ -f "$dest/a/0/0/2" ]; then

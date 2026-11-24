@@ -1,5 +1,8 @@
 #include "types.h"
 #include "gfl/arc.h"
+#ifdef PBW2_N3DS
+#include "log.h"
+#endif
 #include "gfl/g3d.h"
 #include "gfl/graphics.h"
 #include "gfl/heap.h"
@@ -125,6 +128,9 @@ void GFL_G3DSysCreate(BOOL frmTexVramMgr, u32 texVramSize, BOOL frmPltVramMgr, u
     NNS_G3dInit();
     G3X_InitMtxStack();
     NNS_G3dGlbInit();
+#ifdef PBW2_N3DS
+    Log_Line("field", "GFL_G3DSysCreate init done");
+#endif
     if (dtcmAllocSize != 0) {
         u32 size = dtcmAllocSize;
 
@@ -134,6 +140,9 @@ void GFL_G3DSysCreate(BOOL frmTexVramMgr, u32 texVramSize, BOOL frmPltVramMgr, u
         NNS_G3dGeSetBuffer(GFL_HeapDTCMAllocate(size));
     }
     G3_SwapBuffers(GX_SORTMODE_AUTO, GX_BUFFERMODE_W);
+#ifdef PBW2_N3DS
+    Log_Line("field", "GFL_G3DSysCreate dtcm+swap done");
+#endif
     GFL_HeapCreateAllocator(&g_G3DSystem.sys->allocator, g_G3DSystem.sys->heapId, 4);
     // The VRAM sizes are in 128 KB slots of texture VRAM and 16 KB ones of palette VRAM
     if (frmTexVramMgr == FALSE) {
@@ -145,6 +154,9 @@ void GFL_G3DSysCreate(BOOL frmTexVramMgr, u32 texVramSize, BOOL frmPltVramMgr, u
         NNS_GfdInitFrmTexVramManager(texVramSize, TRUE);
         g_G3DSystem.sys->texVramWork = NULL;
     }
+#ifdef PBW2_N3DS
+    Log_Line("field", "GFL_G3DSysCreate tex manager done");
+#endif
     if (frmPltVramMgr == FALSE) {
         u32 workSize = NNS_GfdGetLnkPlttVramManagerWorkSize(pltVramSize << 9);
 
@@ -161,6 +173,9 @@ void GFL_G3DSysCreate(BOOL frmTexVramMgr, u32 texVramSize, BOOL frmPltVramMgr, u
         g_G3DSystem.sys->texVramWork = NULL;
 #endif
     }
+#ifdef PBW2_N3DS
+    Log_Line("field", "GFL_G3DSysCreate plt manager done");
+#endif
     projection = DEFAULT_CAMERA_PROJECTION;
     projection.param1 = FX_SinIdx(DEG_TO_IDX(20));
     projection.param2 = FX_CosIdx(DEG_TO_IDX(20));
@@ -188,6 +203,9 @@ void GFL_G3DSysCreate(BOOL frmTexVramMgr, u32 texVramSize, BOOL frmPltVramMgr, u
     }
     g_G3DSystem.sys->drawCallback = NULL;
     g_G3DSystem.sys->drawArg = NULL;
+#ifdef PBW2_N3DS
+    Log_Line("field", "GFL_G3DSysCreate done");
+#endif
 }
 
 void GFL_G3DSysFree(void) {

@@ -319,7 +319,7 @@ static BOOL Title_Init(GameProc *proc, u32 *state, void *param, void *work) {
     TitleWork *wk;
 
 #ifdef PBW2_N3DS
-    Log_Line("game", "title proc Title_Init enter");
+    Log_Line("game", "title proc Title_Init enter vblank=%lu", (unsigned long)OS_GetVBlankCount());
 #endif
     GFL_HeapCreateChild(HEAPID_USER, HEAPID_TITLE, 0x120000);
     wk = GFL_ProcInitSubsystem(proc, sizeof(TitleWork), HEAPID_TITLE);

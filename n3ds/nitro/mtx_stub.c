@@ -64,3 +64,36 @@ u16 FX_Atan2Idx(fx32 y, fx32 x) {
     (void)x;
     return 0;
 }
+
+/* FX_ModS32: integer remainder, on the field path (field_g3d_mapper.c map
+ * chunking). fx_cp.c is excluded from the link because it also defines
+ * FX_Div/FX_Sqrt/FX_Inv, which the host already provides. */
+s32 FX_ModS32(s32 numer, s32 denom) {
+    return denom ? (numer % denom) : 0;
+}
+
+/* FX_InvSqrt: 1/sqrt(x) in fx32. 4096 * sqrt(4096 / x) = 262144 / isqrt(x);
+ * the integer square root is the standard bit-by-bit algorithm. */
+fx32 FX_InvSqrt(fx32 x) {
+    u32 n;
+    u32 r = 0;
+    u32 bit = 1u << 30;
+
+    if (x <= 0) {
+        return 0;
+    }
+    n = (u32)x;
+    while (bit > n) {
+        bit >>= 2;
+    }
+    while (bit != 0) {
+        if (n >= r + bit) {
+            n -= r + bit;
+            r = (r >> 1) + bit;
+        } else {
+            r >>= 1;
+        }
+        bit >>= 2;
+    }
+    return (fx32)(262144u / r);
+}

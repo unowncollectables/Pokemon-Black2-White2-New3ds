@@ -11,6 +11,7 @@
 #include "title_pic.h"
 #include "workers.h"
 #include "game_present.h"
+#include "types.h"
 #if defined(PBW2_LINK_GAME)
 #include "game_thread.h"
 #endif
@@ -145,8 +146,15 @@ int main(int argc, char **argv) {
 
     /* 3dsx: this asks the New 3DS for 804 MHz and the L2 cache.
      * CIA: the RSF in n3ds/cia sets CpuSpeed and EnableL2Cache, or the
-     * process stays at 268 MHz even after this call. */
+     * process stays at 268 MHz even after this call.
+     * PBW2_NO_SPEEDUP is emulator-test-only: Azahar/Lotus abort on the
+     * guest's ConfigureNew3DSCPU request, so emu builds skip it and run
+     * at 268 MHz. Never ship a build with this defined. */
+#if !defined(PBW2_NO_SPEEDUP)
     osSetSpeedupEnable(true);
+#else
+    printf("Speedup skipped (PBW2_NO_SPEEDUP, emulator test build).\n");
+#endif
 
     bool new3ds = false;
     APT_CheckNew3DS(&new3ds);
@@ -162,7 +170,13 @@ int main(int argc, char **argv) {
     } else {
         Log_Line("3DS", "sdmc not mounted");
     }
-    Log_Line("3DS", "new3ds=%d speedup requested", new3ds ? 1 : 0);
+    Log_Line("3DS", "new3ds=%d speedup %s", new3ds ? 1 : 0,
+#if defined(PBW2_NO_SPEEDUP)
+             "skipped (emu test build)"
+#else
+             "requested"
+#endif
+    );
     Log_Line("3DS", "game C %d/%d library C %d/%d", PBW2_GAME_C_OK, PBW2_GAME_C_TOTAL, PBW2_LIB_C_OK,
              PBW2_LIB_C_TOTAL);
 
@@ -190,6 +204,15 @@ int main(int argc, char **argv) {
 
     while (aptMainLoop()) {
         Input_Scan();
+        /* Emulate the DS VCOUNT register. It is shadowed in pbw2_io and
+         * nothing ever wrote it, so GX_GetVCount() always returned 0.
+         * The MCSS palette-load task only runs on scanlines 192-200
+         * (the first VBlank lines), so its load never completed and the
+         * MCSS shadow palette file leaked into the intro heap — and
+         * GFL_HeapDelete then exited the game at the intro/name-entry
+         * transition. VBlank TCBs run at the start of the frame, i.e.
+         * line 192 on a real DS, so report that here. */
+        PBW2_VU16(0x04000006) = 192;
         NitroHost_Frame(Pad_FromHid(hidKeysHeld()));
 #if !defined(PBW2_LINK_GAME)
         if (Input_Quit()) {

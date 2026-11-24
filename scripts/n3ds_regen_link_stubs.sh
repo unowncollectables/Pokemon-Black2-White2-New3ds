@@ -11,6 +11,21 @@ grep "undefined reference" "$LOG" | sed "s/.*undefined reference to \`\([^']*\)'
 python3 - <<'PY'
 from pathlib import Path
 skip = {"FX_Div", "FX_Sqrt", "FX_Atan2Idx", "FX_Inv", "__memcpy", "MATH_QSort", "MATH_CountPopulation"}
+# Value-returning sound stubs live in n3ds/nitro/snd_silent.c (silent
+# backend: honest counts/returns, not garbage r0). Never re-add them
+# here as void: a void CountPlaying stub reports a player active
+# forever and hangs the intro in POKEMON_APPEAR.
+SND_SILENT = {
+    "NNS_SndArcGetBankInfo", "NNS_SndArcGetFileAddress", "NNS_SndArcGetFileSize",
+    "NNS_SndArcGetGroupInfo", "NNS_SndArcGetSeqInfo", "NNS_SndArcGetSeqParam",
+    "NNS_SndArcGetWaveArcInfo", "NNS_SndArcLoadGroup", "NNS_SndArcLoadSeq",
+    "NNS_SndArcLoadSeqEx", "NNS_SndArcLoadWaveArc", "NNS_SndArcPlayerSetup",
+    "NNS_SndArcPlayerStartSeq", "NNS_SndArcPlayerStartSeqEx",
+    "NNS_SndArcStrmGetCurrentPlayingPos", "NNS_SndPlayerCountPlayingSeqByPlayerNo",
+    "NNS_SndPlayerCountPlayingSeqBySeqNo", "NNS_SndPlayerGetTick",
+    "NNS_SndWaveOutAllocChannel", "NNS_SndWaveOutIsPlaying", "NNS_SndWaveOutStart",
+    "NNS_SndArcReadFile", "NNS_SndPlayerReadDriverTrackInfo",
+}
 DATA_OR_HOSTED = {
     "SDK_AUTOLOAD_DTCM_START", "NNSi_objSizeWTbl", "NNSi_objSizeHTbl",
     "NNS_GfdDefaultFuncAllocTexVram", "NNS_GfdDefaultFuncFreeTexVram",
@@ -32,7 +47,7 @@ if cur.is_file():
         if line.startswith("void ") and "(void)" in line:
             existing.add(line.split()[1].split("(")[0])
 new = [s.strip() for s in Path("/tmp/pbw2_undef.txt").read_text().splitlines() if s.strip() and s[0].isalpha()]
-all_syms = sorted(existing | set(new) - skip - DATA_OR_HOSTED)
+all_syms = sorted(existing | set(new) - skip - DATA_OR_HOSTED - SND_SILENT)
 lines = [
     "/* SPDX-License-Identifier: GPL-3.0-or-later */",
     '#include "stub_log.h"',

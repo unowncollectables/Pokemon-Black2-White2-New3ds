@@ -188,6 +188,18 @@ int G3X_GetBoxTestResult(s32 *result) {
 #pragma thumb off
 // The SDK wrote this in assembly: 128 words of 0 stored to the FIFO port, which push out whatever it still holds. The
 // 32 stores of 4 words are not a loop
+#ifdef PBW2_N3DS
+// GCC does not accept ARMCC's `asm void` functions: same 128 volatile zero
+// stores to the FIFO port, as plain C (init/reset path only, speed is
+// irrelevant). The matching build keeps the original assembly below.
+void GXi_NopClearFifo128_(void *fifo) {
+    vu32 *p = (vu32 *)fifo;
+    int i;
+    for (i = 0; i < 128; i++) {
+        p[i] = 0;
+    }
+}
+#else
 asm void GXi_NopClearFifo128_(void *fifo) {
     mov r1, #0
     mov r2, #0
@@ -227,5 +239,6 @@ asm void GXi_NopClearFifo128_(void *fifo) {
     stmia r0, {r1, r2, r3, r12}
     bx lr
 }
+#endif
 #pragma thumb on
 // clang-format on

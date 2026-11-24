@@ -12,6 +12,9 @@
 #include "gfl/proc.h"
 #include "system/game_comm.h"
 #include "system/game_system.h"
+#ifdef PBW2_N3DS
+#include "log.h"
+#endif
 
 // The field menu's heap, which the field map's heap leaves room for, and the cell actors' heap, in memory of its own
 #define FIELD_MENU_HEAP_SIZE 0xf000
@@ -30,6 +33,9 @@ const GameProcFunctions FIELDMAP_PROC_FUNCS = { FieldmapProc_Init, FieldmapProc_
 BOOL FieldmapProc_Init(GameProc *proc, u32 *seq, void *param, void *work) {
     GameSystem *gsys = param;
 
+#ifdef PBW2_N3DS
+    Log_Line("field", "FieldmapProc_Init seq=%u", *seq);
+#endif
     switch (*seq) {
     case SEQ_CREATE_FIELD: {
         Field **procWork;
@@ -44,6 +50,10 @@ BOOL FieldmapProc_Init(GameProc *proc, u32 *seq, void *param, void *work) {
         GFL_HeapCreateChild(HEAPID_FIELD_CLACT, HEAPID_FIELD_SCENEAREA, 0x500);
         procWork = GFL_ProcInitSubsystem(proc, sizeof(Field *), HEAPID_FIELDMAP);
         *procWork = Field_Create(gsys, HEAPID_FIELDMAP);
+#ifdef PBW2_N3DS
+        Log_Line("field", "FieldmapProc_Init Field_Create done field=%p zone=%u", (void *)*procWork,
+                 PlayerState_GetZoneID(GSYS_GetPlayerState(gsys)));
+#endif
         GSYS_SetField(gsys, *procWork);
         (*seq)++;
         break;
@@ -61,13 +71,27 @@ BOOL FieldmapProc_Init(GameProc *proc, u32 *seq, void *param, void *work) {
             }
         }
         CheckResetKeldeoOrdinaryForme(gsys);
+#ifdef PBW2_N3DS
+        Log_Line("field", "FieldmapProc_Init done (SEQ_END_COMM)");
+#endif
         return TRUE;
     }
     return FALSE;
 }
 
 BOOL FieldmapProc_Update(GameProc *proc, u32 *seq, void *param, void *work) {
+#ifdef PBW2_N3DS
+    static int s_loggedFirstUpdate;
+
+    if (!s_loggedFirstUpdate) {
+        s_loggedFirstUpdate = 1;
+        Log_Line("field", "FieldmapProc_Update first call");
+    }
+#endif
     if (Field_CallRoutines(param, *(Field **)work) == TRUE) {
+#ifdef PBW2_N3DS
+        Log_Line("field", "FieldmapProc_Update routines ended, proc exits");
+#endif
         return TRUE;
     }
     return FALSE;
@@ -76,6 +100,9 @@ BOOL FieldmapProc_Update(GameProc *proc, u32 *seq, void *param, void *work) {
 BOOL FieldmapProc_End(GameProc *proc, u32 *seq, void *param, void *work) {
     GameSystem *gsys = param;
 
+#ifdef PBW2_N3DS
+    Log_Line("field", "FieldmapProc_End");
+#endif
     Field_Free(*(Field **)work);
     GSYS_SetField(gsys, NULL);
     GFL_ProcReleaseSubsystem(proc);

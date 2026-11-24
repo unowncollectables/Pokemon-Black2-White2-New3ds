@@ -107,6 +107,12 @@ void *GFL_HeapAllocate(HeapID heapId, u32 size, BOOL clear, const char *file, u1
 }
 
 void GFL_HeapFree(void *ptr) {
+    /* Freeing NULL is a no-op, as in C free(). Pointer-returning link stubs
+     * leave NULL behind, and the matching real Free would otherwise read the
+     * block header at a bogus address and halt the game. */
+    if (ptr == NULL) {
+        return;
+    }
     GFL_HeapDebugTraceFree(ptr);
     GFL_HeapFreeCore(ptr);
 }

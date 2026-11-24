@@ -122,6 +122,29 @@ void MI_CpuMove(const void *src, void *dest, u32 size) {
     MI_CpuCopy8(src, dest, size);
 }
 
+/* MI_Copy32B: the 32-byte copy (fog-table upload, G3X_SetFogTable). The rest
+ * of mi_memory.c stays MWCC assembly and is not compiled here; only this
+ * one is needed, so it lives with the other host MI replacements. */
+void MI_Copy32B(const void *src, void *dest) {
+    if (src && dest) {
+#if defined(PBW2_LINK_GAME)
+        void *d = pbw2_map_ptr(dest);
+        const void *s = pbw2_map_ptr(src);
+        pbw2_note_copy(dest, 32);
+        memcpy(d, s, 32);
+#else
+        memcpy(dest, src, 32);
+#endif
+    }
+}
+
+/* MI_IsNDmaBusy: no NDMA engine on this platform, so no channel is ever
+ * busy. (The camera NDMA path that calls it has no camera hardware.) */
+BOOL MI_IsNDmaBusy(u32 ndmaNo) {
+    (void)ndmaNo;
+    return FALSE;
+}
+
 void MIi_CpuCopy16(const void *src, void *dest, u32 size) {
 #if defined(PBW2_LINK_GAME)
     void *d = pbw2_map_ptr(dest);

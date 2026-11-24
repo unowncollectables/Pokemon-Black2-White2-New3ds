@@ -47,6 +47,21 @@ void Input_Scan(void) {
     s_held = hidKeysHeld();
     Log_Edge(KEY_ZL, "ZL");
     Log_Edge(KEY_ZR, "ZR");
+    /* TEMP DIAGNOSTIC (Nov 24, 2026): prove the guest's hidKeysDown sees
+     * Lotus-injected presses, and map the emulator's button-bit layout.
+     * Remove before shipping. */
+    Log_Edge(KEY_START, "START");
+    Log_Edge(KEY_A, "A");
+    Log_Edge(KEY_B, "B");
+    Log_Edge(KEY_SELECT, "SELECT");
+    Log_Edge(KEY_X, "X");
+    Log_Edge(KEY_Y, "Y");
+    Log_Edge(KEY_L, "L");
+    Log_Edge(KEY_R, "R");
+    Log_Edge(KEY_DUP, "DUP");
+    Log_Edge(KEY_DDOWN, "DDOWN");
+    Log_Edge(KEY_DLEFT, "DLEFT");
+    Log_Edge(KEY_DRIGHT, "DRIGHT");
     if ((s_down & KEY_ZL) == 0 && (hidKeysUp() & KEY_ZL)) {
         Log_Line("BTN", "ZL up");
     }

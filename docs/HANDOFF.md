@@ -4,12 +4,117 @@ Self-contained notes so another agent can take over this New 3DS port.
 Phases: [PLAN.md](PLAN.md). Build extras: [BUILDING.md](BUILDING.md).
 Short rules pointer: [AGENTS.md](../AGENTS.md).
 
+## 0. Codex handoff — Nov 24, 2026 (cloud-worker run ends here)
+
+Nate handed this job to GPT/Codex on a big model, working from GitHub main.
+This snapshot pushes the local `ghost/b2w2-working` tip (4692909fd + this
+note) to main as one commit; the full 31-commit history stays on that
+local branch.
+
+### Where it stands
+- Branch tip: `ghost/b2w2-working` @ 4692909fd ("Slice 2j: finer logging
+  around GFL_G3DSysCreate"), tree clean. The 2j change is diagnostic
+  logging only — no behaviour change.
+- Slice 2j build VERIFIED GOOD: 8,881,396 bytes, SHA1
+  69e339f43f500e353946f2fa515727a2a2a713b0, reloc check OK.
+- Boots → title → intro → boy/girl pick → both name entries → field proc
+  START (CallCreateGameEntryPointEvent) → FieldmapProc_Init COMPLETES
+  (Field_Create done, zone 427 = Aspertia City, area 210) at 60 fps,
+  0 Undefined Instruction exceptions.
+- Field Slice 1 VERIFIED: six GameData field subsystems (EventData,
+  MapMatrix, FldActSys, EncountState, FieldFollow, Calendar) are real
+  game code, zero stub hits.
+- Intro-exit crash (VCOUNT never emulated) + post-intro halt
+  (GFL_HeapFree(NULL)) fixed and verified in playthrough 12.
+- Title logo renders CLEAN and correct. Opening demo renders (Oshawott
+  in Aspertia City). Logo placement + double Title_Init VERIFIED FAITHFUL
+  (logo-on-bottom early is correct; switch to MAIN_SUB at title frame
+  1740; the real game's attract loop re-runs boot_proc).
+
+### Still open (priority order)
+1. **FieldRoutine_Open hang (live blocker):** routine 0 dispatched once,
+   last `[field]` lines `G2D done`, `ClAct done`, then nothing — hang is
+   in BGSysSetBGEnabledA/B, BmpWin_InitAllocator,
+   GFL_TextRndInitColorIndexLUT, or GFL_G3DSysCreate. Gut: a host
+   wait/sync primitive that never fires, or VRAM-bank state — a
+   stub/host gap, NOT the 3D replay. After it: MapLoad/Run routines,
+   then Slice 3 actor tables (FIELD_ACTOR_MAIN_VTABLES /
+   ACTOR_MOVE_CODE_FUNCTION_TABLES still void-function stubs; must be
+   real before actor-draw runs). OS_WaitInterrupt has no host impl yet.
+2. **PRESS START:** 1D OBJ column-term bug confirmed in code
+   (draw_obj_layer, n3ds/nitro/ds2d_compose.c ~617-650): the (px>>3)
+   term is missing from the 1D address, so sprites wider than 8px
+   repeat their first tile column. Fix: add (px>>3)*(bpp8?64:32) in
+   both 8bpp/4bpp paths + a capture to confirm. Caveat: two settled
+   title captures show NO PRESS START at all (bottom band (128,96)
+   pixel-checked pure white) — if the fix doesn't make it appear,
+   the actor itself (TitleObj_Init, sub-engine ClAct actor at 128,96)
+   is the next suspect.
+3. **3D title (Kyurem) + field 3D + wide/sharp — the Citro3D 3D replay:**
+   g3_intercept.c captures the DS G3 FIFO into a 16K-word ring, but
+   PbW2_G3Compose is a no-op stub. Needs a Citro3D packet interpreter
+   + title display path (no DISPMODE_VRAM_D handling yet). Reference:
+   SoulSilver's ~8,000-line 3D stack (can't copy wholesale — different
+   host). DAYS of focused work, biggest remaining item.
+4. **QOL: still ZERO ported** (inventory: 55 features, 49 apply; the
+   inventory lives outside this repo in the cloud workspace). Order once
+   the field walks: settings first, cheap host-side items, wide/sharp
+   after the replay.
+
+### Timeline sizing (best estimate at this checkpoint)
+- PRESS START: hours. Field walk: hang fix hours once 2j pinpoints the
+  step; MapLoad/Run days of closure grind; walking within days.
+- 3D title: days. Full "boot-to-field looks right": a week+ of worker
+  sessions; VM restarts are the wildcard.
+
+### Codex's first job: the Slice 2j verify run (NOT started)
+Azahar, --new3ds, --prestage <sd-stage>/3ds, 620 s, --hold 1,
+--press "$(cat slice2_press.txt)" (123 presses: A every 6 s + START
+every 24 s to 360 s, then D-pad walk cycle + A every 10 s, 380-615 s),
+out runs/b2w2-slice2j-verify. The 2j [field] lines pinpoint the hang
+inside FieldRoutine_Open. Read the guest log at
+session-scratch/sdmc/3ds/black2_3ds/log.txt; status.jsonl is the
+reliable progress source (driver log is buffered). Continuous mode
+captures ONLY once, at the end — the end frame of a 620 s run is the
+white fade; use short runs for title captures.
+
+### Pickup notes (do not re-derive)
+- Build: PBW2_LINK_GAME=1 bash scripts/n3ds_build.sh -j2 b2, with
+  PATH=/opt/devkitpro/devkitARM/bin:$PATH prefixed (reloc-check calls
+  arm-none-eabi-readelf bare). ~8-10 min at -j2. Closure:
+  scripts/n3ds_link_closure.py (~2.5 min, needs nm on PATH).
+  Toolchain: devkitARM 16.1.0; ROMs BYO-ROM (black2.nds IREO SHA1
+  e51e6dfb..., white2.nds IRDO). Do NOT run n3ds_regen_link_stubs.sh
+  blindly (rewrites link_stubs.c, destroys hand-written comments and
+  typed void-stubs).
+- Emulator: Lotus run-game.py (Azahar backend; is_new_3ds=true;
+  Citra button order — START is 1024, not 8; lotus_input needs owner
+  "live"). Lotus aborts B2W2 on both backends at the New 3DS speedup
+  request (ThreadManager assertion) — use Azahar. Chunk mode reaches
+  the title slower than continuous mode at the same frame count — do
+  not mix frame counts.
+- Hard rules: never commit ROMs/assets/saves/builds/logs; save format
+  unchanged, only the game writes .sav; every new gameplay feature
+  default-off in Settings (L+R+Y); no randomizer/cheats/fast-forward;
+  game never resets/relaunches; no CIA; New 3DS only. Nate's bar:
+  proper native from the start, no stubs pretending to work, tested
+  in the emulator before it counts; hardware is the final word.
+- Slice 2 closure ended at 1256 objects (from 277). The online stack
+  is stubbed out (DWC/WM/IR/camera/DSP/GDS void stubs + honest
+  GFL_Net "no network" returns): wifi features cannot connect; the
+  field-walk milestone does not cover online play.
+- After ANY VM restart: re-link /opt/devkitpro ->
+  ~/workspace/toolchain/devkitpro, then sudo dpkg -i
+  /var/cache/apt/archives/*.deb once the os-intent replay releases
+  the dpkg lock (~4 min). 7 restarts so far; ~/workspace survives,
+  /tmp does not.
+
 ## 1. Goal and rules
 
 A native New 3DS port of Pokémon Black 2 and White 2 (US/EU). The decompiled
 C runs on the ARM11. A platform layer owns the 3DS GPU, input, audio, and
 where the save file lives. Personal, experimental, GPL-3.0. Owner: GitHub
-`unowncollectables`. The repo is **private**.
+`unowncollectables`. The repo is **public** (since Nov 23, 2026).
 
 Black 2 is the first game that should keep moving past the title. White 2 is
 built from the same tree at every step. The byte-matching DS rebuild stays.
@@ -209,7 +314,7 @@ Display / POWCNT (keep this polarity):
   the bottom.
 - Compose: `main_upper = (pow & 0x8000) != 0`.
 - Copyright and CDEMO use `MAIN_SUB`. `Title_Init` uses `SUB_MAIN` (2D
-  logo on top, 3D/main on the bottom). After 1740 frames the title
+  logo on the bottom). After 1740 frames the title
   switches to `MAIN_SUB` to put 3D on top.
 
 Host BG window under `PBW2_LINK_GAME` is `PBW2_BG_SIZE=0x00680000`

@@ -49,6 +49,9 @@
 #include "field/weather/field_lens_flare.h"
 #include "field/weather/field_weather.h"
 #include "gfl/arc.h"
+#ifdef PBW2_N3DS
+#include "log.h"
+#endif
 #include "gfl/billboard_actor.h"
 #include "gfl/bmpwin.h"
 #include "gfl/calctool.h"
@@ -240,6 +243,10 @@ Field *Field_Create(GameSystem *gsys, HeapID heapId) {
     u32 season = 0;
     u16 areaId;
 
+#ifdef PBW2_N3DS
+    Log_Line("field", "Field_Create enter zone=%u",
+             PlayerState_GetZoneID(GSYS_GetPlayerState(gsys)));
+#endif
     field->heapId = heapId;
     field->routineState = 0;
     field->gameSystem = gsys;
@@ -264,6 +271,9 @@ Field *Field_Create(GameSystem *gsys, HeapID heapId) {
     field->areaData = AreaData_Create(heapId, areaId, season);
     ResortWork_UpdateRecords(GameData_GetResortWork(field->gameData), GameData_GetSaveControl(field->gameData));
     field->ctrlVTable = GetZoneFieldmapCtrlVTable(field->zoneId);
+#ifdef PBW2_N3DS
+    Log_Line("field", "Field_Create done field=%p zone=%u area=%u", (void *)field, field->zoneId, areaId);
+#endif
     return field;
 }
 
@@ -279,27 +289,63 @@ void Field_Free(Field *field) {
 u32 FieldRoutine_Open(GameSystem *gsys, Field *field) {
     HeapID heapId = field->heapId;
 
+#ifdef PBW2_N3DS
+    Log_Line("field", "FieldRoutine_Open enter zone=%u", field->zoneId);
+#endif
     GFL_BGSysSetVRAMBanks(&FIELDMAP_VRAM_CONFIG);
     FieldG2D_Init(field);
+#ifdef PBW2_N3DS
+    Log_Line("field", "FieldRoutine_Open G2D done");
+#endif
     ClActSys_Create(&FIELD_CLACT_SETUP, &FIELDMAP_VRAM_CONFIG, HEAPID_FIELD_CLACT);
+#ifdef PBW2_N3DS
+    Log_Line("field", "FieldRoutine_Open ClAct done");
+#endif
     GFL_BGSysSetBGEnabledA(0x10, TRUE);
     GFL_BGSysSetBGEnabledB(0x10, TRUE);
     BmpWin_InitAllocator(heapId);
+#ifdef PBW2_N3DS
+    Log_Line("field", "FieldRoutine_Open BG+BmpWin done");
+#endif
     GFL_TextRndInitColorIndexLUT();
+#ifdef PBW2_N3DS
+    Log_Line("field", "FieldRoutine_Open TextRnd done");
+#endif
     GFL_G3DSysCreate(0, 3, 0, 1, FX32_ONE, field->heapId, FieldG3D_InitCallback);
+#ifdef PBW2_N3DS
+    Log_Line("field", "FieldRoutine_Open G3DSys done");
+#endif
     FieldG3D_Init(field);
+#ifdef PBW2_N3DS
+    Log_Line("field", "FieldRoutine_Open G3D_Init done");
+#endif
     field->g3DMapper = FieldG3DMapper_Create(field->heapId, GameData_GetSeason(field->gameData));
+#ifdef PBW2_N3DS
+    Log_Line("field", "FieldRoutine_Open G3DMapper done");
+#endif
     field->asyncActorMatLoadTCB = GFL_VBlankTCBAdd(FldActSys_AsyncMatLoadTCBFunc, field, 0);
     field->tcbManagerHeap = GFL_HeapAllocate(heapId, GFL_TCBMgrCalcAllocSize(0x20), FALSE, "fieldmap.c", 0x2bf);
     field->tcbManager = GFL_TCBMgrCreate(0x20, field->tcbManagerHeap);
+#ifdef PBW2_N3DS
+    Log_Line("field", "FieldRoutine_Open TCB done");
+#endif
     field->taskManager = FieldTaskManager_Create(10, field->heapId);
+#ifdef PBW2_N3DS
+    Log_Line("field", "FieldRoutine_Open TaskManager done");
+#endif
     field->dispControl = FieldDispControl_Create(field->heapId);
+#ifdef PBW2_N3DS
+    Log_Line("field", "FieldRoutine_Open DispControl done");
+#endif
     if (GetZoneIsUnionRoom(field->zoneId) == TRUE || IsZone150Or151(field->zoneId) == TRUE) {
         GFL_OvlLoad(OVERLAY_ID(34));
     } else {
         GFL_OvlLoad(OVERLAY_ID(33));
     }
     GCTX_HIDChangeFPS(30);
+#ifdef PBW2_N3DS
+    Log_Line("field", "FieldRoutine_Open done, NEXT");
+#endif
     return FIELD_ROUTINE_NEXT;
 }
 
@@ -657,6 +703,19 @@ BOOL Field_CallRoutines(GameSystem *gsys, Field *field) {
     FieldRoutine routine;
 
     field->framesSinceStart++;
+#ifdef PBW2_N3DS
+    {
+        static u32 s_lastRoutineID = 0xFFFFFFFFu;
+        static u32 s_lastAlternator = 0xFFFFFFFFu;
+
+        if (field->routineID != s_lastRoutineID || field->routineAlternator != s_lastAlternator) {
+            s_lastRoutineID = field->routineID;
+            s_lastAlternator = field->routineAlternator;
+            Log_Line("field", "Field_CallRoutines routine=%u alt=%u frames=%u", field->routineID,
+                     field->routineAlternator, field->framesSinceStart);
+        }
+    }
+#endif
     routine = FIELDMAP_ROUTINES[field->routineID][field->routineAlternator];
     if (routine != NULL) {
         result = routine(gsys, field);
@@ -671,6 +730,9 @@ BOOL Field_CallRoutines(GameSystem *gsys, Field *field) {
         field->routineAlternator = 0;
         break;
     case FIELD_ROUTINE_END:
+#ifdef PBW2_N3DS
+        Log_Line("field", "Field_CallRoutines END after %u frames", field->framesSinceStart);
+#endif
         return TRUE;
     }
     return FALSE;

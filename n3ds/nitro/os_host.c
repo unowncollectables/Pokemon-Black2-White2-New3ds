@@ -167,6 +167,16 @@ BOOL OS_IsAgreeEULA(void) {
     return FALSE;
 }
 
+/* OS_GetOwnerInfoEx: the DS system owner's info. The 3DS system birthday
+ * is not wired to the port, so the struct is zeroed: the trainer-card
+ * birthday script command reads month/day 0/0 (no birthday shown) instead
+ * of crashing on an unimplemented call. */
+void OS_GetOwnerInfoEx(OSOwnerInfoEx *info) {
+    if (info != NULL) {
+        memset(info, 0, sizeof(*info));
+    }
+}
+
 u32 OS_GetBootType(void) {
     return OS_BOOTTYPE_ROM;
 }

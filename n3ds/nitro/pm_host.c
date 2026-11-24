@@ -33,6 +33,12 @@ void PM_AppendPreExitCallback(PMExitCallbackInfo *info) {
     (void)info;
 }
 
+/* PM_Init: power-management init on the DS talks to the PM chip over SPI.
+ * On this platform there is no PM chip to init; the host's PM state is
+ * set up elsewhere. */
+void PM_Init(void) {
+}
+
 void PM_ReadyToExit(void) {
     PBW2_STUB_LOG("PM", "ReadyToExit blocked");
 }

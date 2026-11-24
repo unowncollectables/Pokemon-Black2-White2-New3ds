@@ -2,6 +2,7 @@
 /* Clock from the 3DS, not the DS RTC chip. osGetTime is milliseconds since
  * 1900-01-01. No Frigate source is copied. */
 #include "nitro/rtc.h"
+#include "gfl/rtc_cache.h"
 
 static RTCDate s_date;
 static RTCTime s_time;
@@ -66,6 +67,54 @@ void RTC_GetCachedTime(RTCTime *time) {
         read_clock();
     }
     *time = s_time;
+}
+
+/* The pure functions the game needs from gfl/rtc_cache.c, computed from
+ * the 3DS clock instead of the DS RTC chip's cache (rtc_cache.c itself is
+ * excluded from the closure: its cache would read unmapped hardware and
+ * return zeros, breaking the field clock in ev_time.c). */
+void RTC_GetCachedDateTime(RTCDate *date, RTCTime *time) {
+    if (!s_ready) {
+        read_clock();
+    }
+    *date = s_date;
+    *time = s_time;
+}
+
+int RTC_ConvertDaySecondsCached(void) {
+    if (!s_ready) {
+        read_clock();
+    }
+    return (int)(s_time.second + s_time.minute * 60u + s_time.hour * 3600u);
+}
+
+s64 RTC_ConvertSecondsCached(void) {
+    if (!s_ready) {
+        read_clock();
+    }
+    return RTC_ConvertDateTimeToSecond(&s_date, &s_time);
+}
+
+int RTC_GetDayOfYear(const RTCDate *date) {
+    static const u16 sDaysBeforeMonth[12] = { 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334 };
+    int days;
+    RTCDate firstDay;
+
+    days = (int)date->day;
+    days += sDaysBeforeMonth[date->month - 1];
+    if (date->month >= 3) {
+        int year = (int)date->year;
+
+        if ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0) {
+            days++;
+        }
+    }
+    firstDay = *date;
+    firstDay.month = 1;
+    firstDay.day = 1;
+    RTC_ConvertDateToDay(&firstDay);
+    RTC_ConvertDateToDay(date);
+    return days;
 }
 
 RTCResult RTC_GetDate(RTCDate *date) {

@@ -65,3 +65,61 @@ void NNS_G3dGlbSetBaseScale(const VecFx32 *scale) {
 void NNS_G3dGlbSetBaseTrans(const VecFx32 *trans) {
     (void)trans;
 }
+
+/* Material colors: real field writes into the host's NNS_G3dGlb, same as
+ * the NitroSystem code (glbstate.c), so the state is there when the 3D
+ * replay reads it. */
+void NNS_G3dGlbMaterialColorDiffAmb(GXRgb diffuse, GXRgb ambient, BOOL isSetVtxColor) {
+    NNS_G3dGlb.prmMatColor0 = GX_PACK_DIFFAMB_PARAM(diffuse, ambient, isSetVtxColor);
+}
+
+void NNS_G3dGlbMaterialColorSpecEmi(GXRgb specular, GXRgb emission, BOOL isShininess) {
+    NNS_G3dGlb.prmMatColor1 = GX_PACK_SPECEMI_PARAM(specular, emission, isShininess);
+}
+
+/* Inverse view matrix: same lazy logic as glbstate.c. MTX_Inverse43 is
+ * still a host stub (returns -1, writes nothing), so invCameraMtx stays
+ * whatever the camera matrix holds — zero until the 3D replay tracks the
+ * camera. Callers (fld_wipe_3dobj) only copy it into a transform. */
+const MtxFx43 *NNS_G3dGlbGetInvV(void) {
+    if (!(NNS_G3dGlb.flag & NNS_G3D_GLB_FLAG_INVCAMERA_UPTODATE)) {
+        MTX_Inverse43(&NNS_G3dGlb.cameraMtx, &NNS_G3dGlb.invCameraMtx);
+        NNS_G3dGlb.flag |= NNS_G3D_GLB_FLAG_INVCAMERA_UPTODATE;
+    }
+    return &NNS_G3dGlb.invCameraMtx;
+}
+
+/* Screen <-> world: the real math needs the tracked camera/projection
+ * matrices, which only the 3D replay will provide. Until then, safe
+ * defaults: WorldPosToScrPos reports screen (128, 0) — top-centre, so
+ * talk windows land at the bottom (ActorMsgWin_CreateAtAutoPos branches
+ * on y) — and ScrPosToWorldLine reports the origin line. Both log so the
+ * gap is visible in the stub log. */
+int NNS_G3dWorldPosToScrPos(const VecFx32 *world, int *x, int *y) {
+    (void)world;
+    if (x != NULL) {
+        *x = 128;
+    }
+    if (y != NULL) {
+        *y = 0;
+    }
+    PBW2_STUB_LOG("G3D", "WorldPosToScrPos: no tracked camera yet (3D replay)");
+    return 0;
+}
+
+int NNS_G3dScrPosToWorldLine(int px, int py, VecFx32 *nearPos, VecFx32 *farPos) {
+    (void)px;
+    (void)py;
+    if (nearPos != NULL) {
+        nearPos->x = 0;
+        nearPos->y = 0;
+        nearPos->z = 0;
+    }
+    if (farPos != NULL) {
+        farPos->x = 0;
+        farPos->y = 0;
+        farPos->z = 0;
+    }
+    PBW2_STUB_LOG("G3D", "ScrPosToWorldLine: no tracked camera yet (3D replay)");
+    return 0;
+}

@@ -23,6 +23,64 @@ EXCLUDE_SRC_PREFIXES = (
     "src/moveeffect/",
 )
 
+# One app slice IS in the title flow (new-game name entry): the intro
+# hands off to it, so it must link even though src/app/ is excluded.
+# Slice 1 of the field engine (Nov 24, 2026): the GameData field
+# subsystems, called by GameData_Create on every boot. Listed as exact
+# file paths (each matches one object); their stubs were removed from
+# link_stubs.c in the same change.
+INCLUDE_SRC_PREFIXES = (
+    "src/app/name_input/",
+    "src/field/event/eventdata_system.c",
+    "src/field/map/map_matrix.c",
+    "src/field/map/map_replace.c",
+    "src/field/actor/field_actor.c",
+    "src/field/encounter/field_encount_st.c",
+    "src/field/actor/pair_sys.c",
+    "src/field/event/calender.c",
+    # Slice 1b: hidden_item.c is free — its only 3 deps are already
+    # linked, and it defines GetHiddenItemEventFlagNoBySCRID for real.
+    "src/field/event/hidden_item.c",
+    # Slice 2: field proc + Field_Create + entry-point event chain.
+    "src/field/map/fieldmap_proc.c",
+    "src/field/map/fieldmap.c",
+    "src/field/event/event_game_clear.c",
+    "src/field/event/event_mapchange.c",
+    # Slice 2b: the routines' transitive closure — the whole field tree
+    # (BFS only pulls files that define a referenced symbol), plus the
+    # out-of-tree files the routines need: Union Room field effects,
+    # Entralink gimmick/mission, and the RTC cache helper.
+    "src/field/",
+    "src/communication/union/union_eff.c",
+    "src/communication/union/union_main.c",
+    "src/entralink/fes_gimmick.c",
+    "src/entralink/fest_mission_field.c",
+    "src/entralink/field_fmission_info.c",
+    "src/entralink/intrude_work.c",
+    # NOTE: src/gfl/rtc_cache.c is deliberately NOT included: it reads the
+    # DS RTC hardware (unmapped here) into its cache, so its GetCached*
+    # would return zeros and break the field clock (ev_time.c). The host
+    # owns the clock (rtc_host.c) and provides the pure functions the game
+    # needs from that file: RTC_ConvertDaySecondsCached,
+    # RTC_ConvertSecondsCached, RTC_GetDayOfYear, RTC_GetCachedDateTime.
+    # Slice 2c: the field's menu/proc ecosystem — the field code takes the
+    # addresses of these proc tables (event_field_proclink.c, event_battle.c)
+    # and queues procs from them, so they must link for real; void stubs
+    # would crash when the player opens the bag/Pokedex or enters battle.
+    "src/app/",
+    "src/battle/",
+    "src/communication/",
+    "src/tournament/",
+    "src/musical/",
+    "src/pokewood/",
+    "src/wifi/",
+    # Slice 2d: the Entralink files (fest missions, hidden hollows,
+    # postman, surveys — all referenced from the field) and the battle
+    # visual-effect engine (btlv_effect.c, 88 symbols).
+    "src/entralink/",
+    "src/moveeffect/",
+)
+
 EXCLUDE_SRC_FILES = {
     "src/system/main.c",
     "src/gfl/rtc_cache.c",
@@ -82,6 +140,8 @@ def nm_undefined(path: Path) -> set[str]:
 
 
 def src_path_ok(src: str) -> bool:
+    if any(src.startswith(p) for p in INCLUDE_SRC_PREFIXES):
+        return True
     if src in EXCLUDE_SRC_FILES:
         return False
     if any(src.startswith(p) for p in EXCLUDE_SRC_PREFIXES):
@@ -98,6 +158,15 @@ def lib_nitro_path_ok(src: str) -> bool:
 
 
 def lib_nnsys_path_ok(src: str) -> bool:
+    # Exact files only: the g3d tree cannot be taken whole — glbstate.c
+    # defines NNS_G3dGlb (hosted in title_link_syms.c) and util.c defines
+    # NNS_G3dInit (hosted in g3_gecom_host.c); model.c and snd_heap.c are
+    # the clean ones. Their missing siblings live in g3d_glb_stubs.c.
+    if src in {
+        "lib/nnsys/src/g3d/model.c",
+        "lib/nnsys/src/snd/snd_heap.c",
+    }:
+        return True
     return src.startswith("lib/nnsys/src/fnd/")
 
 

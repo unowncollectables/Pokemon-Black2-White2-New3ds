@@ -250,14 +250,24 @@ static inline void GFL_STD_MemCopy(const void *src, void *dest, u32 size) {
 
 // The copies of the mail and of the records are inlined, and not `static`: each has a file name string of its own
 // in `.data`, ahead of the one the file's other allocations share, which MWCC gives only to an external inline
+#ifdef PBW2_N3DS
+// GCC with -std=c99 gives a C99 inline definition no external body, so
+// calls from this file itself go undefined at link; plain functions here.
+void *BackupMail(GameData *gameData, HeapID heapId) {
+#else
 inline void *BackupMail(GameData *gameData, HeapID heapId) {
+#endif
     void *copy = GFL_HeapAllocate(heapId, MailBox_GetSize(), FALSE, "pokemontrade_save.c", 370);
     u32 size = MailBox_GetSize();
     GFL_STD_MemCopy(MailBox_GetFromGameData(gameData), copy, size);
     return copy;
 }
 
+#ifdef PBW2_N3DS
+void *BackupRecords(GameData *gameData, HeapID heapId) {
+#else
 inline void *BackupRecords(GameData *gameData, HeapID heapId) {
+#endif
     void *copy = GFL_HeapAllocate(heapId, GameRecords_GetSize(), FALSE, "pokemontrade_save.c", 401);
     u32 size = GameRecords_GetSize();
     GFL_STD_MemCopy(GameData_GetRecords(gameData), copy, size);

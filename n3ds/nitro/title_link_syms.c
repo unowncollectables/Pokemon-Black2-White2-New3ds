@@ -47,8 +47,7 @@ static BOOL StubProcExit(GameProc *proc, u32 *state, void *param, void *work) {
     return FALSE;
 }
 
-const GameProcFunctions NAME_ENTRY_PROC_FUNCTIONS = { StubProcInit, StubProcMain, StubProcExit };
-const GameProcFunctions FIELDMAP_PROC_FUNCS = { StubProcInit, StubProcMain, StubProcExit };
-
-const u32 NAME_ENTRY_SOUNDS[6];
-const u32 NAME_ENTRY_SOUND_COUNT = 0;
+/* NAME_ENTRY_PROC_FUNCTIONS, NAME_ENTRY_SOUNDS and NAME_ENTRY_SOUND_COUNT
+ * are the real ones from src/app/name_input/name_input.c now (that slice
+ * is in the link closure). FIELDMAP_PROC_FUNCS is the real one from
+ * src/field/map/fieldmap_proc.c now (Slice 2) — no stub here. */
