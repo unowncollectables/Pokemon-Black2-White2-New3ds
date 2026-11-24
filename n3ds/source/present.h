@@ -12,6 +12,9 @@
 void Present_Commit(bool top, bool bottom);
 uint32_t Present_Flags(void);
 void GxShim_Present(uint32_t flags);
+#if defined(PBW2_LINK_GAME)
+void Present_Clear(uint32_t flags);
+#endif
 
 /* Center pic_w x pic_h RGB565 on the chosen screen. Uses the GSP framebuffer
  * size (400x240 top, 320x240 bottom) from gfxGetFramebuffer. */

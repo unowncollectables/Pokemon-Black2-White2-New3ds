@@ -19,8 +19,10 @@
 #include <stdio.h>
 #include <string.h>
 
+#if !defined(PBW2_LINK_GAME)
 static PrintConsole s_top;
 static PrintConsole s_bottom;
+#endif
 
 /* Bits match include/gfl/key.h. Circle-pad past the dead zone counts as a d-pad
  * direction so a stick-only pad still reaches the game later. */
@@ -79,6 +81,7 @@ static u32 Pad_FromHid(u32 held) {
     return pad;
 }
 
+#if !defined(PBW2_LINK_GAME)
 static void Draw_Top(bool new3ds) {
     consoleSelect(&s_top);
     consoleClear();
@@ -90,13 +93,9 @@ static void Draw_Top(bool new3ds) {
     if (!new3ds) {
         printf("This port is New 3DS only.\n\n");
     }
-#if defined(PBW2_LINK_GAME)
-    printf("Game main linked as Pbw2_GameMain.\n");
-#else
     printf("Platform shell. Game main is not\n");
     printf("linked, so this is not the logo\n");
     printf("or the title screen.\n");
-#endif
     printf("NitroFS: %s\n", NitroHost_Nitrofs() ? "a/0/0/2 open" : "not staged");
     {
         int year, month, day, hour, minute;
@@ -119,6 +118,7 @@ static void Draw_Bottom(void) {
         Input_Draw();
     }
 }
+#endif
 
 static void Shutdown(void) {
     /* Stop and join every worker before releasing ndsp or the GPU. */
@@ -134,9 +134,14 @@ int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
 
+#if defined(PBW2_LINK_GAME)
+    /* A screen console writes directly into a framebuffer while the game renders. */
+    gfxInit(GSP_RGB565_OES, GSP_RGB565_OES, false);
+#else
     gfxInitDefault();
     consoleInit(GFX_TOP, &s_top);
     consoleInit(GFX_BOTTOM, &s_bottom);
+#endif
 
     /* 3dsx: this asks the New 3DS for 804 MHz and the L2 cache.
      * CIA: the RSF in n3ds/cia sets CpuSpeed and EnableL2Cache, or the
@@ -173,10 +178,12 @@ int main(int argc, char **argv) {
 #endif
     if (TitlePic_Load()) {
         Log_Line("3DS", "title pic: %s", TitlePic_Note());
+#if !defined(PBW2_LINK_GAME)
         gfxSetScreenFormat(GFX_TOP, GSP_RGB565_OES);
         gfxSetScreenFormat(GFX_BOTTOM, GSP_RGB565_OES);
         gfxSetDoubleBuffering(GFX_TOP, true);
         gfxSetDoubleBuffering(GFX_BOTTOM, true);
+#endif
     } else if (NitroHost_Nitrofs()) {
         Log_Line("3DS", "title pic: %s", TitlePic_Note());
     }
@@ -198,16 +205,17 @@ int main(int argc, char **argv) {
             Present_DrawTitle(flags, TitlePic_Top(), TitlePic_Bottom());
         } else {
 #if defined(PBW2_LINK_GAME)
-            if (!PbW2_GameHasPresented())
-#endif
-            {
-                if (flags & PBW2_SCREEN_TOP) {
-                    Draw_Top(new3ds);
-                }
-                if (flags & PBW2_SCREEN_BOTTOM) {
-                    Draw_Bottom();
-                }
+            if (!PbW2_GameHasPresented()) {
+                Present_Clear(flags);
             }
+#else
+            if (flags & PBW2_SCREEN_TOP) {
+                Draw_Top(new3ds);
+            }
+            if (flags & PBW2_SCREEN_BOTTOM) {
+                Draw_Bottom();
+            }
+#endif
         }
         GxShim_Present(flags);
 
