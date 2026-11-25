@@ -252,23 +252,32 @@ static void raster_triangle(Vertex a, Vertex b, Vertex c, const Texture *texture
 
 static void submit_triangle(Vertex a, Vertex b, Vertex c) {
     Vertex input[12] = { a, b, c };
-    Vertex output[12];
     unsigned count = 3;
+    unsigned outside = 0;
     for (unsigned plane = 0; plane < 6; ++plane) {
-        unsigned clipped = 0;
-        Vertex prev = input[count - 1];
-        float d = plane_distance(&prev, plane);
-        for (unsigned i = 0; i < count; ++i) {
-            Vertex cur = input[i];
-            float e = plane_distance(&cur, plane);
-            if ((d < 0) != (e < 0)) output[clipped++] = interpolate(prev, cur, d / (d - e));
-            if (e >= 0) output[clipped++] = cur;
-            prev = cur;
-            d = e;
+        unsigned vertices = (plane_distance(&a, plane) < 0) + (plane_distance(&b, plane) < 0)
+                          + (plane_distance(&c, plane) < 0);
+        if (vertices == 3) return;
+        outside |= vertices;
+    }
+    if (outside) {
+        Vertex output[12];
+        for (unsigned plane = 0; plane < 6; ++plane) {
+            unsigned clipped = 0;
+            Vertex prev = input[count - 1];
+            float d = plane_distance(&prev, plane);
+            for (unsigned i = 0; i < count; ++i) {
+                Vertex cur = input[i];
+                float e = plane_distance(&cur, plane);
+                if ((d < 0) != (e < 0)) output[clipped++] = interpolate(prev, cur, d / (d - e));
+                if (e >= 0) output[clipped++] = cur;
+                prev = cur;
+                d = e;
+            }
+            count = clipped;
+            if (count < 3) return;
+            memcpy(input, output, count * sizeof(Vertex));
         }
-        count = clipped;
-        if (count < 3) return;
-        memcpy(input, output, count * sizeof(Vertex));
     }
     unsigned x0 = s_viewport & 255, y0 = (s_viewport >> 8) & 255;
     unsigned x1 = (s_viewport >> 16) & 255, y1 = (s_viewport >> 24) & 255;

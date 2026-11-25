@@ -23,7 +23,7 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
   synchronously through the existing sound backend. Black 2 proceeds
   through the scripted transition from zone 427 to zone 428. After the
   dialogue, Azahar verifies movement in all four directions. The backend
-  remains silent.
+  still uses the silent sequence backend.
 - Black 2 screenshots show the title logo and the legible, blinking
   `PRESS START` prompt.
   The linked build leaves boot presentation to the game. The 2D fixtures
@@ -66,16 +66,36 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
   as packed display lists. A synchronous, conservative GX box test reports
   visible bounds to the field chunk culler. The opening Aspertia City
   flyover now shows terrain, stairs, trees, and water in Azahar. The
-  playable field renders the buildings, paths, and NPC during the first
-  dialogue. The latest replay reached that dialogue and ended before it
-  cleared, so its movement check remains open. The earlier replay checked
-  movement in all four directions before field visibility was restored.
+  field renders the buildings, paths, and NPC during the first dialogue.
+  The replay with the clipping shortcut clears the outdoor scene and
+  reaches the rendered house interior (zone 428), where it ends during
+  the opening dialogue. Free movement with the renderer still needs a
+  check. The earlier replay checked movement in all four directions before
+  field visibility was restored.
   An ARM11 fixture covers box visibility, a translated box, clipping,
   depth, palette lookup, and capture to VRAM D.
 - The CPU renderer approximates lighting and translucent blending. Fog,
   toon shading, some texture-coordinate generation modes, exact capture
   blending, and PICA200 acceleration remain open. SoulSilver's
   `g3gpu.c` and `shaders/g3.v.pica` are the acceleration reference.
+- Triangles fully inside the clip volume go straight to projection.
+  Triangles outside a common clip plane are discarded. The existing
+  clipping pass handles triangles that cross a plane. A synthetic Azahar
+  run of 12,000 small on-screen triangles used about 45% fewer emulated
+  ticks with the shortcut.
+
+### Black 2 title audio
+
+- The title's SDK stream call opens PCM16 stream 0 in the staged
+  `swan_sound_data.sdat`. The core 2 audio worker reads and interleaves
+  blocks into NDSP buffers and follows the game's stop and fade requests.
+  Azahar captures stereo output at 32,728 Hz and silence after Start fades
+  the stream. The ARM11 stream fixture covers block boundaries, seek,
+  looping, and a malformed header.
+- Missing DSP firmware disables the stream player while leaving the game
+  playable. The hardware test needs the console's DSP firmware at
+  `sdmc:/3ds/dspfirm.cdc`. The title cry, effects, and field music still
+  need wave and sequence playback.
 
 ### Muse handoff — Nov 24, 2026
 
@@ -326,7 +346,7 @@ MWCC `asm` blocks.
 `src/` and `lib/` are pokebw2. `n3ds/` is the 3DS program.
 `scripts/n3ds_game_objects.py` compiles game/SDK C for ARM11.
 `n3ds/source/` is the shell (main, workers, log, input, settings, save
-shim, silent audio, present). With `PBW2_LINK_GAME=1`, `Pbw2_GameMain`
+shim, NDSP streaming, present). With `PBW2_LINK_GAME=1`, `Pbw2_GameMain`
 runs on a worker; overlays 12, 27, and 264 load from SD when staged.
 
 This decomp speaks Nitro, not pspoke. SoulSilver and Platinum on 3DS
@@ -461,9 +481,8 @@ so a swap cannot reveal an older boot framebuffer.
    in Azahar. Compare lighting and capture to the DS title, verify the
    field, and profile the renderer on New 3DS. SoulSilver and Platinum
    remain the references for Citro3D acceleration.
-3. **Audio.** ARM7 is not decompiled. Host NDSP player; this phase is
-   silent and must not call `ndspInit` until a real player exists
-   (Azahar has no DSP firmware).
+3. **Audio.** The linked build streams the title's PCM16 music with NDSP.
+   The ARM7 sequence player, sound effects, and cries remain open.
 4. **Start menu.** Verify input and trace the broken rendering after the
    immediate DMA fix.
 5. **Field**, then **battle**, then **save** (game is the only writer;

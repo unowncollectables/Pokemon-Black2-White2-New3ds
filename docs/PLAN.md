@@ -15,7 +15,7 @@ presents with the frame's screen flags.
 The production shell in `n3ds/` asks for the New 3DS clock and starts
 `Pbw2_GameMain` when the game is linked. Black 2 runs the original boot,
 title, and New Game flow in Azahar. Physical hardware and White 2
-playthroughs remain open. The ARM7 audio backend is silent.
+playthroughs remain open. Black 2 streams the title music with NDSP.
 
 The user's ROM is read at runtime for the filesystem, and at build time only
 by `python3 configure.py && ninja` for the matching DS ROM. It is not committed.
@@ -45,9 +45,9 @@ multipliers and no encounter editor.
 
 ## Audio
 
-A host player on NDSP for the ARM7's sequenced music and sound effects. The
-audio thread is already on core 2 and is joined before `ndspExit`. Silent
-remains the default until the player is correct, not a fast wrong mix.
+Title PCM16 runs on the core 2 NDSP worker, which joins before
+`ndspExit`. The next steps are wave playback for cries and a host player
+for the ARM7 sequenced music and effects.
 
 ## Story
 

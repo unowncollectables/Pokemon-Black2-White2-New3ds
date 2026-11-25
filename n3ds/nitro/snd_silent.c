@@ -130,12 +130,6 @@ BOOL NNS_SndArcPlayerStartSeqEx(NNSSndHandle *handle, int playerNo, int bankNo, 
     return TRUE;
 }
 
-u32 NNS_SndArcStrmGetCurrentPlayingPos(NNSSndStrmHandle *handle) {
-    (void)handle;
-    PBW2_STUB_LOG("snd", "NNS_SndArcStrmGetCurrentPlayingPos (silent: 0)");
-    return 0;
-}
-
 /* Streamed audio (NNS_SndStrm*): same silent contract. Setup/AllocChannel
  * report FALSE (no channel/alarm free), so callers that check the result
  * skip streaming instead of waiting on a stream that will never play. */

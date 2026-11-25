@@ -67,12 +67,6 @@ void MIC_Init(void) { PBW2_STUB_LOG("link", "MIC_Init"); }
 void NCFG_ReadConfigEx(void) { PBW2_STUB_LOG("link", "NCFG_ReadConfigEx"); }
 void NNS_SndArcSetFileAddress(void) { PBW2_STUB_LOG("link", "NNS_SndArcSetFileAddress"); }
 void NNS_SndArcSetLoadBlockSize(void) { PBW2_STUB_LOG("link", "NNS_SndArcSetLoadBlockSize"); }
-void NNS_SndArcStrmAllocChannel(void) { PBW2_STUB_LOG("link", "NNS_SndArcStrmAllocChannel"); }
-void NNS_SndArcStrmFreeChannel(void) { PBW2_STUB_LOG("link", "NNS_SndArcStrmFreeChannel"); }
-void NNS_SndArcStrmInit(void) { PBW2_STUB_LOG("link", "NNS_SndArcStrmInit"); }
-void NNS_SndArcStrmStart(void) { PBW2_STUB_LOG("link", "NNS_SndArcStrmStart"); }
-void NNS_SndArcStrmStartPrepared(void) { PBW2_STUB_LOG("link", "NNS_SndArcStrmStartPrepared"); }
-void NNS_SndArcStrmStop(void) { PBW2_STUB_LOG("link", "NNS_SndArcStrmStop"); }
 void NNS_SndHandleInit(void) { PBW2_STUB_LOG("link", "NNS_SndHandleInit"); }
 void NNS_SndHandleReleaseSeq(void) { PBW2_STUB_LOG("link", "NNS_SndHandleReleaseSeq"); }
 /* NNS_SndHeapAlloc/Create/Destroy/LoadState/SaveState/GetCurrentLevel are
@@ -96,8 +90,6 @@ void NNS_SndPlayerSetVolume(void) { PBW2_STUB_LOG("link", "NNS_SndPlayerSetVolum
 void NNS_SndPlayerStopSeq(void) { PBW2_STUB_LOG("link", "NNS_SndPlayerStopSeq"); }
 void NNS_SndSetMasterVolume(void) { PBW2_STUB_LOG("link", "NNS_SndSetMasterVolume"); }
 void NNS_SndSetMonoFlag(void) { PBW2_STUB_LOG("link", "NNS_SndSetMonoFlag"); }
-void NNS_SndStrmHandleInit(void) { PBW2_STUB_LOG("link", "NNS_SndStrmHandleInit"); }
-void NNS_SndStrmHandleRelease(void) { PBW2_STUB_LOG("link", "NNS_SndStrmHandleRelease"); }
 void NNS_SndUpdateDriverInfo(void) { PBW2_STUB_LOG("link", "NNS_SndUpdateDriverInfo"); }
 void NNS_SndWaveOutFreeChannel(void) { PBW2_STUB_LOG("link", "NNS_SndWaveOutFreeChannel"); }
 void NNS_SndWaveOutSetSpeed(void) { PBW2_STUB_LOG("link", "NNS_SndWaveOutSetSpeed"); }
