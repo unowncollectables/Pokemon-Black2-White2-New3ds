@@ -13,11 +13,12 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
   Releasing it corrupted the DTCM heap before the next allocation.
   The host now returns only game-owned buffers and records each FIFO
   packet once. The actor main and movement tables link from their C objects.
-- Map loading used more than 16 open NitroFS files. Each `FSFile` now
-  keeps its own handle and position. Archive bounds checks catch truncated
-  members before allocation. The overlay loader sizes its tracking array
-  from the staged overlay table. Aspertia's C-Gear overlay (ID 80) now
-  loads successfully.
+- The hardware log stops in map-load phase 4 while opening `a/0/1/5`.
+  Its SD copy matches the file in the emulator run. The host now caps
+  NitroFS at eight underlying open SD files and keeps a position per
+  logical `FSFile`. The ARM11 fixture checks 24 logical files and seek
+  independence across eviction. Azahar reaches phase 6 and the Aspertia
+  field routine with the cache. Retest on hardware.
 - The post-fade opening script (0x1e) waited for a fanfare load on a
   Nitro thread that never started. New 3DS runs both archive-load steps
   synchronously through the existing sound backend. Black 2 proceeds
@@ -94,12 +95,28 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
   looping, and a malformed header.
 - Missing DSP firmware disables the stream player while leaving the game
   playable. The hardware test needs the console's DSP firmware at
-  `sdmc:/3ds/dspfirm.cdc`. The title cry, effects, and field music still
-  need wave and sequence playback.
+  `sdmc:/3ds/dspfirm.cdc`. The hardware log confirms stream 0 starts.
+
+### Display settings and audio integration
+
+- L+R+Y opens the display menu on the lower LCD. D-pad selects, A toggles,
+  and B closes it. Each setting starts off and applies for the session.
+  LCD fit scales to 320×240 at 4:3 and maps bottom touches back to DS
+  coordinates. Wide fill stretches the top image across 400×240. Sharp
+  pixels selects point filtering for scaled screens.
+- Azahar verifies the menu toggles and the ARM11 fixture checks the
+  default and scaled touch bounds. Wider field visibility, per-glyph
+  sharp text, and native-resolution geometry remain open.
+- The NDSP wave player copies cry PCM to linear memory before queuing
+  it. SDAT wave and file metadata are read in two blocks to avoid
+  thousands of small SD seeks on the first cry. The game checks the
+  wave archive and sample boundaries before playback. Field music and
+  sound effects still need the sequence player.
 
 ### Audio follow-up — LLE unlock, title stream verified, wave player built (Nov 24–25, Ghost)
 
-Corrections to the section above, all verified in Azahar on this VM:
+Observations from the cloud Azahar setup. The workstation captures used
+the Windows Lotus worker and recorded the PCM waveform:
 
 - "Azahar captures stereo output at 32,728 Hz" did **not** reproduce under
   HLE: `ndspInit` fails (`0xd880a7fa`) and the run stays at

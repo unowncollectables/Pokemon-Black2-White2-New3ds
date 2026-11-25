@@ -12,6 +12,11 @@ static bool s_irrst;
 static bool s_cstickWasLive;
 static uint32_t s_down;
 static uint32_t s_held;
+static uint32_t s_blocked;
+
+uint32_t Input_GameHeld(void) {
+    return s_held & ~s_blocked;
+}
 
 bool Input_Init(void) {
     Result rc = irrstInit();
@@ -68,7 +73,8 @@ void Input_Scan(void) {
     if ((s_down & KEY_ZR) == 0 && (hidKeysUp() & KEY_ZR)) {
         Log_Line("BTN", "ZR up");
     }
-    Settings_Handle(s_down, s_held);
+    s_blocked &= s_held;
+    if (Settings_Handle(s_down, s_held)) s_blocked |= s_held;
 
     if (!s_irrst) {
         return;

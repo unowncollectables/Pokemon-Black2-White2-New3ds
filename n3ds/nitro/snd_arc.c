@@ -4,6 +4,7 @@
 #include "log.h"
 #include "nitro/fs.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -29,10 +30,6 @@ static int read_at(FSFile *file, uint64_t offset, void *out, unsigned size) {
            && FS_ReadFile(file, out, (s32)size) == (s32)size;
 }
 
-static int read_entry(FSFile *file, uint32_t base, uint32_t sectionSize, uint32_t offset, void *out, unsigned size) {
-    return (uint64_t)offset + size <= sectionSize && read_at(file, (uint64_t)base + offset, out, size);
-}
-
 static struct {
     char path[128];
     FSFile file;
@@ -49,21 +46,26 @@ static void snd_arc_clear(void) {
     free(s_arc.waveArcFileIds);
     free(s_arc.fatOffsets);
     free(s_arc.fatSizes);
-    memset(&s_arc, 0, sizeof s_arc);
+    s_arc.open = 0;
+    s_arc.waveArcFileIds = NULL;
+    s_arc.waveArcCount = 0;
+    s_arc.fatOffsets = NULL;
+    s_arc.fatSizes = NULL;
+    s_arc.fatCount = 0;
 }
 
 void SndArc_SetPath(const char *path) {
     if (!path) return;
     if (s_arc.path[0] && strcmp(s_arc.path, path) == 0) return;
     snd_arc_clear();
-    strncpy(s_arc.path, path, sizeof s_arc.path - 1);
+    snprintf(s_arc.path, sizeof s_arc.path, "%s", path);
 }
 
-/* Parses the directory on first use. Returns FALSE when the archive
- * cannot be opened or is not an SDAT. */
+/* Read the two directory blocks once. Thousands of small seeks here can
+ * delay the first cry on a physical SD card. */
 static int snd_arc_ensure(void) {
-    uint8_t archive[0x30], info[0x28], fat[12], entry[16];
-    uint32_t infoOffset, fatOffset, infoSize, fatSize, table, count, i;
+    uint8_t archive[0x30];
+    uint8_t *info = NULL, *fat = NULL;
 
     if (s_arc.waveArcFileIds) return 1;
     if (!s_arc.path[0]) return 0;
@@ -73,49 +75,53 @@ static int snd_arc_ensure(void) {
     }
     s_arc.open = 1;
     if (!read_at(&s_arc.file, 0, archive, sizeof archive) || memcmp(archive, "SDAT", 4)
-        || le16(archive + 4) != 0xfeff) {
-        Log_Line("AUDIO", "SndArc: %s is not an SDAT", s_arc.path);
-        goto fail;
+        || le16(archive + 4) != 0xfeff) goto fail;
+
+    uint32_t infoOffset = le32(archive + 0x18), infoBytes = le32(archive + 0x1c);
+    uint32_t fatOffset = le32(archive + 0x20), fatBytes = le32(archive + 0x24);
+    uint32_t total = FS_GetLength(&s_arc.file);
+    if (infoBytes < 0x28 || fatBytes < 12 || (uint64_t)infoOffset + infoBytes > total
+        || (uint64_t)fatOffset + fatBytes > total) goto fail;
+    info = malloc(infoBytes);
+    fat = malloc(fatBytes);
+    if (!info || !fat || !read_at(&s_arc.file, infoOffset, info, infoBytes)
+        || !read_at(&s_arc.file, fatOffset, fat, fatBytes) || memcmp(info, "INFO", 4) || memcmp(fat, "FAT ", 4)) goto fail;
+
+    uint32_t infoSize = le32(info + 4), fatSize = le32(fat + 4);
+    uint32_t table = le32(info + 0x14);
+    if (infoSize > infoBytes || fatSize > fatBytes || fatSize < 12 || table < 0x28
+        || (uint64_t)table + 4 > infoSize) goto fail;
+    uint32_t waveCount = le32(info + table), fatCount = le32(fat + 8);
+    if (waveCount > (infoSize - table - 4) / 4 || fatCount > (fatSize - 12) / 16) goto fail;
+
+    s_arc.waveArcFileIds = calloc(waveCount ? waveCount : 1, sizeof *s_arc.waveArcFileIds);
+    s_arc.fatOffsets = calloc(fatCount ? fatCount : 1, sizeof *s_arc.fatOffsets);
+    s_arc.fatSizes = calloc(fatCount ? fatCount : 1, sizeof *s_arc.fatSizes);
+    if (!s_arc.waveArcFileIds || !s_arc.fatOffsets || !s_arc.fatSizes) goto fail;
+    s_arc.waveArcCount = waveCount;
+    s_arc.fatCount = fatCount;
+    for (uint32_t i = 0; i < waveCount; ++i) {
+        uint32_t record = le32(info + table + 4 + 4 * i);
+        s_arc.waveArcFileIds[i] = record >= 0x28 && record <= infoSize - 4
+                                  ? le32(info + record) & 0xFFFFFFu : 0xFFFFFFFFu;
     }
-    infoOffset = le32(archive + 0x18);
-    fatOffset = le32(archive + 0x20);
-    if (!read_at(&s_arc.file, infoOffset, info, sizeof info) || memcmp(info, "INFO", 4)
-        || !read_at(&s_arc.file, fatOffset, fat, sizeof fat) || memcmp(fat, "FAT ", 4)) {
-        Log_Line("AUDIO", "SndArc: INFO/FAT block missing");
-        goto fail;
-    }
-    infoSize = le32(info + 4);
-    fatSize = le32(fat + 4);
-    table = le32(info + 0x14); /* wave-arc table */
-    if (!read_entry(&s_arc.file, infoOffset, infoSize, table, entry, 4)) goto fail;
-    count = le32(entry);
-    s_arc.waveArcFileIds = calloc(count ? count : 1, sizeof *s_arc.waveArcFileIds);
-    if (!s_arc.waveArcFileIds) goto fail;
-    s_arc.waveArcCount = count;
-    for (i = 0; i < count; ++i) {
-        uint32_t record;
-        if (!read_entry(&s_arc.file, infoOffset, infoSize, table + 4 + 4 * i, entry, 4)) goto fail;
-        record = le32(entry);
-        if (!record || !read_entry(&s_arc.file, infoOffset, infoSize, record, entry, 4)) {
-            s_arc.waveArcFileIds[i] = 0xFFFFFFFFu;
-            continue;
+    for (uint32_t i = 0; i < fatCount; ++i) {
+        const uint8_t *entry = fat + 12 + 16 * i;
+        uint32_t offset = le32(entry), size = le32(entry + 4);
+        if ((uint64_t)offset + size <= total) {
+            s_arc.fatOffsets[i] = offset;
+            s_arc.fatSizes[i] = size;
         }
-        s_arc.waveArcFileIds[i] = le32(entry) & 0xFFFFFFu;
     }
-    s_arc.fatCount = le32(fat + 8);
-    s_arc.fatOffsets = calloc(s_arc.fatCount ? s_arc.fatCount : 1, sizeof *s_arc.fatOffsets);
-    s_arc.fatSizes = calloc(s_arc.fatCount ? s_arc.fatCount : 1, sizeof *s_arc.fatSizes);
-    if (!s_arc.fatOffsets || !s_arc.fatSizes) goto fail;
-    for (i = 0; i < s_arc.fatCount; ++i) {
-        if (!read_entry(&s_arc.file, fatOffset, fatSize, 12 + 16 * i, entry, sizeof entry)) goto fail;
-        s_arc.fatOffsets[i] = le32(entry);
-        s_arc.fatSizes[i] = le32(entry + 4);
-    }
-    Log_Line("AUDIO", "SndArc: %lu wave arcs, %lu files", (unsigned long)s_arc.waveArcCount,
-             (unsigned long)s_arc.fatCount);
+    free(info);
+    free(fat);
+    Log_Line("AUDIO", "SndArc: %lu wave arcs, %lu files", (unsigned long)waveCount, (unsigned long)fatCount);
     return 1;
 fail:
+    free(info);
+    free(fat);
     snd_arc_clear();
+    Log_Line("AUDIO", "SndArc: invalid or unreadable SDAT directory");
     return 0;
 }
 

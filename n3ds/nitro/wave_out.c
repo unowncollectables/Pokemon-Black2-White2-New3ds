@@ -3,6 +3,7 @@
 #include "log.h"
 #include "nnsys/snd.h"
 #include "stub_log.h"
+#include "wave_out.h"
 
 #include <3ds.h>
 #include <string.h>
@@ -12,9 +13,8 @@
 /* Real NNS_SndWaveOut on NDSP. The game's model is the DS one: a wave
  * plays on a locked DS hardware channel, one buffer, and the game
  * polls IsPlaying until it ends. The host maps DS channel N to NDSP
- * channel N+1 (the stream player owns NDSP 0) and plays the game's
- * samples in place — the buffer stays alive until ReleaseCore, which
- * stops the channel before freeing it.
+ * channel N+1 (the stream player owns NDSP 0). NDSP reads from
+ * linear memory that stays alive until the DSP is shut down.
  *
  * Playback rate: the game passes the wave's native rate plus the DS
  * timer "speed" (0x8000 = 1.0x; see the in-tree snd_waveout.c
@@ -31,6 +31,7 @@
 
 #define WAVE_DS_CHANNELS 16
 #define WAVE_NDSP_BASE 1 /* DS ch N -> NDSP ch N+1 */
+#define WAVE_PCM_CAPACITY (64u * 1024u)
 
 struct NNSSndWaveOut {
     int dsCh;
@@ -46,6 +47,14 @@ struct NNSSndWaveOut {
 };
 
 static struct NNSSndWaveOut s_channels[WAVE_DS_CHANNELS];
+static void *s_pcm[WAVE_DS_CHANNELS];
+
+void WaveOut_Shutdown(void) {
+    for (unsigned i = 0; i < WAVE_DS_CHANNELS; ++i) {
+        if (s_pcm[i]) linearFree(s_pcm[i]);
+        s_pcm[i] = NULL;
+    }
+}
 
 static float wave_effective_rate(int sampleRate, int speed) {
     float rate = (float)sampleRate * (float)speed / 32768.0f;
@@ -88,14 +97,22 @@ void NNS_SndWaveOutFreeChannel(NNSSndWaveOutHandle handle) {
 BOOL NNS_SndWaveOutStart(NNSSndWaveOutHandle handle, NNSSndWaveFormat format, const void *data, BOOL loop,
                          int loopStart, int samples, int rate, int volume, int speed, int pan) {
     struct NNSSndWaveOut *waveOut = handle;
-    (void)loopStart;
     PBW2_STUB_LOG("snd", "NNS_SndWaveOutStart (wave player)");
     Log_Line("AUDIO", "WaveOutStart fmt=%d loop=%d loopStart=%d samples=%d rate=%d vol=%d speed=%d pan=%d",
              (int)format, (int)loop, loopStart, samples, rate, volume, speed, pan);
-    if (!waveOut || !data || samples <= 0 || rate <= 0) return FALSE;
+    if (!waveOut || !waveOut->inUse || !data || samples <= 0 || rate <= 0 || speed <= 0
+        || (loop && loopStart != 0)) return FALSE;
     if (format != NNS_SND_WAVE_FORMAT_PCM8 && format != NNS_SND_WAVE_FORMAT_PCM16) return FALSE;
     if (!Audio_IsNdspReady()) return FALSE;
+    unsigned sampleBytes = format == NNS_SND_WAVE_FORMAT_PCM8 ? 1 : 2;
+    if ((unsigned)samples > WAVE_PCM_CAPACITY / sampleBytes) return FALSE;
+    void **pcm = &s_pcm[waveOut->dsCh];
+    if (!*pcm) *pcm = linearAlloc(WAVE_PCM_CAPACITY);
+    if (!*pcm) return FALSE;
     if (waveOut->active) ndspChnWaveBufClear(waveOut->ndspCh);
+    unsigned bytes = (unsigned)samples * sampleBytes;
+    memcpy(*pcm, data, bytes);
+    DSP_FlushDataCache(*pcm, bytes);
     waveOut->sampleRate = rate;
     waveOut->speed = speed;
     waveOut->volume = volume < 0 ? 0 : volume > 127 ? 127 : volume;
@@ -106,14 +123,9 @@ BOOL NNS_SndWaveOutStart(NNSSndWaveOutHandle handle, NNSSndWaveFormat format, co
     ndspChnSetRate(waveOut->ndspCh, wave_effective_rate(rate, speed));
     wave_set_mix(waveOut);
     memset(&waveOut->buf, 0, sizeof waveOut->buf);
-    if (format == NNS_SND_WAVE_FORMAT_PCM8) {
-        waveOut->buf.data_pcm8 = (s8 *)data;
-    } else {
-        waveOut->buf.data_pcm16 = (s16 *)data;
-    }
+    waveOut->buf.data_vaddr = *pcm;
     waveOut->buf.nsamples = (u32)samples;
     waveOut->buf.looping = loop ? true : false; /* NDSP loops from the buffer start; no loopStart field */
-    DSP_FlushDataCache((void *)data, (u32)(format == NNS_SND_WAVE_FORMAT_PCM8 ? samples : samples * 2));
     ndspChnWaveBufAdd(waveOut->ndspCh, &waveOut->buf);
     waveOut->active = TRUE;
     waveOut->startTick = svcGetSystemTick();

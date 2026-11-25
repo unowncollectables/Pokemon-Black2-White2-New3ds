@@ -9,6 +9,9 @@
  * FALSE and IsPlaying FALSE, so the game moves on exactly as it does
  * against the silent backend instead of hanging on a sound that will
  * never play. The NNS_SndWaveOut* entry points themselves are declared
- * in nnsys/snd.h; this header only marks the module. */
+ * in nnsys/snd.h. */
+
+/* Release the linear PCM buffers after ndspExit. */
+void WaveOut_Shutdown(void);
 
 #endif

@@ -6,14 +6,13 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* Commit which screens this frame shows, then draw and present from that
- * word. A future sharp-text layer reads Present_Flags() and does not sample
- * the frame again. */
+/* Commit the screen flags once per frame. */
 void Present_Commit(bool top, bool bottom);
 uint32_t Present_Flags(void);
 void GxShim_Present(uint32_t flags);
 #if defined(PBW2_LINK_GAME)
 void Present_Clear(uint32_t flags);
+bool Present_TouchToGame(uint16_t px, uint16_t py, uint16_t *x, uint16_t *y);
 #endif
 
 /* Center pic_w x pic_h RGB565 on the chosen screen. Uses the GSP framebuffer

@@ -26,8 +26,9 @@ The host composites both DS 2D engines and the CPU-rendered geometry layer.
 The Black 2 title uses the same VRAM capture and display path as the DS game.
 Finish geometry effects, compare with DS rendering, and measure frame
 timing on hardware. The sister ports are references for PICA200
-acceleration, presentation order, and thread lifetime. Wide view and sharp
-game text follow the baseline renderer.
+acceleration, presentation order, and thread lifetime. Settings offers
+LCD fit, wide fill and point-filtered scaling. Wider field visibility,
+per-glyph text and higher-resolution geometry follow the baseline renderer.
 
 ## Save and field
 
@@ -46,8 +47,8 @@ multipliers and no encounter editor.
 ## Audio
 
 Title PCM16 runs on the core 2 NDSP worker, which joins before
-`ndspExit`. The next steps are wave playback for cries and a host player
-for the ARM7 sequenced music and effects.
+`ndspExit`. PCM cries play from the game's wave archives. A host player
+for the ARM7 sequenced music and effects remains open.
 
 ## Story
 

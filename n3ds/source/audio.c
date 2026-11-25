@@ -9,6 +9,7 @@
 #if defined(PBW2_LINK_GAME)
 
 #include "strm_pcm.h"
+#include "wave_out.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -204,6 +205,7 @@ void Audio_NdspExit(void) {
 #ifdef PBW2_LINK_GAME
     if (s_ndsp) {
         ndspExit();
+        WaveOut_Shutdown();
         if (s_pcm) linearFree(s_pcm);
         s_pcm = NULL;
         s_ndsp = false;

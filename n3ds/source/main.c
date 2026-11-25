@@ -87,9 +87,9 @@ static void UpdateTouch(u32 held) {
     touchPosition touch = {0};
     if (held & KEY_TOUCH) {
         hidTouchRead(&touch);
-        /* The 256x192 game image is centered on the 320x240 touch screen. */
-        if (touch.px >= 32 && touch.px < 288 && touch.py >= 24 && touch.py < 216) {
-            NitroHost_SetTouch(touch.px - 32, touch.py - 24, true);
+        u16 x, y;
+        if (Present_TouchToGame(touch.px, touch.py, &x, &y)) {
+            NitroHost_SetTouch(x, y, true);
             return;
         }
     }
@@ -218,7 +218,7 @@ int main(int argc, char **argv) {
 
     while (aptMainLoop()) {
         Input_Scan();
-        u32 held = hidKeysHeld();
+        u32 held = Input_GameHeld();
 #if defined(PBW2_LINK_GAME)
         UpdateTouch(held);
 #endif
@@ -259,6 +259,9 @@ int main(int argc, char **argv) {
         }
 #endif
         GxShim_Present(flags);
+#if defined(PBW2_LINK_GAME)
+        if ((flags & PBW2_SCREEN_BOTTOM) && Settings_Open()) Settings_Draw();
+#endif
 
         gfxFlushBuffers();
         gfxSwapBuffers();

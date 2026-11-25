@@ -5,10 +5,16 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* L+R+Y opens the settings screen. B closes it. No toggle changes play,
- * and nothing is written. */
+enum {
+    DISPLAY_LCD_FIT = 1u << 0,
+    DISPLAY_WIDE_FILL = 1u << 1,
+    DISPLAY_SHARP_PIXELS = 1u << 2,
+};
+
+/* L+R+Y opens Settings. Returns true when the game should ignore input. */
 bool Settings_Handle(uint32_t down, uint32_t held);
 bool Settings_Open(void);
+uint32_t Settings_DisplayFlags(void);
 void Settings_Draw(void);
 
 #endif

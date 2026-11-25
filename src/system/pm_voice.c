@@ -281,6 +281,11 @@ static BOOL PokeVoice_LoadWaveArc(PokeVoiceEntry *entry, u32 waveArc) {
     if (size == 0) {
         return FALSE;
     }
+#ifdef PBW2_N3DS
+    if (size > POKE_VOICE_BUFFER_SIZE || size < sizeof(SNDWaveArc) + sizeof(u32)) {
+        return FALSE;
+    }
+#endif
     read = NNS_SndArcReadFile(info->fileId, entry->buffer, size, 0);
     if (read == -1) {
         return FALSE;
@@ -289,7 +294,18 @@ static BOOL PokeVoice_LoadWaveArc(PokeVoiceEntry *entry, u32 waveArc) {
         return FALSE;
     }
     arc = entry->buffer;
+#ifdef PBW2_N3DS
+    if (arc->fileHeader.fileSize > size || arc->waveCount == 0 || arc->waveOffset[0] > arc->fileHeader.fileSize ||
+        arc->fileHeader.fileSize - arc->waveOffset[0] <= sizeof(PokeVoiceWaveData)) {
+        return FALSE;
+    }
+#endif
     wave = (PokeVoiceWaveData *)((u8 *)arc + arc->waveOffset[0]);
+#ifdef PBW2_N3DS
+    if (wave->rate == 0 || wave->timer == 0 || wave->format != NNS_SND_WAVE_FORMAT_PCM8) {
+        return FALSE;
+    }
+#endif
     SND_GetWaveDataCount(arc);
     size = arc->fileHeader.fileSize - arc->waveOffset[0];
     size -= sizeof(PokeVoiceWaveData);
