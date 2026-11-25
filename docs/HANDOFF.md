@@ -25,6 +25,11 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
   through the scripted transition from zone 427 to zone 428. After the
   dialogue, Azahar verifies movement in all four directions. The backend
   still uses the silent sequence backend.
+- A fresh Black 2 Azahar run with GPU geometry enabled reaches Aspertia
+  and renders the player during the opening cutscene. That replay ended
+  before free movement. Field actor resource loading now waits for a
+  real VBlank. The game thread owns the DS interrupt callback and the
+  LCD thread waits for scanout independently.
 - Black 2 screenshots show the title logo and the legible, blinking
   `PRESS START` prompt.
   The linked build leaves boot presentation to the game. The 2D fixtures
@@ -101,6 +106,14 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
   and palette banks, and publishes a 256×192 layer at the GX buffer swap.
   The compositor resolves main BG0 and display capture into VRAM D.
   Azahar shows Kyurem and the blue title scene on the lower screen.
+- Intro and battle MCSS sprites and their shadows send packed texture
+  coordinates through the GX command macro. On ARM11 this forwards each
+  coordinate to the rasterizer before its vertex. On DS the macro
+  expands to the original register write. The graphics fixture draws a
+  quad whose first texel is transparent and checks the visible half on
+  both renderers. A fresh Black 2 New Game replay in Azahar shows
+  Professor Juniper and Cinccino after the reveal. Battle visibility
+  still needs an in-game check.
 - The Nitro SDK's immediate geometry calls reach the same host interpreter
   as packed display lists. A synchronous, conservative GX box test reports
   visible bounds to the field chunk culler. The opening Aspertia City
@@ -161,6 +174,17 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
 - The same SDAT INFO cache supplies sequence IDs, bank assignments,
   player parameters and the banks' wave archive references. The port
   checks record and file ID bounds before handing data to the game.
+  Group lookups expose the archive's item lists. The game can register
+  loaded sequence and bank buffers by file ID and clear them on release.
+  Reinitializing the archive drops all registered addresses.
+  Sequence load requests now copy the requested SSEQ and SBNK files
+  into the sound heap. Repeated loads reuse registered buffers. Heap
+  disposal clears an address only while it still points to that block.
+  Wave load requests follow the bank's wave archive references and
+  load whole SWAR files. All 1,949 populated wave archive entries in
+  the staged Black 2 SDAT use this mode. Sequence playback remains open. Both dialogue
+  cue 1351 and confirmation cue 1356 use a 32 kHz one-shot ADPCM sample
+  on program 0, played twice at different velocities.
 - WaveOut decodes DS IMA-ADPCM to PCM16 and queues a one-shot intro
   followed by a looped sustain when a wave has a nonzero loop point.
   Azahar NDSP telemetry verifies the sustain buffer wraps. These sample
@@ -226,6 +250,23 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
 - GPU preparation can fall back to CPU rasterization for that frame.
   Hardware timing, 3D blending parity, direct GPU composition, wider
   field visibility and native-resolution render targets remain open.
+- PICA200 submission flushes the geometry command list and its dirty
+  vertex and texture ranges. The readback remains in queue order.
+  Hardware logs report mean submit and readback time every 120 completed
+  GPU frames, along with the first occurrence of each software fallback.
+  The LCD log also reports presentation rate and mean compose and swap
+  times. Text backgrounds decode screen entries once per visible tile span
+  and convert each palette once per layer. The R4 Continue replay confirms
+  that Striaton enables DS edge marking and still uses the CPU renderer.
+  In the stationary Striaton scene, Azahar measured about 48.5 ms of LCD
+  update and composition before the tile change and 29.3 ms afterward.
+  These are host presentation timings. Physical New 3DS timing is pending.
+- The GX swap log measures the rate of complete 3D frames and counts how
+  many used the GPU and CPU. The software rasterizer reuses its edge
+  calculations per row, skips texture math for untextured polygons, and
+  floors signed texture coordinates without calling `floorf` per texel.
+  Transparent texels in shadow polygons leave the underlying pixels
+  intact. The CPU and PICA200 fixtures cover that shadow case.
 
 ### Audio follow-up — LLE unlock, title stream verified, wave player built (Nov 24–25, Ghost)
 

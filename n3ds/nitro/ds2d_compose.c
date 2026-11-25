@@ -267,8 +267,8 @@ static void compose_text_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmo
     const u16 *pltt = bg_layer_pltt(dc, cnt, is_sub, bg);
     u32 hofs_base = reg_u16(regs, 0x10u + (u32)bg * 4u) & 0x1ffu;
     u32 vofs_base = reg_u16(regs, 0x12u + (u32)bg * 4u) & 0x1ffu;
-    int y;
-    int x;
+    const bool indexed256 = (cnt & 0x80u) != 0;
+    const unsigned plane = 1u << bg;
 
     if ((dc & (0x100u << bg)) == 0) {
         return;
@@ -277,46 +277,39 @@ static void compose_text_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmo
         return;
     }
 
-    for (y = 0; y < 192; y++) {
+    u16 colors[256];
+    for (unsigned i = 0; i < 256; i++) colors[i] = rgb555_to_565(pltt[i]);
+    for (unsigned y = 0; y < 192; y++) {
         u32 vofs = (y + vofs_base) & (ph * 8 - 1);
         u32 row = vofs / 8;
-        for (x = 0; x < 256; x++) {
+        const u16 *mapRow = map + (row >> 5) * (pw >> 5) * 1024 + (row & 31) * 32;
+        for (unsigned x = 0; x < 256;) {
             u32 hofs = (x + hofs_base) & (pw * 8 - 1);
-            u32 col = hofs / 8;
-            u32 tx = hofs & 7;
-            u32 ty = vofs & 7;
             /* Large text maps are laid out in 32-by-32 tile screen blocks. */
-            u32 block = (row >> 5) * (u32)(pw >> 5) + (col >> 5);
-            u16 sc = map[block * 1024u + (row & 31u) * 32u + (col & 31u)];
-            u32 tile = sc & 0x3ffu;
-            u32 pal = sc >> 12;
-            u32 flip_h = sc & 0x0400u;
-            u32 flip_v = sc & 0x0800u;
-            u32 px;
-            u8 nib;
-            u8 pix;
-
-            if (flip_h) {
-                tx = 7 - tx;
-            }
-            if (flip_v) {
-                ty = 7 - ty;
-            }
-            if (cnt & 0x80u) {
-                pix = chars[tile * 64u + ty * 8u + tx];
+            u16 sc = mapRow[(hofs >> 8) * 1024 + ((hofs >> 3) & 31)];
+            unsigned begin = hofs & 7;
+            unsigned count = 8 - begin;
+            if (count > 256 - x) count = 256 - x;
+            unsigned tile = sc & 1023;
+            unsigned ty = (vofs & 7) ^ ((sc & 0x0800) ? 7 : 0);
+            unsigned flip = (sc & 0x0400) ? 7 : 0;
+            unsigned dst = y * 256 + x;
+            if (indexed256) {
+                const u8 *source = chars + tile * 64 + ty * 8;
+                for (unsigned i = 0; i < count; i++) {
+                    unsigned color = source[(begin + i) ^ flip];
+                    if (color) put_bg_pixel(out, blend, dst + i, plane, colors[color]);
+                }
             } else {
-                px = tx >> 1;
-                nib = chars[tile * 32u + ty * 4u + px];
-                pix = (tx & 1) ? (nib >> 4) : (nib & 0x0f);
+                const u8 *source = chars + tile * 32 + ty * 4;
+                const u16 *palette = colors + (sc >> 12) * 16;
+                for (unsigned i = 0; i < count; i++) {
+                    unsigned tx = (begin + i) ^ flip;
+                    unsigned color = (source[tx >> 1] >> ((tx & 1) * 4)) & 15;
+                    if (color) put_bg_pixel(out, blend, dst + i, plane, palette[color]);
+                }
             }
-            if (pix == 0) {
-                continue;
-            }
-            if (cnt & 0x80u) {
-                put_bg_pixel(out, blend, y * 256 + x, 1u << bg, rgb555_to_565(pltt[pix]));
-            } else {
-                put_bg_pixel(out, blend, y * 256 + x, 1u << bg, rgb555_to_565(pltt[pal * 16u + pix]));
-            }
+            x += count;
         }
     }
 }

@@ -3,6 +3,7 @@
  * Frigate's port/hal/os is the reference for which calls a host replaces.
  * This file is new; it does not copy that code. */
 #include "nitro/os.h"
+#include "nitro/hw.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -35,19 +36,22 @@ OSSystemWork *pbw2_system_work(void) {
 }
 
 u32 pbw2_vblank_count(void) {
-    return s_vblanks;
+    return __atomic_load_n(&s_vblanks, __ATOMIC_ACQUIRE);
 }
 
 void pbw2_irq_check_or(u32 mask) {
-    s_irq_check |= mask;
+    __atomic_fetch_or(&s_irq_check, mask, __ATOMIC_RELAXED);
 }
 
 void pbw2_vblank(void) {
-    s_vblanks++;
-    s_irq_check |= OS_IE_V_BLANK;
-    if (s_irq[0]) {
-        s_irq[0]();
+    /* MCSS palette transfers require the first VBlank scanlines. */
+    reg_GX_VCOUNT = 192;
+    pbw2_irq_check_or(OS_IE_V_BLANK);
+    OSIrqFunction handler = __atomic_load_n(&s_irq[0], __ATOMIC_ACQUIRE);
+    if (handler) {
+        handler();
     }
+    __atomic_fetch_add(&s_vblanks, 1, __ATOMIC_RELEASE);
 }
 
 u64 OS_GetTick(void) {
@@ -209,7 +213,7 @@ void OS_SetIrqFunction(OSIrqMask interrupts, OSIrqFunction function) {
     u32 bit;
     for (bit = 0; bit < 32; bit++) {
         if (interrupts & (1u << bit)) {
-            s_irq[bit] = function;
+            __atomic_store_n(&s_irq[bit], function, __ATOMIC_RELEASE);
         }
     }
 }
@@ -217,13 +221,18 @@ void OS_SetIrqFunction(OSIrqMask interrupts, OSIrqFunction function) {
 extern void Pbw2_GspVblank(void);
 
 void OS_WaitIrq(BOOL clear, OSIrqMask interrupts) {
-    if (clear) {
-        s_irq_check &= ~interrupts;
-    }
-    if (interrupts & OS_IE_V_BLANK) {
-        Pbw2_GspVblank();
-        pbw2_vblank();
-    }
+    if (clear) __atomic_fetch_and(&s_irq_check, ~interrupts, __ATOMIC_RELAXED);
+    if (!(interrupts & OS_IE_V_BLANK) || (__atomic_load_n(&s_irq_check, __ATOMIC_RELAXED) & interrupts)) return;
+
+    /* Only the game thread dispatches its DS interrupt handler. The LCD
+     * thread waits for scanout independently to present its frame. */
+    Pbw2_GspVblank();
+    pbw2_vblank();
+}
+
+void OS_WaitInterrupt(BOOL clear, OSIrqMask interrupts) {
+    OS_WaitIrq(clear, interrupts);
+    __atomic_fetch_and(&s_irq_check, ~interrupts, __ATOMIC_RELAXED);
 }
 
 void OS_WaitVBlankIntr(void) {

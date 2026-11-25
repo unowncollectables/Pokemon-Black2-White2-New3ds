@@ -186,6 +186,7 @@ bool PbW2_PicaTriangle(const PicaVertex vertex[3], int texture, PicaAlphaTest te
 }
 
 bool PbW2_PicaFinish(uint32_t clearColor, float clearDepth, uint16_t *result) {
+    u64 start = svcGetSystemTick();
     if (!s_batchCount || !C3D_FrameBegin(0)) return false;
     GSPGPU_FlushDataCache(s_vertices, s_vertexCount * sizeof(*s_vertices));
     C3D_RenderTargetClear(s_target, C3D_CLEAR_ALL, clearColor, (unsigned)(0xffffff * clearDepth));
@@ -254,8 +255,11 @@ bool PbW2_PicaFinish(uint32_t clearColor, float clearDepth, uint16_t *result) {
     u32 dims = GX_BUFFER_DIM(WIDTH, TARGET_HEIGHT);
     u32 flags = GX_TRANSFER_FLIP_VERT(1) | GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8)
                 | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGBA8);
-    C3D_SyncDisplayTransfer(s_target->frameBuf.colorBuf, dims, s_pixels, dims, flags);
-    C3D_FrameEnd(0);
+    /* Vertex and texture writes are flushed where they are made. Flush
+     * only the command list here, then enqueue the readback after it. */
+    C3D_FrameSplit(GX_CMDLIST_FLUSH);
+    GX_DisplayTransfer(s_target->frameBuf.colorBuf, dims, s_pixels, dims, flags);
+    C3D_FrameEnd(GX_CMDLIST_FLUSH);
     /* Beginning the next frame waits for its predecessor, including the transfer. */
     if (!C3D_FrameBegin(0)) return false;
     C3D_FrameEnd(GX_CMDLIST_FLUSH);
@@ -266,11 +270,21 @@ bool PbW2_PicaFinish(uint32_t clearColor, float clearDepth, uint16_t *result) {
                     | ((rgba & 255) > 3 ? 0x8000 : 0);
     }
     static bool reported;
+    static u64 totalTicks;
+    static unsigned sampleCount;
+    totalTicks += svcGetSystemTick() - start;
+    ++sampleCount;
     if (!reported) {
         Log_Line("GPU", "first PICA200 frame (%u triangles, %u batches, %u uploads)", s_vertexCount / 3,
                  s_batchCount, s_uploads);
         reported = true;
     }
-    if (s_frame == 2 || s_frame % 120 == 0) Log_Line("GPU", "texture cache: %u hits, %u uploads", s_hits, s_uploads);
+    if (s_frame == 2 || sampleCount == 120) {
+        unsigned averageUs = totalTicks * 1000000ull / ((u64)sampleCount * SYSCLOCK_ARM11);
+        Log_Line("GPU", "texture cache: %u hits, %u uploads, frame and readback avg %u us (%u frames)",
+                 s_hits, s_uploads, averageUs, sampleCount);
+        totalTicks = 0;
+        sampleCount = 0;
+    }
     return true;
 }

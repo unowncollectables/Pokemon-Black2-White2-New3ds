@@ -518,16 +518,16 @@ static void MCSS_DrawQuad(MCSSSystem *system, MCSS *mcss, fx32 x, fx32 y, fx32 w
     // The packed texture coordinates are written again for the shadow's quad
     G3_Begin(GX_BEGIN_QUADS);
     texCoord0 = GX_ST(s, t);
-    reg_G3_TEXCOORD = texCoord0;
+    G3_WRITE_COMMAND(reg_G3_TEXCOORD, G3OP_TEXCOORD, texCoord0);
     G3_Vtx(0, 0, 0);
     texCoord1 = GX_ST(s, t + height);
-    reg_G3_TEXCOORD = texCoord1;
+    G3_WRITE_COMMAND(reg_G3_TEXCOORD, G3OP_TEXCOORD, texCoord1);
     G3_Vtx(0, -0x100, 0);
     texCoord2 = GX_ST(s + width, t + height);
-    reg_G3_TEXCOORD = texCoord2;
+    G3_WRITE_COMMAND(reg_G3_TEXCOORD, G3OP_TEXCOORD, texCoord2);
     G3_Vtx(0x100, -0x100, 0);
     texCoord3 = GX_ST(s + width, t);
-    reg_G3_TEXCOORD = texCoord3;
+    G3_WRITE_COMMAND(reg_G3_TEXCOORD, G3OP_TEXCOORD, texCoord3);
     G3_Vtx(0x100, 0, 0);
     G3_End();
     G3_MtxMode(GX_MTXMODE_PROJECTION);
@@ -544,13 +544,13 @@ static void MCSS_DrawQuad(MCSSSystem *system, MCSS *mcss, fx32 x, fx32 y, fx32 w
         G3_Translate(x, y, 0);
         G3_Scale(width, height, FX32_ONE);
         G3_Begin(GX_BEGIN_QUADS);
-        reg_G3_TEXCOORD = texCoord0;
+        G3_WRITE_COMMAND(reg_G3_TEXCOORD, G3OP_TEXCOORD, texCoord0);
         G3_Vtx(0, 0, 0);
-        reg_G3_TEXCOORD = texCoord1;
+        G3_WRITE_COMMAND(reg_G3_TEXCOORD, G3OP_TEXCOORD, texCoord1);
         G3_Vtx(0, -0x100, 0);
-        reg_G3_TEXCOORD = texCoord2;
+        G3_WRITE_COMMAND(reg_G3_TEXCOORD, G3OP_TEXCOORD, texCoord2);
         G3_Vtx(0x100, -0x100, 0);
-        reg_G3_TEXCOORD = texCoord3;
+        G3_WRITE_COMMAND(reg_G3_TEXCOORD, G3OP_TEXCOORD, texCoord3);
         G3_Vtx(0x100, 0, 0);
         G3_End();
     }

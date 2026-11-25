@@ -19,7 +19,7 @@ skip = {"FX_Div", "FX_Sqrt", "FX_Atan2Idx", "FX_Inv", "__memcpy", "MATH_QSort", 
 # re-add those either.
 SND_SILENT = {
     "NNS_SndArcGetBankInfo", "NNS_SndArcGetFileAddress", "NNS_SndArcGetFileSize",
-    "NNS_SndArcGetGroupInfo", "NNS_SndArcGetSeqInfo", "NNS_SndArcGetSeqParam",
+    "NNS_SndArcGetGroupInfo", "NNS_SndArcGetSeqInfo", "NNS_SndArcGetSeqParam", "NNS_SndArcSetFileAddress",
     "NNS_SndArcGetWaveArcInfo", "NNS_SndArcLoadGroup", "NNS_SndArcLoadSeq",
     "NNS_SndArcLoadSeqEx", "NNS_SndArcLoadWaveArc", "NNS_SndArcPlayerSetup",
     "NNS_SndArcPlayerStartSeq", "NNS_SndArcPlayerStartSeqEx",
@@ -44,6 +44,7 @@ DATA_OR_HOSTED = {
     "NNS_G2dGetUnpackedCharacterData", "NNS_G2dGetUnpackedMultiCellBank",
     "FS_SetDefaultDMA", "NNS_SndArcInit", "NNS_SndArcSetup",
     "RTCCache_Init", "RTCCache_Update",
+    "OS_WaitInterrupt",
 }
 cur = Path("n3ds/nitro/link_stubs.c")
 existing = set()

@@ -5,6 +5,7 @@
 #include "vram_host.h"
 #ifdef PBW2_GPU_GEOMETRY
 #include "g3_pica.h"
+#include "log.h"
 #endif
 
 #include <math.h>
@@ -84,6 +85,42 @@ static Texture s_gpuMaterials[GPU_TEXTURES_MAX];
 static unsigned s_gpuCount, s_gpuMaterialCount, s_lastMaterial;
 static u32 s_gpuSourceBanks;
 static bool s_gpuFrame;
+enum {
+    GPU_FALLBACK_EDGE = 1u << 0,
+    GPU_FALLBACK_FOG = 1u << 1,
+    GPU_FALLBACK_TOON = 1u << 2,
+    GPU_FALLBACK_SHADOW = 1u << 3,
+    GPU_FALLBACK_CAPACITY = 1u << 4,
+    GPU_FALLBACK_BATCH = 1u << 5,
+};
+
+static void report_gpu_fallback(unsigned reason, const char *name) {
+    static unsigned reported;
+    if (reported & reason) return;
+    reported |= reason;
+    Log_Line("GPU", "software geometry fallback: %s", name);
+}
+
+static void report_geometry_rate(bool gpu) {
+    extern u64 svcGetSystemTick(void);
+    const u64 ticksPerSecond = 268111856;
+    static u64 windowStart;
+    static unsigned frames, gpuFrames;
+    u64 now = svcGetSystemTick();
+    if (!windowStart) {
+        windowStart = now;
+        return;
+    }
+    gpuFrames += gpu;
+    ++frames;
+    u64 elapsed = now - windowStart;
+    if (elapsed >= 4 * ticksPerSecond) {
+        unsigned rate = (unsigned)(frames * ticksPerSecond * 10 / elapsed);
+        Log_Line("PERF", "GX swaps %u.%u fps (%u GPU, %u CPU)", rate / 10, rate % 10, gpuFrames, frames - gpuFrames);
+        windowStart = now;
+        frames = gpuFrames = 0;
+    }
+}
 #endif
 
 static void lock_display(void) {
@@ -164,7 +201,15 @@ static void start_frame(void) {
     }
     s_frameStarted = 1;
 #ifdef PBW2_GPU_GEOMETRY
-    s_gpuFrame = PbW2_PicaEnabled() && !s_edgeEnabled && !(s_fog.enabled && (s_clearColor & REG_G3X_CLEAR_COLOR_F_MASK));
+    s_gpuFrame = PbW2_PicaEnabled();
+    if (s_gpuFrame && s_edgeEnabled) {
+        report_gpu_fallback(GPU_FALLBACK_EDGE, "edge marking");
+        s_gpuFrame = false;
+    }
+    if (s_gpuFrame && s_fog.enabled && (s_clearColor & REG_G3X_CLEAR_COLOR_F_MASK)) {
+        report_gpu_fallback(GPU_FALLBACK_FOG, "fog");
+        s_gpuFrame = false;
+    }
     s_gpuCount = s_gpuMaterialCount = s_lastMaterial = 0;
     s_gpuSourceBanks = 0;
     if (s_gpuFrame) return;
@@ -241,7 +286,10 @@ static u16 weighted_color(u16 a, u16 b, unsigned wa, unsigned wb, unsigned shift
 }
 
 static int texture_coord(float coord, int size, unsigned repeat, unsigned flip) {
-    int n = (int)floorf(coord);
+    /* Interpolated coordinates stay within the signed GX texture range.
+     * Correct the truncate for negative fractional coordinates. */
+    int n = (int)coord;
+    n -= coord < n;
     if (!repeat) {
         if (n < 0) return 0;
         return n >= size ? size - 1 : n;
@@ -328,7 +376,7 @@ static float edge(Vertex a, Vertex b, float x, float y) {
 }
 
 static bool textured_decal(const Texture *texture, u32 polygon) {
-    return texture->format && (polygon & (1u << 4));
+    return texture->format && ((polygon >> 4) & 3) == GX_POLYGONMODE_DECAL;
 }
 
 static unsigned translucent_id(u32 polygon) {
@@ -449,10 +497,15 @@ static void raster_triangle(Vertex a, Vertex b, Vertex c, const Texture *texture
     int top = (int)fmaxf(0, floorf(fminf(a.y, fminf(b.y, c.y))));
     int bottom = (int)fminf(HEIGHT - 1, ceilf(fmaxf(a.y, fmaxf(b.y, c.y))));
     float invArea = 1.0f / area;
+    float ux = c.y - b.y, vx = a.y - c.y;
+    bool textured = texture->format != GX_TEXFMT_NONE;
+    bool constantW = a.w == 1.0f && b.w == 1.0f && c.w == 1.0f;
     for (int y = top; y <= bottom; ++y) {
+        float rowU = (c.x - b.x) * (y + 0.5f - b.y);
+        float rowV = (a.x - c.x) * (y + 0.5f - c.y);
         for (int x = left; x <= right; ++x) {
-            float u = edge(b, c, x + 0.5f, y + 0.5f) * invArea;
-            float v = edge(c, a, x + 0.5f, y + 0.5f) * invArea;
+            float u = (rowU - ux * (x + 0.5f - b.x)) * invArea;
+            float v = (rowV - vx * (x + 0.5f - c.x)) * invArea;
             float w = 1.0f - u - v;
             if (u < 0.0f || v < 0.0f || w < 0.0f) continue;
             unsigned pixel = y * WIDTH + x;
@@ -469,10 +522,13 @@ static void raster_triangle(Vertex a, Vertex b, Vertex c, const Texture *texture
                     continue;
             }
 
-            float reciprocal = 1.0f / (a.w * u + b.w * v + c.w * w);
-            unsigned ta;
-            u16 texel = sample_texture(texture, (a.s * u + b.s * v + c.s * w) * reciprocal,
-                                        (a.t * u + b.t * v + c.t * w) * reciprocal, &ta);
+            float reciprocal = constantW ? 1.0f : 1.0f / (a.w * u + b.w * v + c.w * w);
+            unsigned ta = 31;
+            u16 texel = 0x7fff;
+            if (textured) {
+                texel = sample_texture(texture, (a.s * u + b.s * v + c.s * w) * reciprocal,
+                                       (a.t * u + b.t * v + c.t * w) * reciprocal, &ta);
+            }
             unsigned alpha = decal ? polygonAlpha : ((ta + 1) * (polygonAlpha + 1) - 1) >> 5;
             if (alpha <= s_alphaRef) continue;
             if (alpha < 31 && s_drawing.translucentId[pixel] == translucentId) continue;
@@ -483,15 +539,17 @@ static void raster_triangle(Vertex a, Vertex b, Vertex c, const Texture *texture
             unsigned bl = (unsigned)((a.b * u + b.b * v + c.b * w) * reciprocal + 0.5f);
             u16 color;
             if (toon) {
-                color = toon_color(texel, red, texture->format != 0);
+                color = toon_color(texel, red, textured);
             } else if (decal) {
                 color = decal_channel(texel & 31, r, ta)
                       | decal_channel((texel >> 5) & 31, g, ta) << 5
                       | decal_channel((texel >> 10) & 31, bl, ta) << 10;
-            } else {
+            } else if (textured) {
                 color = ((texel & 31) * r + 15) / 31
                       | ((((texel >> 5) & 31) * g + 15) / 31) << 5
                       | ((((texel >> 10) & 31) * bl + 15) / 31) << 10;
+            } else {
+                color = r | (g << 5) | (bl << 10);
             }
             u16 below = s_drawing.color[pixel];
             if (alpha < 31 && (below & 0x8000)) color = weighted_color(color, below, alpha + 1, 31 - alpha, 5);
@@ -708,6 +766,9 @@ static void draw_triangle(Vertex a, Vertex b, Vertex c, const Texture *texture) 
         unsigned mode = (s_polygon >> 4) & 3;
         if (mode == GX_POLYGONMODE_TOON || mode == GX_POLYGONMODE_SHADOW ||
             (s_fog.enabled && (s_polygon & GX_POLYGON_ATTR_MISC_FOG))) {
+            if (mode == GX_POLYGONMODE_TOON) report_gpu_fallback(GPU_FALLBACK_TOON, "toon or highlight shading");
+            else if (mode == GX_POLYGONMODE_SHADOW) report_gpu_fallback(GPU_FALLBACK_SHADOW, "shadow polygons");
+            else report_gpu_fallback(GPU_FALLBACK_FOG, "fog");
             replay_on_cpu();
             raster_triangle(a, b, c, texture, s_polygon);
             return;
@@ -722,6 +783,7 @@ static void draw_triangle(Vertex a, Vertex b, Vertex c, const Texture *texture) 
             s_gpuTriangles[i].polygon = s_polygon;
             return;
         }
+        report_gpu_fallback(GPU_FALLBACK_CAPACITY, "geometry batch capacity");
         replay_on_cpu();
     }
 #endif
@@ -958,13 +1020,17 @@ void PbW2_G3RasterCommand(u32 op, const u32 *p, const MtxFx44 *clip,
     case 0x50:
         start_frame();
 #ifdef PBW2_GPU_GEOMETRY
-        if (s_gpuFrame && !render_with_pica()) replay_on_cpu();
+        if (s_gpuFrame && !render_with_pica()) {
+            if (s_gpuCount) report_gpu_fallback(GPU_FALLBACK_BATCH, "batch requires software rendering");
+            replay_on_cpu();
+        }
         if (!s_gpuFrame) {
 #endif
             apply_edge_colors();
             apply_fog((p[0] & (GX_BUFFERMODE_W << 1)) != 0);
 #ifdef PBW2_GPU_GEOMETRY
         }
+        report_geometry_rate(s_gpuFrame);
 #endif
         lock_display();
         memcpy(s_display, s_drawing.color, sizeof s_display);

@@ -702,6 +702,21 @@ static const char *checks(void) {
     PbW2_G3RasterCapture(pixels);
     if (pixels[center] != (0x8000 | GX_RGB(31, 0, 0))) return "shadow mask requires depth failure";
 
+    reg_GX_VRAMCNT_A = GX_VRAMCNT(3, 0);
+    memset(tiles, 0, 32);
+    PbW2_VramNoteLcdcWrite(HW_LCDC_VRAM_A, 32);
+    cmd(G3OP_POLYGON_ATTR, opaque | (1u << 24));
+    triangle(GX_RGB(31, 0, 0), 0);
+    cmd(G3OP_POLYGON_ATTR, mask);
+    triangle(0, 2048);
+    cmd(G3OP_TEXIMAGE_PARAM, (GX_TEXFMT_PLTT16 << 26) | (1u << 29));
+    cmd(G3OP_POLYGON_ATTR, shadow | (2u << 24));
+    triangle(0, -2048);
+    cmd(0x50, 0);
+    PbW2_G3RasterCapture(pixels);
+    if (pixels[center] != (0x8000 | GX_RGB(31, 0, 0))) return "shadow texture index zero remains transparent";
+    cmd(G3OP_TEXIMAGE_PARAM, 0);
+
     reg_G3X_DISP3DCNT = REG_G3X_DISP3DCNT_EME_MASK;
     PBW2_VU16(0x04000332) = GX_RGB(0, 31, 0);
     cmd(G3OP_POLYGON_ATTR, opaque | (8u << 24));
@@ -718,6 +733,63 @@ static const char *checks(void) {
             (clearId == 0 ? marked == 0 : marked != 0))
             return "edge marking uses the nearer polygon ID and leaves the interior untouched";
     }
+
+    /* A partially visible tile crosses both screen-block boundaries. */
+    reg_GX_DISPCNT = (1u << 16) | 0x100;
+    PBW2_VU16(0x04000050) = 0;
+    PBW2_VU16(0x04000008) = (3u << 14) | (2u << REG_G2_BG0CNT_SCREENBASE_SHIFT);
+    PBW2_VU16(0x04000010) = 254;
+    PBW2_VU16(0x04000012) = 255;
+    memset(bg0Map, 0, 4 * 1024 * sizeof(*bg0Map));
+    bg0Map[31 * 32 + 31] = 4 | (2u << 12) | (1u << 10) | (1u << 11);
+    bg0Map[1024 + 31 * 32] = bg0Map[31 * 32 + 31];
+    bg0Map[3072] = 4 | (2u << 12);
+    bgPalette[0] = 0;
+    bgPalette[33] = 0x03e0;
+    memset(bgVram + 4 * 32, 0, 32);
+    bgVram[4 * 32 + 3] = 0x10;
+    bgVram[4 * 32] = 0x01;
+    PbW2_ComposeScreens(pixels, NULL);
+    if (pixels[0] || pixels[1] != 0x07c0 || pixels[2] != 0x07c0 || pixels[3] || pixels[258] != 0x07c0)
+        return "scrolled 4bpp text tiles preserve flips, palette bank and transparency";
+
+    PBW2_VU16(0x04000008) |= 0x80;
+    bgPalette[200] = 0x7c00;
+    memset(bgVram + 4 * 64, 0, 64);
+    bgVram[4 * 64] = bgVram[4 * 64 + 7] = 200;
+    PbW2_ComposeScreens(pixels, NULL);
+    PBW2_VU16(0x04000010) = PBW2_VU16(0x04000012) = 0;
+    if (pixels[0] || pixels[1] != 0x001f || pixels[2] != 0x001f || pixels[3] || pixels[258] != 0x001f)
+        return "scrolled 8bpp text tiles use the full palette across screen blocks";
+
+    PbW2_G3InterceptInit();
+    reg_GX_VRAMCNT_A = GX_VRAMCNT(3, 0);
+    reg_GX_VRAMCNT_E = GX_VRAMCNT(3, 0);
+    reg_G3X_DISP3DCNT = 0;
+    reg_G3X_CLEAR_COLOR = 0;
+    reg_G3X_CLEAR_DEPTH = 0x7fff;
+    palette[1] = GX_RGB(0, 31, 0);
+    for (unsigned y = 0; y < 8; ++y) {
+        memset(tiles + y * 4, 0, 2);
+        memset(tiles + y * 4 + 2, 0x11, 2);
+    }
+    PbW2_VramNoteLcdcWrite(HW_LCDC_VRAM_A, 32);
+    PbW2_VramNoteLcdcWrite(HW_LCDC_VRAM_E, 4);
+    G3_TexImageParam(GX_TEXFMT_PLTT16, GX_TEXGEN_TEXCOORD, 0, 0, 0, 0, 1, 0);
+    G3_Begin(GX_BEGIN_QUADS);
+    G3_WRITE_COMMAND(reg_G3_TEXCOORD, G3OP_TEXCOORD, GX_ST(0, 0));
+    G3_Vtx(-FX32_ONE, FX32_ONE, 0);
+    G3_WRITE_COMMAND(reg_G3_TEXCOORD, G3OP_TEXCOORD, GX_ST(0, 8 * FX32_ONE));
+    G3_Vtx(-FX32_ONE, -FX32_ONE, 0);
+    G3_WRITE_COMMAND(reg_G3_TEXCOORD, G3OP_TEXCOORD, GX_ST(8 * FX32_ONE, 8 * FX32_ONE));
+    G3_Vtx(FX32_ONE, -FX32_ONE, 0);
+    G3_WRITE_COMMAND(reg_G3_TEXCOORD, G3OP_TEXCOORD, GX_ST(8 * FX32_ONE, 0));
+    G3_Vtx(FX32_ONE, FX32_ONE, 0);
+    G3_End();
+    cmd(0x50, 0);
+    PbW2_G3RasterCapture(pixels);
+    if (pixels[96 * 256 + 64] || pixels[96 * 256 + 192] != (0x8000 | GX_RGB(0, 31, 0)))
+        return "packed sprite coordinates sample outside transparent texel zero";
     return NULL;
 }
 /* The precision and geometry effect cases also exercise software fallback. */
@@ -745,7 +817,7 @@ int main(void) {
 
         PbW2_PicaSetEnabled(true);
         failure = PbW2_PicaEnabled() ? checks() : "GPU initialization";
-        if (!failure && s_gpuFrames != 31)
+        if (!failure && s_gpuFrames != 32)
             failure = "unexpected GPU frame count";
         fprintf(f, "PICA200 %s%s (%u GPU frames)\n", failure ? "FAIL " : "PASS", failure ? failure : "", s_gpuFrames);
         fclose(f);

@@ -50,24 +50,11 @@ const NNSSndArcBankInfo *NNS_SndArcGetBankInfo(int bankNo) {
     return bank ? bank : &sDummyBankInfo;
 }
 
-void *NNS_SndArcGetFileAddress(u32 fileId) {
-    (void)fileId;
-    PBW2_STUB_LOG("snd", "NNS_SndArcGetFileAddress (silent: NULL)");
-    Log_Line("AUDIO", "GetFileAddress fileId=%lu", (unsigned long)fileId);
-    return NULL;
-}
-
 u32 NNS_SndArcGetFileSize(u32 fileId) {
     u32 size = SndArc_GetFileSize(fileId);
     PBW2_STUB_LOG("snd", "NNS_SndArcGetFileSize (real)");
     Log_Line("AUDIO", "GetFileSize fileId=%lu size=%lu", (unsigned long)fileId, (unsigned long)size);
     return size;
-}
-
-const NNSSndArcGroupInfo *NNS_SndArcGetGroupInfo(int groupNo) {
-    (void)groupNo;
-    PBW2_STUB_LOG("snd", "NNS_SndArcGetGroupInfo (silent: NULL)");
-    return NULL;
 }
 
 const NNSSndArcSeqInfo *NNS_SndArcGetSeqInfo(int seqNo) {
@@ -94,39 +81,6 @@ const NNSSndArcWaveArcInfo *NNS_SndArcGetWaveArcInfo(int waveArcNo) {
     sWaveArcInfo.fileId = fileId;
     sWaveArcInfo.flags = 0;
     return &sWaveArcInfo;
-}
-
-BOOL NNS_SndArcLoadGroup(int groupNo, NNSSndHeapHandle heap) {
-    (void)groupNo;
-    (void)heap;
-    PBW2_STUB_LOG("snd", "NNS_SndArcLoadGroup (silent: TRUE)");
-    Log_Line("AUDIO", "LoadGroup group=%d", groupNo);
-    return TRUE;
-}
-
-BOOL NNS_SndArcLoadSeq(int seqNo, NNSSndHeapHandle heap) {
-    (void)seqNo;
-    (void)heap;
-    PBW2_STUB_LOG("snd", "NNS_SndArcLoadSeq (silent: TRUE)");
-    Log_Line("AUDIO", "LoadSeq seq=%d", seqNo);
-    return TRUE;
-}
-
-BOOL NNS_SndArcLoadSeqEx(int seqNo, u32 loadFlag, NNSSndHeapHandle heap) {
-    (void)seqNo;
-    (void)loadFlag;
-    (void)heap;
-    PBW2_STUB_LOG("snd", "NNS_SndArcLoadSeqEx (silent: TRUE)");
-    Log_Line("AUDIO", "LoadSeqEx seq=%d flag=%lu", seqNo, (unsigned long)loadFlag);
-    return TRUE;
-}
-
-BOOL NNS_SndArcLoadWaveArc(int waveArcNo, NNSSndHeapHandle heap) {
-    (void)waveArcNo;
-    (void)heap;
-    PBW2_STUB_LOG("snd", "NNS_SndArcLoadWaveArc (silent: TRUE)");
-    Log_Line("AUDIO", "LoadWaveArc waveArc=%d", waveArcNo);
-    return TRUE;
 }
 
 BOOL NNS_SndArcPlayerSetup(NNSSndHeapHandle heap) {

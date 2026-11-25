@@ -137,6 +137,26 @@ static void Shutdown(void) {
     gfxExit();
 }
 
+#if defined(PBW2_LINK_GAME)
+static void report_present_time(u64 start, u64 flushStart, u64 finish) {
+    static u64 windowStart;
+    static u64 drawTicks, flushTicks;
+    static unsigned frames;
+    if (!frames) windowStart = start;
+    drawTicks += flushStart - start;
+    flushTicks += finish - flushStart;
+    if (++frames == 120) {
+        u64 elapsed = finish - windowStart;
+        unsigned fps = elapsed ? frames * (u64)SYSCLOCK_ARM11 / elapsed : 0;
+        unsigned drawUs = drawTicks * 1000000ull / ((u64)frames * SYSCLOCK_ARM11);
+        unsigned flushUs = flushTicks * 1000000ull / ((u64)frames * SYSCLOCK_ARM11);
+        Log_Line("PERF", "LCD %u fps, update and compose avg %u us, flush and swap avg %u us", fps, drawUs, flushUs);
+        frames = 0;
+        drawTicks = flushTicks = 0;
+    }
+}
+#endif
+
 int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
@@ -209,20 +229,14 @@ int main(int argc, char **argv) {
 #endif
 
     while (aptMainLoop()) {
+#if defined(PBW2_LINK_GAME)
+        u64 frameStart = svcGetSystemTick();
+#endif
         Input_Scan();
         u32 held = Input_GameHeld();
 #if defined(PBW2_LINK_GAME)
         UpdateTouch(held);
 #endif
-        /* Emulate the DS VCOUNT register. It is shadowed in pbw2_io and
-         * nothing ever wrote it, so GX_GetVCount() always returned 0.
-         * The MCSS palette-load task only runs on scanlines 192-200
-         * (the first VBlank lines), so its load never completed and the
-         * MCSS shadow palette file leaked into the intro heap — and
-         * GFL_HeapDelete then exited the game at the intro/name-entry
-         * transition. VBlank TCBs run at the start of the frame, i.e.
-         * line 192 on a real DS, so report that here. */
-        PBW2_VU16(0x04000006) = 192;
         NitroHost_Frame(Pad_FromHid(held));
 #if !defined(PBW2_LINK_GAME)
         if (Input_Quit()) {
@@ -253,10 +267,14 @@ int main(int argc, char **argv) {
         GxShim_Present(flags);
 #if defined(PBW2_LINK_GAME)
         if ((flags & PBW2_SCREEN_BOTTOM) && Settings_Open()) Settings_Draw();
+        u64 flushStart = svcGetSystemTick();
 #endif
 
         gfxFlushBuffers();
         gfxSwapBuffers();
+#if defined(PBW2_LINK_GAME)
+        if (PbW2_GameHasPresented()) report_present_time(frameStart, flushStart, svcGetSystemTick());
+#endif
         gspWaitForVBlank();
     }
 

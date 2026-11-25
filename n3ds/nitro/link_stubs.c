@@ -65,7 +65,6 @@ void MI_WaitNDma(void) { PBW2_STUB_LOG("link", "MI_WaitNDma"); }
  * in mic_stub.c and returns MIC_RESULT_FATAL_ERROR; MIC_Init is a no-op. */
 void MIC_Init(void) { PBW2_STUB_LOG("link", "MIC_Init"); }
 void NCFG_ReadConfigEx(void) { PBW2_STUB_LOG("link", "NCFG_ReadConfigEx"); }
-void NNS_SndArcSetFileAddress(void) { PBW2_STUB_LOG("link", "NNS_SndArcSetFileAddress"); }
 void NNS_SndArcSetLoadBlockSize(void) { PBW2_STUB_LOG("link", "NNS_SndArcSetLoadBlockSize"); }
 void NNS_SndHandleInit(void) { PBW2_STUB_LOG("link", "NNS_SndHandleInit"); }
 void NNS_SndHandleReleaseSeq(void) { PBW2_STUB_LOG("link", "NNS_SndHandleReleaseSeq"); }
@@ -96,7 +95,6 @@ void OS_DisableIrqMask(void) { PBW2_STUB_LOG("link", "OS_DisableIrqMask"); }
 void OS_GetParentalControlInfoPtr(void) { PBW2_STUB_LOG("link", "OS_GetParentalControlInfoPtr"); }
 void OS_ResetRequestIrqMask(void) { PBW2_STUB_LOG("link", "OS_ResetRequestIrqMask"); }
 void OS_SetIrqMask(void) { PBW2_STUB_LOG("link", "OS_SetIrqMask"); }
-void OS_WaitInterrupt(void) { PBW2_STUB_LOG("link", "OS_WaitInterrupt"); }
 void OSi_EnterDmaCallback(void) { PBW2_STUB_LOG("link", "OSi_EnterDmaCallback"); }
 void OSi_UnlockVram(void) { PBW2_STUB_LOG("link", "OSi_UnlockVram"); }
 void SNDEXi_Init(void) { PBW2_STUB_LOG("link", "SNDEXi_Init"); }

@@ -44,8 +44,9 @@ void NitroHost_Frame(uint32_t pad_held) {
     s_pad = pad_held;
 #if defined(PBW2_LINK_GAME)
     PbW2_PadHostUpdate((u32)pad_held);
-#endif
+#else
     pbw2_vblank();
+#endif
 }
 
 #if defined(PBW2_LINK_GAME)
