@@ -91,11 +91,6 @@ void NNS_SndPlayerStopSeq(void) { PBW2_STUB_LOG("link", "NNS_SndPlayerStopSeq");
 void NNS_SndSetMasterVolume(void) { PBW2_STUB_LOG("link", "NNS_SndSetMasterVolume"); }
 void NNS_SndSetMonoFlag(void) { PBW2_STUB_LOG("link", "NNS_SndSetMonoFlag"); }
 void NNS_SndUpdateDriverInfo(void) { PBW2_STUB_LOG("link", "NNS_SndUpdateDriverInfo"); }
-void NNS_SndWaveOutFreeChannel(void) { PBW2_STUB_LOG("link", "NNS_SndWaveOutFreeChannel"); }
-void NNS_SndWaveOutSetSpeed(void) { PBW2_STUB_LOG("link", "NNS_SndWaveOutSetSpeed"); }
-void NNS_SndWaveOutSetVolume(void) { PBW2_STUB_LOG("link", "NNS_SndWaveOutSetVolume"); }
-void NNS_SndWaveOutStop(void) { PBW2_STUB_LOG("link", "NNS_SndWaveOutStop"); }
-void NNS_SndWaveOutWaitForChannelStop(void) { PBW2_STUB_LOG("link", "NNS_SndWaveOutWaitForChannelStop"); }
 void OS_DestroyThread(void) { PBW2_STUB_LOG("link", "OS_DestroyThread"); }
 void OS_DisableIrqMask(void) { PBW2_STUB_LOG("link", "OS_DisableIrqMask"); }
 void OS_GetParentalControlInfoPtr(void) { PBW2_STUB_LOG("link", "OS_GetParentalControlInfoPtr"); }

@@ -97,6 +97,77 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
   `sdmc:/3ds/dspfirm.cdc`. The title cry, effects, and field music still
   need wave and sequence playback.
 
+### Audio follow-up — LLE unlock, title stream verified, wave player built (Nov 24–25, Ghost)
+
+Corrections to the section above, all verified in Azahar on this VM:
+
+- "Azahar captures stereo output at 32,728 Hz" did **not** reproduce under
+  HLE: `ndspInit` fails (`0xd880a7fa`) and the run stays at
+  `audio_samples: 0`. A minimal NDSP probe homebrew (textbook `ndspInit`
+  + 440 Hz sine) fails identically, so this is the emulator, not the
+  game. No ARM11 stream fixture exists anywhere in the repo (grep: zero
+  hits), so that claim cannot be traced to an artifact on disk.
+- "Silence after Start fades the stream" did **not** reproduce either:
+  samples kept climbing after the START press (2.99M → 3.13M → 3.62M).
+  The title music plays through title → start menu.
+- What unlocks audio is **LLE DSP with real firmware**: the session
+  creation check demands `sdmc/3ds/dspfirm.cdc`. It fires before any
+  prestage can happen, so the working setup is a persistent Lotus card
+  `b2w2-dsp` (driver `setup-dsp-card.py` in `~/workspace/toolchain/lotus/`,
+  firmware at `cards/b2w2-dsp/sdmc/3ds/dspfirm.cdc`) and runs pass
+  `--audio-emulation 1 --card b2w2-dsp` explicitly; the global stays at 0
+  (HLE default). Correct prestage path is `--prestage
+  ~/workspace/pbw2-sd/3ds` (the `…/pbw2-sd` form lands the file one level
+  too deep). The firmware is Nate's own DSP1 dump — it stays in the
+  workspace and the Lotus card only, **never in the repo**.
+- Verified sounding: stream 0 = `STRM_TITLE`, 32,728 Hz, 3,619,310
+  samples over a 120 s title run, 0 dropped. A 620 s playthrough (Test B)
+  reached Aspertia City mid-dialogue with Bianca, 17,957,086 samples, 0
+  dropped, zero exceptions — and the title stream is the **only** audio
+  that sounds in the whole run.
+- Named inventory from the SDAT SYMB block (Test B, 167 AUDIO log
+  lines): BGM sequences requested but silent — SEQ 1171
+  `SEQ_BGM_GF_LOGO`, SEQ 1004 `SEQ_BGM_TITLE01`, SEQ 1327 `SEQ_ME_CALL`,
+  SEQ 1104 `SEQ_BGM_SW_C_12`, SEQ 1102 `SEQ_BGM_SW_DEMO_OPENING`, SEQ
+  1009 `SEQ_BGM_STARTING2` (SEQ 1008 `SEQ_BGM_STARTING` loaded, never
+  started). SE sequences requested but silent — SEQ 1351
+  `SEQ_SE_MESSAGE` x43 (the dialogue text blip, the dominant SE), SEQ
+  1356 `SEQ_SE_DECIDE1` x9, SEQ 1357 `SEQ_SE_DECIDE2` x3, SEQ 1352
+  `SEQ_SE_SELECT1` x2, SEQ 1387 `SEQ_SE_KON` x2, SEQ 1383 `SEQ_SE_BOWA2`
+  x2, SEQ 1382 `SEQ_SE_NAGERU` x2, SEQ 1365 `SEQ_SE_OPEN2` x1, SEQ 2036
+  `SEQ_SE_TOUJOU_INTRO` x1, SEQ 1656 `SEQ_SE_FLD_07` x1. Waves
+  attempted: WaveArc 687 `WAVE_ARC_PV653_BLACK` (title cry, Black
+  Kyurem), WaveArc 573 `WAVE_ARC_PMWB_534` (Cinccino cry in the opening).
+- Wave player is built (`n3ds/nitro/snd_arc.c` — real SDAT INFO/FAT
+  parsing; `n3ds/nitro/wave_out.c` — `NNS_SndWaveOut*` on NDSP, DS ch N
+  → NDSP ch N+1, stream owns 0, PCM8/PCM16 one-shots, volume 0..127 +
+  pan 0..127). The full chain runs end to end: SDAT parses (2290 wave
+  arcs, 5197 files), waveArc 687 → fileId 3936, 21,652 bytes read,
+  `WaveOutStart` PCM8 21,576 samples @ 11,025 Hz, NDSP ch 16, buffer
+  reaches DONE, menu reached clean, zero Azahar errors. **But the cry's
+  audible duration is UNVERIFIED**: the buffer completes in ~198 ms
+  instead of the expected ~1,956 ms, and `samplePos` reads 0 once the
+  buffer is DONE, so how much audio actually played cannot be told from
+  the log. Concrete next step: use the `audio_capture` lotus_debug
+  operation on a live session to measure the cry's duration/pitch in
+  the real waveform.
+- Honest-failure rules the player follows: `Start` FALSE / `IsPlaying`
+  FALSE when NDSP is down; `Stop` / `WaitForChannelStop` / `FreeChannel`
+  tolerate NULL and never-started handles (the cry release path fires
+  even when nothing started). `snd_silent.c` keeps only the still-silent
+  parts (sequences + `GetSeqInfo`/`GetBankInfo`/`GetSeqParam` dummies);
+  `GetWaveArcInfo` / `GetFileSize` / `ReadFile` are real now. The five
+  void WaveOut stubs left `link_stubs.c`; the regen script's skip set
+  covers all eight WaveOut symbols.
+- **Next job: the sequence player.** It is the whole of BGM + every SE.
+  Open question unchanged: both `SEQ_BGM_TITLE01` and `STRM_TITLE` are
+  requested at the title and only the stream sounds — whether the
+  sequence is the same melody layered, a fallback, or something else
+  still needs the sequence player to answer. ALSA capture is a dead end
+  for Lotus sessions (the worker forces the bounded sink); verify sound
+  via session telemetry (`audio_samples > 0`, `audio_rate ≈ 32728`,
+  `audio_hash_fnv1a64` moving off the empty basis) or `audio_capture`.
+
 ### Muse handoff — Nov 24, 2026
 
 Nate handed this job to GPT/Codex on a big model, working from GitHub main.

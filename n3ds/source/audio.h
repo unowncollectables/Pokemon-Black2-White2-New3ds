@@ -9,6 +9,7 @@ void Audio_Start(void);
 void Audio_NdspExit(void);
 
 #ifdef PBW2_LINK_GAME
+bool Audio_IsNdspReady(void);
 bool Audio_StreamStart(const char *archive, unsigned stream, unsigned offsetMs);
 void Audio_StreamStop(unsigned fadeFrames);
 unsigned Audio_StreamPosition(void);

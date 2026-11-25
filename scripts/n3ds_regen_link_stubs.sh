@@ -14,7 +14,9 @@ skip = {"FX_Div", "FX_Sqrt", "FX_Atan2Idx", "FX_Inv", "__memcpy", "MATH_QSort", 
 # Value-returning sound stubs live in n3ds/nitro/snd_silent.c (silent
 # backend: honest counts/returns, not garbage r0). Never re-add them
 # here as void: a void CountPlaying stub reports a player active
-# forever and hangs the intro in POKEMON_APPEAR.
+# forever and hangs the intro in POKEMON_APPEAR. The WaveOut channel
+# functions live in n3ds/nitro/wave_out.c (real NDSP player) — never
+# re-add those either.
 SND_SILENT = {
     "NNS_SndArcGetBankInfo", "NNS_SndArcGetFileAddress", "NNS_SndArcGetFileSize",
     "NNS_SndArcGetGroupInfo", "NNS_SndArcGetSeqInfo", "NNS_SndArcGetSeqParam",
@@ -24,6 +26,8 @@ SND_SILENT = {
     "NNS_SndArcStrmGetCurrentPlayingPos", "NNS_SndPlayerCountPlayingSeqByPlayerNo",
     "NNS_SndPlayerCountPlayingSeqBySeqNo", "NNS_SndPlayerGetTick",
     "NNS_SndWaveOutAllocChannel", "NNS_SndWaveOutIsPlaying", "NNS_SndWaveOutStart",
+    "NNS_SndWaveOutFreeChannel", "NNS_SndWaveOutStop", "NNS_SndWaveOutWaitForChannelStop",
+    "NNS_SndWaveOutSetVolume", "NNS_SndWaveOutSetSpeed",
     "NNS_SndArcReadFile", "NNS_SndPlayerReadDriverTrackInfo",
 }
 DATA_OR_HOSTED = {

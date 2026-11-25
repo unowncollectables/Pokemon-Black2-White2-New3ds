@@ -172,6 +172,14 @@ static void Audio_Thread(void *arg) {
 
 #endif
 
+bool Audio_IsNdspReady(void) {
+#ifdef PBW2_LINK_GAME
+    return s_ndsp;
+#else
+    return false;
+#endif
+}
+
 void Audio_Start(void) {
 #ifdef PBW2_LINK_GAME
     Result result = ndspInit();

@@ -2,6 +2,7 @@
 #include "audio.h"
 #include "nitro/fs.h"
 #include "nnsys/snd.h"
+#include "snd_arc.h"
 #include "stub_log.h"
 
 static const char *s_archive;
@@ -16,6 +17,7 @@ u32 FS_SetDefaultDMA(u32 dma) {
 BOOL NNS_SndArcInit(NNSSndArc *arc, const char *filePath, NNSSndHeapHandle heap, BOOL symbolLoadFlag) {
     (void)arc;
     s_archive = filePath;
+    SndArc_SetPath(filePath);
     (void)heap;
     (void)symbolLoadFlag;
     PBW2_STUB_LOG("SND", "SndArcInit");

@@ -1,11 +1,23 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "types.h"
 #include "nnsys/snd.h"
+#include "snd_arc.h"
 #include "stub_log.h"
 
-/* Silent sound backend: the port has no ARM7/NDSP player yet (audio is
- * silent by design this milestone), so the NNS_Snd* queries must answer
- * honestly instead of returning garbage.
+/* Silent sound backend for the parts of NNS_Snd that have no host
+ * player yet (sequences: BGM and all SEs), plus the archive-info
+ * getters the game dereferences. The contract for those is "accepted,
+ * finishes instantly, nothing sounds": loads and starts succeed (the
+ * game proceeds exactly as it would with sound), counts/ticks/
+ * positions are 0, and the archive-info getters return static dummies
+ * whose callers dereference them (playerNo 1, so the player index is
+ * 0 and in range).
+ *
+ * Waves are NOT silent any more: GetWaveArcInfo / GetFileSize /
+ * ReadFile read the staged SDAT for real (snd_arc.c), and the
+ * NNS_SndWaveOut* entry points live in wave_out.c on the NDSP path —
+ * cries and the mic play. See the original note below for why this
+ * file exists at all.
  *
  * Why this file exists: link_stubs.c defines every stub as `void`, but
  * several of these functions return a value in the real API. A void
@@ -18,40 +30,41 @@
  * dereferenced it (the unmapped reads at PC 0x001CEE18 in the Azahar
  * log), indexing g_SndPlayerStates out of bounds.
  *
- * The contract here is "accepted, finishes instantly, nothing sounds":
- * loads and starts succeed (the game proceeds exactly as it would with
- * sound), counts/ticks/positions are 0, no wave channel exists, and the
- * archive-info getters return static dummies whose callers dereference
- * them (playerNo 1, so the player index is 0 and in range; fileId 0,
- * so GetFileAddress(NULL) still reports "not loaded").
- *
  * Known limit: anything that waits for audio to be PLAYING (e.g. the
  * intro's WAIT_BGM_PLAYING command, unused by every script so far)
  * will wait forever against a silent backend. That needs the real
  * player, not a different stub value.
+ *
+ * The event entry points also Log_Line("AUDIO", ...) with their
+ * arguments on EVERY call (seq/waveArc/file ids, wave params), so a
+ * playthrough log inventories exactly which sounds the game requests.
+ * The polled queries (counts, ticks, IsPlaying) stay first-call-only
+ * to avoid flooding the log.
  */
 
 static const NNSSndSeqParam sDummySeqParam = { .playerNo = 1 };
 static const NNSSndArcSeqInfo sDummySeqInfo = { .param = { .playerNo = 1 } };
 static const NNSSndArcBankInfo sDummyBankInfo = { 0 };
-static const NNSSndArcWaveArcInfo sDummyWaveArcInfo = { 0 };
 
 const NNSSndArcBankInfo *NNS_SndArcGetBankInfo(int bankNo) {
     (void)bankNo;
     PBW2_STUB_LOG("snd", "NNS_SndArcGetBankInfo (silent: dummy)");
+    Log_Line("AUDIO", "GetBankInfo bank=%d", bankNo);
     return &sDummyBankInfo;
 }
 
 void *NNS_SndArcGetFileAddress(u32 fileId) {
     (void)fileId;
     PBW2_STUB_LOG("snd", "NNS_SndArcGetFileAddress (silent: NULL)");
+    Log_Line("AUDIO", "GetFileAddress fileId=%lu", (unsigned long)fileId);
     return NULL;
 }
 
 u32 NNS_SndArcGetFileSize(u32 fileId) {
-    (void)fileId;
-    PBW2_STUB_LOG("snd", "NNS_SndArcGetFileSize (silent: 0)");
-    return 0;
+    u32 size = SndArc_GetFileSize(fileId);
+    PBW2_STUB_LOG("snd", "NNS_SndArcGetFileSize (real)");
+    Log_Line("AUDIO", "GetFileSize fileId=%lu size=%lu", (unsigned long)fileId, (unsigned long)size);
+    return size;
 }
 
 const NNSSndArcGroupInfo *NNS_SndArcGetGroupInfo(int groupNo) {
@@ -63,25 +76,37 @@ const NNSSndArcGroupInfo *NNS_SndArcGetGroupInfo(int groupNo) {
 const NNSSndArcSeqInfo *NNS_SndArcGetSeqInfo(int seqNo) {
     (void)seqNo;
     PBW2_STUB_LOG("snd", "NNS_SndArcGetSeqInfo (silent: dummy)");
+    Log_Line("AUDIO", "GetSeqInfo seq=%d", seqNo);
     return &sDummySeqInfo;
 }
 
 const NNSSndSeqParam *NNS_SndArcGetSeqParam(int seqNo) {
     (void)seqNo;
     PBW2_STUB_LOG("snd", "NNS_SndArcGetSeqParam (silent: dummy playerNo 1)");
+    Log_Line("AUDIO", "GetSeqParam seq=%d", seqNo);
     return &sDummySeqParam;
 }
 
+/* The wave-arc info is real now (snd_arc.c reads the SDAT INFO
+ * table). A wave arc with no file returns NULL, and the caller
+ * (PokeVoice_LoadWaveArc) treats that as a failed load. */
+static NNSSndArcWaveArcInfo sWaveArcInfo;
+
 const NNSSndArcWaveArcInfo *NNS_SndArcGetWaveArcInfo(int waveArcNo) {
-    (void)waveArcNo;
-    PBW2_STUB_LOG("snd", "NNS_SndArcGetWaveArcInfo (silent: dummy)");
-    return &sDummyWaveArcInfo;
+    u32 fileId = SndArc_GetWaveArcFileId(waveArcNo);
+    PBW2_STUB_LOG("snd", "NNS_SndArcGetWaveArcInfo (real)");
+    Log_Line("AUDIO", "GetWaveArcInfo waveArc=%d fileId=%lu", waveArcNo, (unsigned long)fileId);
+    if (fileId == 0xFFFFFFFFu) return NULL;
+    sWaveArcInfo.fileId = fileId;
+    sWaveArcInfo.flags = 0;
+    return &sWaveArcInfo;
 }
 
 BOOL NNS_SndArcLoadGroup(int groupNo, NNSSndHeapHandle heap) {
     (void)groupNo;
     (void)heap;
     PBW2_STUB_LOG("snd", "NNS_SndArcLoadGroup (silent: TRUE)");
+    Log_Line("AUDIO", "LoadGroup group=%d", groupNo);
     return TRUE;
 }
 
@@ -89,6 +114,7 @@ BOOL NNS_SndArcLoadSeq(int seqNo, NNSSndHeapHandle heap) {
     (void)seqNo;
     (void)heap;
     PBW2_STUB_LOG("snd", "NNS_SndArcLoadSeq (silent: TRUE)");
+    Log_Line("AUDIO", "LoadSeq seq=%d", seqNo);
     return TRUE;
 }
 
@@ -97,6 +123,7 @@ BOOL NNS_SndArcLoadSeqEx(int seqNo, u32 loadFlag, NNSSndHeapHandle heap) {
     (void)loadFlag;
     (void)heap;
     PBW2_STUB_LOG("snd", "NNS_SndArcLoadSeqEx (silent: TRUE)");
+    Log_Line("AUDIO", "LoadSeqEx seq=%d flag=%lu", seqNo, (unsigned long)loadFlag);
     return TRUE;
 }
 
@@ -104,6 +131,7 @@ BOOL NNS_SndArcLoadWaveArc(int waveArcNo, NNSSndHeapHandle heap) {
     (void)waveArcNo;
     (void)heap;
     PBW2_STUB_LOG("snd", "NNS_SndArcLoadWaveArc (silent: TRUE)");
+    Log_Line("AUDIO", "LoadWaveArc waveArc=%d", waveArcNo);
     return TRUE;
 }
 
@@ -117,6 +145,7 @@ BOOL NNS_SndArcPlayerStartSeq(NNSSndHandle *handle, int seqNo) {
     (void)handle;
     (void)seqNo;
     PBW2_STUB_LOG("snd", "NNS_SndArcPlayerStartSeq (silent: TRUE, finishes instantly)");
+    Log_Line("AUDIO", "StartSeq seq=%d", seqNo);
     return TRUE;
 }
 
@@ -127,6 +156,7 @@ BOOL NNS_SndArcPlayerStartSeqEx(NNSSndHandle *handle, int playerNo, int bankNo, 
     (void)playerPrio;
     (void)seqNo;
     PBW2_STUB_LOG("snd", "NNS_SndArcPlayerStartSeqEx (silent: TRUE, finishes instantly)");
+    Log_Line("AUDIO", "StartSeqEx player=%d bank=%d prio=%d seq=%d", playerNo, bankNo, playerPrio, seqNo);
     return TRUE;
 }
 
@@ -200,12 +230,11 @@ u32 NNS_SndPlayerGetTick(NNSSndHandle *handle) {
 }
 
 s32 NNS_SndArcReadFile(u32 fileId, void *buffer, s32 size, s32 offset) {
-    (void)fileId;
-    (void)buffer;
-    (void)size;
-    (void)offset;
-    PBW2_STUB_LOG("snd", "NNS_SndArcReadFile (silent: 0 bytes read)");
-    return 0;
+    s32 read = SndArc_ReadFile(fileId, buffer, size, offset);
+    PBW2_STUB_LOG("snd", "NNS_SndArcReadFile (real)");
+    Log_Line("AUDIO", "ReadFile fileId=%lu size=%ld offset=%ld read=%ld", (unsigned long)fileId, (long)size,
+             (long)offset, (long)read);
+    return read;
 }
 
 BOOL NNS_SndPlayerReadDriverTrackInfo(NNSSndHandle *handle, int trackNo, SNDTrackInfo *trackInfo) {
@@ -216,30 +245,4 @@ BOOL NNS_SndPlayerReadDriverTrackInfo(NNSSndHandle *handle, int trackNo, SNDTrac
     return FALSE;
 }
 
-NNSSndWaveOutHandle NNS_SndWaveOutAllocChannel(int channel) {
-    (void)channel;
-    PBW2_STUB_LOG("snd", "NNS_SndWaveOutAllocChannel (silent: NULL)");
-    return NULL;
-}
-
-BOOL NNS_SndWaveOutIsPlaying(NNSSndWaveOutHandle handle) {
-    (void)handle;
-    PBW2_STUB_LOG("snd", "NNS_SndWaveOutIsPlaying (silent: FALSE)");
-    return FALSE;
-}
-
-BOOL NNS_SndWaveOutStart(NNSSndWaveOutHandle handle, NNSSndWaveFormat format, const void *data, BOOL loop,
-                         int loopStart, int samples, int rate, int volume, int speed, int pan) {
-    (void)handle;
-    (void)format;
-    (void)data;
-    (void)loop;
-    (void)loopStart;
-    (void)samples;
-    (void)rate;
-    (void)volume;
-    (void)speed;
-    (void)pan;
-    PBW2_STUB_LOG("snd", "NNS_SndWaveOutStart (silent: FALSE)");
-    return FALSE;
-}
+/* NNS_SndWaveOut* lives in wave_out.c now (real NDSP player). */
