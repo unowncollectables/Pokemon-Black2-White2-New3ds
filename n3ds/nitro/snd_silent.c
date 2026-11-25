@@ -5,13 +5,9 @@
 #include "stub_log.h"
 
 /* Silent sound backend for the parts of NNS_Snd that have no host
- * player yet (sequences: BGM and all SEs), plus the archive-info
- * getters the game dereferences. The contract for those is "accepted,
- * finishes instantly, nothing sounds": loads and starts succeed (the
- * game proceeds exactly as it would with sound), counts/ticks/
- * positions are 0, and the archive-info getters return static dummies
- * whose callers dereference them (playerNo 1, so the player index is
- * 0 and in range).
+ * player yet (sequences: BGM and all SEs). Loads and starts succeed,
+ * finish immediately and produce silence. Counts, ticks and positions
+ * are zero. Archive metadata comes from SDAT when available.
  *
  * Waves are NOT silent any more: GetWaveArcInfo / GetFileSize /
  * ReadFile read the staged SDAT for real (snd_arc.c), and the
@@ -42,15 +38,16 @@
  * to avoid flooding the log.
  */
 
-static const NNSSndSeqParam sDummySeqParam = { .playerNo = 1 };
-static const NNSSndArcSeqInfo sDummySeqInfo = { .param = { .playerNo = 1 } };
-static const NNSSndArcBankInfo sDummyBankInfo = { 0 };
+static const NNSSndArcSeqInfo sDummySeqInfo = { .fileId = 0xffffffffu, .param = { .playerNo = 1 } };
+static const NNSSndArcBankInfo sDummyBankInfo = {
+    .fileId = 0xffffffffu,
+    .waveArcNo = { NNS_SND_ARC_INVALID_WAVEARC_NO, NNS_SND_ARC_INVALID_WAVEARC_NO,
+                   NNS_SND_ARC_INVALID_WAVEARC_NO, NNS_SND_ARC_INVALID_WAVEARC_NO },
+};
 
 const NNSSndArcBankInfo *NNS_SndArcGetBankInfo(int bankNo) {
-    (void)bankNo;
-    PBW2_STUB_LOG("snd", "NNS_SndArcGetBankInfo (silent: dummy)");
-    Log_Line("AUDIO", "GetBankInfo bank=%d", bankNo);
-    return &sDummyBankInfo;
+    const NNSSndArcBankInfo *bank = SndArc_GetBankInfo(bankNo);
+    return bank ? bank : &sDummyBankInfo;
 }
 
 void *NNS_SndArcGetFileAddress(u32 fileId) {
@@ -74,17 +71,14 @@ const NNSSndArcGroupInfo *NNS_SndArcGetGroupInfo(int groupNo) {
 }
 
 const NNSSndArcSeqInfo *NNS_SndArcGetSeqInfo(int seqNo) {
-    (void)seqNo;
-    PBW2_STUB_LOG("snd", "NNS_SndArcGetSeqInfo (silent: dummy)");
-    Log_Line("AUDIO", "GetSeqInfo seq=%d", seqNo);
-    return &sDummySeqInfo;
+    const NNSSndArcSeqInfo *seq = SndArc_GetSeqInfo(seqNo);
+    return seq ? seq : &sDummySeqInfo;
 }
 
 const NNSSndSeqParam *NNS_SndArcGetSeqParam(int seqNo) {
-    (void)seqNo;
-    PBW2_STUB_LOG("snd", "NNS_SndArcGetSeqParam (silent: dummy playerNo 1)");
-    Log_Line("AUDIO", "GetSeqParam seq=%d", seqNo);
-    return &sDummySeqParam;
+    const NNSSndSeqParam *param = &NNS_SndArcGetSeqInfo(seqNo)->param;
+    /* GFL_SndSeqGetPlayerIndex subtracts one to index its five effect slots. */
+    return param->playerNo >= 1 && param->playerNo <= 5 ? param : &sDummySeqInfo.param;
 }
 
 /* The wave-arc info is real now (snd_arc.c reads the SDAT INFO

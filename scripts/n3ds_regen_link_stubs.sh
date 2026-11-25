@@ -43,6 +43,7 @@ DATA_OR_HOSTED = {
     "NNS_FndVisitAllocatedForExpHeap", "NNS_G2dGetUnpackedCellBank",
     "NNS_G2dGetUnpackedCharacterData", "NNS_G2dGetUnpackedMultiCellBank",
     "FS_SetDefaultDMA", "NNS_SndArcInit", "NNS_SndArcSetup",
+    "RTCCache_Init", "RTCCache_Update",
 }
 cur = Path("n3ds/nitro/link_stubs.c")
 existing = set()
@@ -51,7 +52,11 @@ if cur.is_file():
         if line.startswith("void ") and "(void)" in line:
             existing.add(line.split()[1].split("(")[0])
 new = [s.strip() for s in Path("/tmp/pbw2_undef.txt").read_text().splitlines() if s.strip() and s[0].isalpha()]
-all_syms = sorted(existing | set(new) - skip - DATA_OR_HOSTED - SND_SILENT)
+all_syms = sorted(
+    sym
+    for sym in existing | set(new) - skip - DATA_OR_HOSTED - SND_SILENT
+    if not sym.startswith(("SPLBehavior_", "SPLManager_"))
+)
 lines = [
     "/* SPDX-License-Identifier: GPL-3.0-or-later */",
     '#include "stub_log.h"',

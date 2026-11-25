@@ -55,13 +55,50 @@ PBW2_LINK_GAME=1 make -C n3ds GAME=BLACK2 BUILD=build/g3-test test-g3
 
 Run `n3ds/build/g3-test/g3_fidelity.3dsx` on the 3DS or in Azahar. It writes
 `sdmc:/g3-fidelity.txt`. A passing result reports CPU and PICA200 separately
-and counts 21 completed GPU frames. It checks texture-coordinate generation
+and counts 31 completed GPU frames. It checks texture-coordinate generation
 from texture coordinates, normals, and vertices, including when each command
 reads the texture matrix. It also checks overlap between translucent
 polygons with the same and different IDs, opaque reset, alpha-zero texels,
-and optional depth writes for fractional texels. It exercises software
-fallback when a palette is rewritten mid-frame and when GX decal colors
-need fractional fixed-point interpolation.
+optional depth writes for fractional texels, the GX alpha threshold,
+lighting, and display capture while the main LCD is hidden.
+The compositor checks cover sprite and rectangular window masks, affine
+sprite masks, window clipping of the 3D layer, layer priority ties,
+and brightness targets and window effects.
+It exercises software fallback for a mid-frame palette rewrite,
+fractional decals, alpha testing with two fractional alpha factors,
+toon and highlight shading, both fog modes with Z- and W-buffer depth,
+shadow mask depth and polygon-ID rejection, and edge marking.
+
+### Settings input regression fixture
+
+`make -C n3ds BUILD=build/input-test test-input` builds
+`n3ds/build/input-test/input_capture.3dsx`. Run it on the 3DS or in Azahar
+and read `sdmc:/input-capture-test.txt`. It checks Circle Pad input while
+opening and closing Settings, direction changes before release, and
+normal analog and digital movement once the stick returns to neutral.
+
+### Native LCD regression fixture
+
+`make -C n3ds BUILD=build/lcd-test test-present` builds
+`n3ds/build/lcd-test/present_blit.3dsx`. Run it on the 3DS or in Azahar
+and read `sdmc:/present-blit-test.txt`. It compares each RGB565 pixel
+on both LCDs and checks that a smaller picture clears the old margins.
+
+### Clock regression fixture
+
+After compiling the Black 2 game objects, run
+`make -C n3ds BUILD=build/rtc-test test-rtc`. Run the resulting
+`n3ds/build/rtc-test/rtc_cache.3dsx` on the 3DS or in Azahar and read
+`sdmc:/rtc-cache-test.txt`. The fixture checks leap-day conversion,
+the game's cache refresh across midnight, and the start of the DS epoch.
+
+### Wave output regression fixture
+
+`make -C n3ds BUILD=build/audio-test test-wave` builds
+`n3ds/build/audio-test/wave_out.3dsx`. Run it on the 3DS or in Azahar
+and read `sdmc:/wave-out-test.txt`. It intercepts NDSP calls to check
+the PCM intro and sustain buffers, ADPCM predictor output, and restart
+and stop behavior. It requires no staged sound data or DSP firmware.
 
 ### If the compiler is not devkitARM's
 
@@ -103,8 +140,20 @@ failure). `python3 scripts/check_delinks.py` checks that without a ROM.
 
 ## CIA
 
-Not built here. `n3ds/cia/black2.rsf` and `n3ds/cia/white2.rsf` are the access
-descriptor: `CoreVersion 2`, `CpuSpeed 804MHz`, `EnableL2Cache true`,
-`CanAccessCore2 true`, `SystemModeExt 124MB`. `makerom` also needs a banner
-and an icon, which this tree does not have. The owner's Pokemon 3DS Builder
-packs the CIA from the `.elf`. Do not commit the CIA.
+The owner's Pokémon 3DS Builder packages the CIA from its ELF, the
+access descriptor in `n3ds/cia/`, and two HOME Menu assets. Prepare
+those assets with the same bannertool executable used by SoulSilver.
+
+```sh
+make -C n3ds home-menu-art GAME=BLACK2 ROM="/path/to/Black 2.nds" BT="/path/to/bannertool"
+make -C n3ds home-menu-art GAME=WHITE2 ROM="/path/to/White 2.nds" BT="/path/to/bannertool"
+```
+
+Pass `icon.smdh` to the Builder's icon input and `banner.bnr` to its
+banner input from `n3ds/build/home-menu/black2/` or `white2/`. The
+icon comes from the DS cartridge banner. The flat HOME Menu banner
+uses the unfiltered in-game title logo and a silent audio track.
+The helper reads the supplied ROM in place and keeps all generated
+art in ignored build output. Run `scripts/n3ds_home_menu_art.py`
+directly to choose another output folder or prepare just the PNGs
+and WAV for a Builder that already runs bannertool.

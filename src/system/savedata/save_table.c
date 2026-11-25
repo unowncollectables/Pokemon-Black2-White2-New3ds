@@ -51,6 +51,18 @@
 #include "system/savedata/trainer_data_savedata.h"
 #include "system/savedata/unity_tower_floor_savedata.h"
 
+#ifdef PBW2_N3DS
+#include <stddef.h>
+
+_Static_assert(sizeof(TimeSigSave) == 0x658 && offsetof(TimeSigSave, seconds) == 0x624, "Time signature flash layout");
+_Static_assert(sizeof(AdventureSave) == 0x5c && offsetof(AdventureTime, startSeconds) == 0x24, "Adventure flash layout");
+_Static_assert(sizeof(DayCareSave) == 0x1d4 && offsetof(DayCareSave, seed) == 0x1cc, "Day Care flash layout");
+_Static_assert(sizeof(TrainerGameInfoSave) == 0xf0 && offsetof(TrainerGameInfoSave, surveySeconds) == 0x54,
+               "Trainer card flash layout");
+_Static_assert(sizeof(HighLinkSave) == 0x1b4 && offsetof(HighLinkSave, seconds) == 0x1ac, "High Link flash layout");
+_Static_assert(sizeof(RecordSave) == 0xac && offsetof(RecordSave, matchSeconds) == 0xa4, "Battle record flash layout");
+#endif
+
 // The tables of the saves' blocks: the main save's, and the one block of each extra save. The file has no code and no
 // name in the ROM; save_table.c is a guess. That it is a file apart from save_control.c shows in the order of its
 // tables, which MWCC only gives when the file defines nothing else.

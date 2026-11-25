@@ -28,11 +28,9 @@ static PrintConsole s_top;
 static PrintConsole s_bottom;
 #endif
 
-/* Bits match include/gfl/key.h. Circle-pad past the dead zone counts as a d-pad
- * direction so a stick-only pad still reaches the game later. */
+/* Bits match include/gfl/key.h. */
 static u32 Pad_FromHid(u32 held) {
     u32 pad = 0;
-    circlePosition circle;
     if (held & KEY_A) {
         pad |= 0x1;
     }
@@ -68,19 +66,6 @@ static u32 Pad_FromHid(u32 held) {
     }
     if (held & KEY_Y) {
         pad |= 0x800;
-    }
-    hidCircleRead(&circle);
-    if (circle.dx > 80) {
-        pad |= 0x10;
-    }
-    if (circle.dx < -80) {
-        pad |= 0x20;
-    }
-    if (circle.dy > 80) {
-        pad |= 0x40;
-    }
-    if (circle.dy < -80) {
-        pad |= 0x80;
     }
     return pad;
 }

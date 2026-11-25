@@ -10,12 +10,8 @@
 
 #ifdef PBW2_LINK_GAME
 
-/* SDAT layout (little-endian, BOM 0xFEFF), the same parsing style as
- * strm_pcm.c: the file header holds the INFO and FAT block offsets;
- * the INFO block holds the wave-arc table offset at +0x14; a wave-arc
- * table is a count followed by per-archive record offsets, each
- * record a 24-bit file id plus flags; the FAT block is a count
- * followed by 16-byte entries (offset, size, ...). */
+/* SDAT uses little-endian INFO record offsets and 16-byte FAT entries.
+ * INFO stays resident so metadata returned to the game remains valid. */
 
 static uint32_t le16(const uint8_t *p) {
     return (uint32_t)p[0] | (uint32_t)p[1] << 8;
@@ -34,6 +30,8 @@ static struct {
     char path[128];
     FSFile file;
     int open;
+    uint8_t *info;
+    uint32_t infoSize;
     uint32_t *waveArcFileIds;
     uint32_t waveArcCount;
     uint32_t *fatOffsets;
@@ -43,10 +41,13 @@ static struct {
 
 static void snd_arc_clear(void) {
     if (s_arc.open) FS_CloseFile(&s_arc.file);
+    free(s_arc.info);
     free(s_arc.waveArcFileIds);
     free(s_arc.fatOffsets);
     free(s_arc.fatSizes);
     s_arc.open = 0;
+    s_arc.info = NULL;
+    s_arc.infoSize = 0;
     s_arc.waveArcFileIds = NULL;
     s_arc.waveArcCount = 0;
     s_arc.fatOffsets = NULL;
@@ -67,7 +68,7 @@ static int snd_arc_ensure(void) {
     uint8_t archive[0x30];
     uint8_t *info = NULL, *fat = NULL;
 
-    if (s_arc.waveArcFileIds) return 1;
+    if (s_arc.info) return 1;
     if (!s_arc.path[0]) return 0;
     if (!FS_OpenFile(&s_arc.file, s_arc.path)) {
         Log_Line("AUDIO", "SndArc: cannot open %s", s_arc.path);
@@ -113,7 +114,8 @@ static int snd_arc_ensure(void) {
             s_arc.fatSizes[i] = size;
         }
     }
-    free(info);
+    s_arc.info = info;
+    s_arc.infoSize = infoSize;
     free(fat);
     Log_Line("AUDIO", "SndArc: %lu wave arcs, %lu files", (unsigned long)waveCount, (unsigned long)fatCount);
     return 1;
@@ -123,6 +125,27 @@ fail:
     snd_arc_clear();
     Log_Line("AUDIO", "SndArc: invalid or unreadable SDAT directory");
     return 0;
+}
+
+static const void *info_record(unsigned slot, int index, unsigned size) {
+    if (index < 0 || !snd_arc_ensure()) return NULL;
+    uint32_t table = le32(s_arc.info + slot);
+    if (table < 0x28 || table > s_arc.infoSize - 4) return NULL;
+    uint32_t count = le32(s_arc.info + table);
+    if (count > (s_arc.infoSize - table - 4) / 4 || (uint32_t)index >= count) return NULL;
+    uint32_t offset = le32(s_arc.info + table + 4 + 4 * (uint32_t)index);
+    if ((offset & 3) || offset < 0x28 || offset > s_arc.infoSize - size) return NULL;
+    return s_arc.info + offset;
+}
+
+const NNSSndArcSeqInfo *SndArc_GetSeqInfo(int seqNo) {
+    const NNSSndArcSeqInfo *seq = info_record(0x08, seqNo, sizeof *seq);
+    return seq && seq->fileId < s_arc.fatCount ? seq : NULL;
+}
+
+const NNSSndArcBankInfo *SndArc_GetBankInfo(int bankNo) {
+    const NNSSndArcBankInfo *bank = info_record(0x10, bankNo, sizeof *bank);
+    return bank && bank->fileId < s_arc.fatCount ? bank : NULL;
 }
 
 u32 SndArc_GetWaveArcFileId(int waveArcNo) {

@@ -31,7 +31,7 @@ void NitroHost_Init(void) {
     (void)FS_TryLoadTable(NULL, 0);
     s_nitrofs = pbw2_fs_probe(&s_probe);
     RTC_GetDateTime(&date, &time);
-    printf("nitro host: rtc %lu-%02lu-%02lu %02lu:%02lu  nitrofs %s", (unsigned long)date.year,
+    printf("nitro host: rtc %lu-%02lu-%02lu %02lu:%02lu  nitrofs %s", 2000ul + date.year,
            (unsigned long)date.month, (unsigned long)date.day, (unsigned long)time.hour, (unsigned long)time.minute,
            s_nitrofs ? "a/0/0/2 open" : "not staged");
     if (s_nitrofs) {
@@ -71,7 +71,7 @@ void NitroHost_Rtc(int *year, int *month, int *day, int *hour, int *minute) {
     RTCTime time;
     RTC_GetDateTime(&date, &time);
     if (year) {
-        *year = (int)date.year;
+        *year = 2000 + (int)date.year;
     }
     if (month) {
         *month = (int)date.month;

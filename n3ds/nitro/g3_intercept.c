@@ -153,7 +153,8 @@ void PbW2_G3Command(u32 opcode, const u32 *p) {
         return;
     default:
         if (opcode >= G3OP_VTX_16 && opcode <= 0x28) update_clip_matrix();
-        PbW2_G3RasterCommand(opcode, p, &s_clip, &s_matrix[GX_MTXMODE_TEXTURE]);
+        PbW2_G3RasterCommand(opcode, p, &s_clip, &s_matrix[GX_MTXMODE_TEXTURE],
+                            &s_matrix[GX_MTXMODE_POSITION_VECTOR]);
         return;
     }
     if (mode != GX_MTXMODE_TEXTURE) s_clipDirty = 1;
@@ -210,7 +211,7 @@ int G3X_GetVectorMtx(MtxFx33 *dest) {
 }
 
 void PbW2_G3Compose(int is_main, u16 *fb_rgb565) {
-    if (is_main && fb_rgb565 != NULL) PbW2_G3RasterComposite(fb_rgb565);
+    if (is_main && fb_rgb565 != NULL) PbW2_G3RasterComposite(fb_rgb565, NULL, NULL, NULL);
 }
 
 #endif

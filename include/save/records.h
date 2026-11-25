@@ -2,6 +2,7 @@
 #define POKEBW2_SAVE_RECORDS_H
 
 #include "types.h"
+#include "save/flash_layout.h"
 #include "struct_decls.h"
 
 // RecordSave is the block that getRecordBlkAddress returns. The encrypted records that GameData_GetRecords returns
@@ -104,7 +105,7 @@ struct RecordSave {
     /* 0xa2 */ u8 matchInProgress;
     // Set while a Random Matchup's result is still to be taken at the Pokémon Center
     /* 0xa3 */ u8 matchResultPending;
-    /* 0xa4 */ s64 matchSeconds;
+    /* 0xa4 */ SaveS64 matchSeconds;
 }; // size: 0xac
 
 // The size of the records

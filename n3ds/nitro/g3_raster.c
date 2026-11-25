@@ -30,6 +30,10 @@ typedef struct {
     u16 color[PIXELS];
     float depth[PIXELS];
     u8 translucentId[PIXELS];
+    u8 opaqueId[PIXELS];
+    u8 shadowMask[PIXELS];
+    u8 fogAlpha[PIXELS];
+    u32 fogDepthW[PIXELS];
 } Frame;
 
 static Frame s_drawing;
@@ -43,10 +47,32 @@ static Vertex s_strip[4];
 static s16 s_xyz[3];
 /* GX texture coordinates use signed 12.4 fixed point. */
 static s16 s_rawTexcoord[2], s_texcoord[2];
-static u16 s_vertexColor, s_diffuse, s_ambient;
+static u16 s_vertexColor, s_diffuse, s_ambient, s_specular, s_emission;
+static unsigned s_lightMask;
+static bool s_useShininess;
+static u8 s_shininess[128];
+static struct {
+    s16 direction[3];
+    s32 specularReciprocal;
+    u16 color;
+} s_lights[4];
 static u32 s_polygon, s_texture, s_palette, s_viewport;
 static u32 s_clearColor;
 static unsigned s_clearDepth;
+static bool s_previousShadowMask;
+static bool s_alphaTest;
+static unsigned s_alphaRef;
+static bool s_highlight;
+static u16 s_toon[32];
+static bool s_edgeEnabled;
+static u16 s_edgeColors[8];
+static struct {
+    bool enabled, alphaOnly;
+    unsigned offset, shift;
+    u32 color;
+    u8 density[32];
+} s_fog;
+enum { FOG_ENABLED = 0x80, FOG_CLEAR_DEPTH = 0x40 };
 #ifdef PBW2_GPU_GEOMETRY
 enum { GPU_TRIANGLES_MAX = 8192, GPU_TEXTURES_MAX = 128 };
 static struct {
@@ -81,8 +107,12 @@ void PbW2_G3RasterReset(void) {
     memset(s_rawTexcoord, 0, sizeof s_rawTexcoord);
     memset(s_texcoord, 0, sizeof s_texcoord);
     s_polygon = (31u << 16) | (3u << 6);
-    s_vertexColor = s_diffuse = 0x7fff;
-    s_ambient = 0;
+    s_vertexColor = 0x7fff;
+    s_diffuse = s_ambient = s_specular = s_emission = 0;
+    s_lightMask = 0;
+    s_useShininess = false;
+    memset(s_shininess, 0, sizeof s_shininess);
+    memset(s_lights, 0, sizeof s_lights);
     s_texture = s_palette = 0;
     s_viewport = GX_PACK_VIEWPORT_PARAM(0, 0, WIDTH - 1, HEIGHT - 1);
 }
@@ -94,6 +124,14 @@ static void clear_software_frame(void) {
     /* The default cleared depth admits fragments on the far plane. */
     if (depth >= 1.0f) depth = 2.0f;
     memset(s_drawing.translucentId, 0, sizeof s_drawing.translucentId);
+    memset(s_drawing.opaqueId, (s_clearColor >> 24) & 63, sizeof s_drawing.opaqueId);
+    memset(s_drawing.shadowMask, 0, sizeof s_drawing.shadowMask);
+    s_previousShadowMask = false;
+    if (s_fog.enabled) {
+        unsigned fogAlpha = ((s_clearColor >> 16) & 31) | FOG_CLEAR_DEPTH;
+        if (s_clearColor & REG_G3X_CLEAR_COLOR_F_MASK) fogAlpha |= FOG_ENABLED;
+        memset(s_drawing.fogAlpha, fogAlpha, sizeof s_drawing.fogAlpha);
+    }
     for (unsigned i = 0; i < PIXELS; ++i) {
         s_drawing.color[i] = color;
         s_drawing.depth[i] = depth;
@@ -104,9 +142,29 @@ static void start_frame(void) {
     if (s_frameStarted) return;
     s_clearColor = reg_G3X_CLEAR_COLOR;
     s_clearDepth = reg_G3X_CLEAR_DEPTH & 0x7fff;
+    u16 control = reg_G3X_DISP3DCNT;
+    s_alphaTest = (control & REG_G3X_DISP3DCNT_ATE_MASK) != 0;
+    s_alphaRef = s_alphaTest ? PBW2_VU16(0x04000340) & 31 : 0;
+    s_highlight = (control & REG_G3X_DISP3DCNT_THS_MASK) != 0;
+    for (unsigned i = 0; i < 32; ++i) s_toon[i] = PBW2_VU16(0x04000380 + 2 * i) & 0x7fff;
+    s_edgeEnabled = (control & REG_G3X_DISP3DCNT_EME_MASK) != 0;
+    if (s_edgeEnabled) {
+        for (unsigned i = 0; i < 8; ++i) s_edgeColors[i] = PBW2_VU16(0x04000330 + 2 * i) & 0x7fff;
+    }
+    s_fog.enabled = false;
+    if (control & REG_G3X_DISP3DCNT_FME_MASK) {
+        s_fog.alphaOnly = (control & REG_G3X_DISP3DCNT_FMOD_MASK) != 0;
+        s_fog.shift = (control & REG_G3X_DISP3DCNT_FOG_SHIFT_MASK) >> REG_G3X_DISP3DCNT_FOG_SHIFT_SHIFT;
+        s_fog.offset = (reg_G3X_FOG_OFFSET & 0x7fff) << 9;
+        s_fog.color = reg_G3X_FOG_COLOR;
+        for (unsigned i = 0; i < 32; ++i) {
+            s_fog.density[i] = PBW2_VU8(0x04000360 + i) & 127;
+            s_fog.enabled |= s_fog.density[i] != 0;
+        }
+    }
     s_frameStarted = 1;
 #ifdef PBW2_GPU_GEOMETRY
-    s_gpuFrame = PbW2_PicaEnabled();
+    s_gpuFrame = PbW2_PicaEnabled() && !s_edgeEnabled && !(s_fog.enabled && (s_clearColor & REG_G3X_CLEAR_COLOR_F_MASK));
     s_gpuCount = s_gpuMaterialCount = s_lastMaterial = 0;
     s_gpuSourceBanks = 0;
     if (s_gpuFrame) return;
@@ -270,7 +328,7 @@ static float edge(Vertex a, Vertex b, float x, float y) {
 }
 
 static bool textured_decal(const Texture *texture, u32 polygon) {
-    return texture->format && ((polygon >> 4) & 3) == GX_POLYGONMODE_DECAL;
+    return texture->format && (polygon & (1u << 4));
 }
 
 static unsigned translucent_id(u32 polygon) {
@@ -287,12 +345,104 @@ static unsigned decal_channel(unsigned texture, unsigned vertex, unsigned alpha)
     return (tex6 * alpha + vtx6 * (31 - alpha)) >> 6;
 }
 
+static unsigned color6(unsigned channel) {
+    return 2 * channel + (channel != 0);
+}
+
+static u16 toon_color(u16 texel, float intensity, bool textured) {
+    unsigned red = intensity > 0.0f ? (unsigned)(2.0f * intensity + 1.001f) : 0;
+    if (red > 63) red = 63;
+    u16 tableColor = s_toon[red >> 1];
+    u16 color = 0;
+    for (unsigned shift = 0; shift < 15; shift += 5) {
+        unsigned table = color6((tableColor >> shift) & 31);
+        unsigned channel = s_highlight ? red : table;
+        if (textured) channel = ((color6((texel >> shift) & 31) + 1) * (channel + 1) - 1) >> 6;
+        if (s_highlight) channel += table;
+        color |= (channel > 63 ? 31 : channel >> 1) << shift;
+    }
+    return color;
+}
+
+static unsigned fog_density(unsigned depth) {
+    if (depth <= s_fog.offset) return s_fog.density[0] == 127 ? 128 : s_fog.density[0];
+    u32 coordinate = ((depth - s_fog.offset) >> 2) << s_fog.shift;
+    unsigned step = coordinate >> 17;
+    unsigned density = s_fog.density[31];
+    if (step <= 31) {
+        unsigned fraction = coordinate & 0x1ffff;
+        unsigned left = s_fog.density[step == 0 ? 0 : step - 1];
+        density = (left * (0x20000 - fraction) + s_fog.density[step] * fraction) >> 17;
+    }
+    return density == 127 ? 128 : density;
+}
+
+static bool edge_against(unsigned i, unsigned id, float depth) {
+    return s_drawing.opaqueId[i] != id && s_drawing.depth[i] > depth;
+}
+
+static void apply_edge_colors(void) {
+    if (!s_edgeEnabled) return;
+    unsigned clearId = (s_clearColor >> 24) & 63;
+    float clearDepth = s_clearDepth == 0x7fff ? 2.0f : s_clearDepth / 32767.0f;
+    for (unsigned y = 0; y < HEIGHT; ++y) {
+        for (unsigned x = 0; x < WIDTH; ++x) {
+            unsigned i = y * WIDTH + x;
+            if (!(s_drawing.color[i] & 0x8000)) continue;
+            unsigned id = s_drawing.opaqueId[i];
+            float depth = s_drawing.depth[i];
+            bool perimeter = !x || !y || x == WIDTH - 1 || y == HEIGHT - 1;
+            if ((perimeter && id != clearId && clearDepth > depth) ||
+                (x && edge_against(i - 1, id, depth)) ||
+                (x + 1 < WIDTH && edge_against(i + 1, id, depth)) ||
+                (y && edge_against(i - WIDTH, id, depth)) ||
+                (y + 1 < HEIGHT && edge_against(i + WIDTH, id, depth))) {
+                s_drawing.color[i] = 0x8000 | s_edgeColors[id >> 3];
+            }
+        }
+    }
+}
+
+static void apply_fog(bool wBuffer) {
+    if (!s_fog.enabled) return;
+    for (unsigned i = 0; i < PIXELS; ++i) {
+        unsigned attr = s_drawing.fogAlpha[i];
+        if (!(attr & FOG_ENABLED)) continue;
+        unsigned z;
+        if (attr & FOG_CLEAR_DEPTH) z = (s_clearDepth << 9) | 511;
+        else if (wBuffer) z = s_drawing.fogDepthW[i];
+        else z = (unsigned)fmaxf(0.0f, s_drawing.depth[i] * 16777216.0f - 512.0f);
+        unsigned density = fog_density(z);
+        unsigned keep = 128 - density;
+        unsigned alpha = ((attr & 31) * keep + ((s_fog.color >> 16) & 31) * density) >> 7;
+        u16 color = s_drawing.color[i] & 0x7fff;
+        if (!s_fog.alphaOnly) {
+            u16 shaded = 0;
+            for (unsigned shift = 0; shift < 15; shift += 5) {
+                unsigned from = color6((color >> shift) & 31);
+                unsigned to = color6((s_fog.color >> shift) & 31);
+                shaded |= ((from * keep + to * density) >> 8) << shift;
+            }
+            color = shaded;
+        }
+        s_drawing.color[i] = color | (alpha != 0 ? 0x8000 : 0);
+    }
+}
+
 static void raster_triangle(Vertex a, Vertex b, Vertex c, const Texture *texture, u32 polygon) {
     float area = edge(a, b, c.x, c.y);
     if (fabsf(area) < 0.001f || !(polygon & (area < 0 ? 0x80u : 0x40u))) return;
     unsigned polygonAlpha = (polygon >> 16) & 31;
-    if (!polygonAlpha) return;
+    if (polygonAlpha <= s_alphaRef) return;
     bool decal = textured_decal(texture, polygon);
+    unsigned mode = (polygon >> 4) & 3;
+    bool toon = mode == GX_POLYGONMODE_TOON;
+    bool shadow = mode == GX_POLYGONMODE_SHADOW;
+    unsigned polygonId = (polygon >> 24) & 63;
+    bool shadowMask = shadow && polygonId == 0;
+    if (shadowMask && !s_previousShadowMask)
+        memset(s_drawing.shadowMask, 0, sizeof s_drawing.shadowMask);
+    s_previousShadowMask = shadowMask;
     unsigned translucentId = translucent_id(polygon);
     int left = (int)fmaxf(0, floorf(fminf(a.x, fminf(b.x, c.x))));
     int right = (int)fminf(WIDTH - 1, ceilf(fmaxf(a.x, fmaxf(b.x, c.x))));
@@ -307,21 +457,34 @@ static void raster_triangle(Vertex a, Vertex b, Vertex c, const Texture *texture
             if (u < 0.0f || v < 0.0f || w < 0.0f) continue;
             unsigned pixel = y * WIDTH + x;
             float depth = a.z * u + b.z * v + c.z * w;
-            if (depth > s_drawing.depth[pixel]) continue;
+            bool depthPass = depth <= s_drawing.depth[pixel];
+            if (shadowMask) {
+                if (!depthPass) s_drawing.shadowMask[pixel] = 1;
+                continue;
+            }
+            if (!depthPass) continue;
+            if (shadow) {
+                unsigned last = s_drawing.translucentId[pixel];
+                if (!s_drawing.shadowMask[pixel] || (last ? last & 63 : s_drawing.opaqueId[pixel]) == polygonId)
+                    continue;
+            }
 
             float reciprocal = 1.0f / (a.w * u + b.w * v + c.w * w);
             unsigned ta;
             u16 texel = sample_texture(texture, (a.s * u + b.s * v + c.s * w) * reciprocal,
                                         (a.t * u + b.t * v + c.t * w) * reciprocal, &ta);
-            unsigned alpha = decal ? polygonAlpha : (ta * polygonAlpha + 15) / 31;
-            if (!alpha) continue;
+            unsigned alpha = decal ? polygonAlpha : ((ta + 1) * (polygonAlpha + 1) - 1) >> 5;
+            if (alpha <= s_alphaRef) continue;
             if (alpha < 31 && s_drawing.translucentId[pixel] == translucentId) continue;
 
-            unsigned r = (unsigned)((a.r * u + b.r * v + c.r * w) * reciprocal + 0.5f);
+            float red = (a.r * u + b.r * v + c.r * w) * reciprocal;
+            unsigned r = (unsigned)(red + 0.5f);
             unsigned g = (unsigned)((a.g * u + b.g * v + c.g * w) * reciprocal + 0.5f);
             unsigned bl = (unsigned)((a.b * u + b.b * v + c.b * w) * reciprocal + 0.5f);
             u16 color;
-            if (decal) {
+            if (toon) {
+                color = toon_color(texel, red, texture->format != 0);
+            } else if (decal) {
                 color = decal_channel(texel & 31, r, ta)
                       | decal_channel((texel >> 5) & 31, g, ta) << 5
                       | decal_channel((texel >> 10) & 31, bl, ta) << 10;
@@ -332,9 +495,23 @@ static void raster_triangle(Vertex a, Vertex b, Vertex c, const Texture *texture
             }
             u16 below = s_drawing.color[pixel];
             if (alpha < 31 && (below & 0x8000)) color = weighted_color(color, below, alpha + 1, 31 - alpha, 5);
+            bool depthWrite = alpha == 31 || (polygon & (1u << 11));
+            if (s_fog.enabled) {
+                unsigned old = s_drawing.fogAlpha[pixel];
+                unsigned coverage = alpha;
+                bool fog = (polygon & GX_POLYGON_ATTR_MISC_FOG) != 0;
+                if (alpha < 31) {
+                    fog = fog && (old & FOG_ENABLED);
+                    if ((old & 31) > coverage) coverage = old & 31;
+                }
+                unsigned clearDepth = depthWrite ? 0 : old & FOG_CLEAR_DEPTH;
+                s_drawing.fogAlpha[pixel] = coverage | clearDepth | (fog ? FOG_ENABLED : 0);
+                if (depthWrite) s_drawing.fogDepthW[pixel] = (unsigned)fminf(16777215.0f, 4096.0f * reciprocal);
+            }
             s_drawing.color[pixel] = color | 0x8000;
             s_drawing.translucentId[pixel] = alpha < 31 ? translucentId : 0;
-            if (alpha == 31 || (polygon & (1u << 11))) s_drawing.depth[pixel] = depth;
+            if (alpha == 31) s_drawing.opaqueId[pixel] = polygonId;
+            if (depthWrite) s_drawing.depth[pixel] = depth;
         }
     }
 }
@@ -439,7 +616,7 @@ static float repeat_shift(float a, float b, float c, float period) {
 }
 
 static bool render_with_pica(void) {
-    if (!s_gpuCount || !PbW2_PicaBegin()) return false;
+    if (!s_gpuCount || !PbW2_PicaBegin(s_alphaRef)) return false;
     int gpuSlots[GPU_TEXTURES_MAX];
     for (unsigned i = 0; i < s_gpuMaterialCount; ++i) {
         const Texture *tex = &s_gpuMaterials[i];
@@ -499,6 +676,9 @@ static bool render_with_pica(void) {
             continue;
         }
         if (!textureAlpha) continue;
+        /* GX truncates the product in five bits. An active alpha test
+         * needs the software result if both factors can be fractional. */
+        if (s_alphaTest && alpha < 31 && (textureAlpha & PICA_TEX_ALPHA_FRACTIONAL)) return false;
         bool blend = alpha < 31 || (textureAlpha & PICA_TEX_ALPHA_FRACTIONAL);
         if (alpha == 31 &&
             textureAlpha == (PICA_TEX_ALPHA_OPAQUE | PICA_TEX_ALPHA_FRACTIONAL)) {
@@ -523,7 +703,15 @@ static void draw_triangle(Vertex a, Vertex b, Vertex c, const Texture *texture) 
 #ifdef PBW2_GPU_GEOMETRY
     if (s_gpuFrame) {
         float area = edge(a, b, c.x, c.y);
-        if (fabsf(area) < 0.001f || !(s_polygon & (area < 0 ? 0x80u : 0x40u)) || !(s_polygon & (31u << 16))) return;
+        unsigned alpha = (s_polygon >> 16) & 31;
+        if (fabsf(area) < 0.001f || !(s_polygon & (area < 0 ? 0x80u : 0x40u)) || alpha <= s_alphaRef) return;
+        unsigned mode = (s_polygon >> 4) & 3;
+        if (mode == GX_POLYGONMODE_TOON || mode == GX_POLYGONMODE_SHADOW ||
+            (s_fog.enabled && (s_polygon & GX_POLYGON_ATTR_MISC_FOG))) {
+            replay_on_cpu();
+            raster_triangle(a, b, c, texture, s_polygon);
+            return;
+        }
         unsigned material = gpu_material(texture);
         if (s_gpuCount < GPU_TRIANGLES_MAX && material < GPU_TEXTURES_MAX) {
             unsigned i = s_gpuCount++;
@@ -588,7 +776,7 @@ static void submit_triangle(Vertex a, Vertex b, Vertex c) {
     for (unsigned i = 2; i < count; ++i) draw_triangle(input[0], input[i - 1], input[i], &texture);
 }
 
-static s64 texture_dot(const MtxFx44 *matrix, const s16 vector[3], unsigned axis) {
+static s64 matrix_dot(const MtxFx44 *matrix, const s16 vector[3], unsigned axis) {
     return (s64)vector[0] * matrix->m[0][axis] + (s64)vector[1] * matrix->m[1][axis]
          + (s64)vector[2] * matrix->m[2][axis];
 }
@@ -605,7 +793,7 @@ static void emit_vertex(const MtxFx44 *clip, const MtxFx44 *tex) {
     if ((s_texture >> 30) == GX_TEXGEN_VERTEX) {
         /* The generator uses the original vertex, before modelview and clip. */
         for (unsigned i = 0; i < 2; ++i) {
-            uv[i] = (s16)(s_rawTexcoord[i] + (texture_dot(tex, s_xyz, i) >> 24));
+            uv[i] = (s16)(s_rawTexcoord[i] + (matrix_dot(tex, s_xyz, i) >> 24));
         }
     }
     Vertex v = {c[0], c[1], c[2], c[3], uv[0] / 16.0f, uv[1] / 16.0f,
@@ -640,24 +828,81 @@ static void emit_vertex(const MtxFx44 *clip, const MtxFx44 *tex) {
     }
 }
 
-static int signed10(u32 x) {
-    int n = x & 1023;
-    return n >= 512 ? n - 1024 : n;
+static int signed_field(u32 value, unsigned bits) {
+    int sign = 1 << (bits - 1);
+    return (int)((value & (2 * sign - 1)) ^ sign) - sign;
 }
 
-void PbW2_G3RasterCommand(u32 op, const u32 *p, const MtxFx44 *clip, const MtxFx44 *texture) {
+static void unpack_vector(u32 packed, s16 xyz[3]) {
+    for (unsigned i = 0; i < 3; ++i) xyz[i] = signed_field(packed >> (10 * i), 10);
+}
+
+static void set_light_vector(u32 packed, const MtxFx44 *matrix) {
+    unsigned light = packed >> 30;
+    s16 xyz[3];
+    unpack_vector(packed, xyz);
+    int z = 0;
+    for (unsigned i = 0; i < 3; ++i) {
+        z = matrix_dot(matrix, xyz, i) >> FX32_SHIFT;
+        s_lights[light].direction[i] = signed_field(-z, 11);
+    }
+    int denominator = 512 - signed_field(z, 11);
+    s_lights[light].specularReciprocal = denominator ? (1 << 18) / denominator : 0;
+}
+
+static u16 lit_color(const s16 xyz[3], const MtxFx44 *matrix) {
+    if (!s_lightMask) return s_emission;
+    int normal[3];
+    for (unsigned i = 0; i < 3; ++i) normal[i] = signed_field(matrix_dot(matrix, xyz, i) >> FX32_SHIFT, 11);
+    u32 channels[3] = { (s_emission & 31u) << 14, ((s_emission >> 5) & 31u) << 14, (s_emission >> 10) << 14 };
+    for (unsigned mask = s_lightMask; mask; mask &= mask - 1) {
+        unsigned i = __builtin_ctz(mask);
+        const s16 *dir = s_lights[i].direction;
+        int dot = ((normal[0] * dir[0]) >> 9) + ((normal[1] * dir[1]) >> 9) + ((normal[2] * dir[2]) >> 9);
+        int diffuse = 0, shine = 0;
+        if (dot > 0) {
+            diffuse = signed_field(dot, 11);
+            int half = signed_field(dot + normal[2], 11);
+            int squared = ((half * half) >> 10) & 1023;
+            int specular = ((squared * s_lights[i].specularReciprocal) >> 8) - 512;
+            if (specular > 0) shine = signed_field(specular, 14);
+            if (shine < 0) shine = 0;
+            if (shine > 511) shine = 511;
+        }
+        if (s_useShininess) shine = 2 * s_shininess[shine >> 2];
+        for (unsigned c = 0; c < 3; ++c) {
+            unsigned shift = 5 * c;
+            int light = (s_lights[i].color >> shift) & 31;
+            int direct = ((s_diffuse >> shift) & 31) * light * diffuse;
+            int ambient = (s_ambient >> shift) & 31;
+            int specular = (s_specular >> shift) & 31;
+            /* GX stores the diffuse product in 20 bits before accumulating. */
+            channels[c] += ((u32)direct & 0xfffff) + light * (512 * ambient + specular * shine);
+        }
+    }
+    u16 color = 0;
+    for (unsigned c = 0; c < 3; ++c) {
+        unsigned value = channels[c] >> 14;
+        color |= (value > 31 ? 31 : value) << (5 * c);
+    }
+    return color;
+}
+
+void PbW2_G3RasterCommand(u32 op, const u32 *p, const MtxFx44 *clip,
+                         const MtxFx44 *texture, const MtxFx44 *vector) {
     switch (op) {
     case 0x20: s_vertexColor = p[0] & 0x7fff; return;
-    case G3OP_NORMAL:
+    case G3OP_NORMAL: {
+        s16 normal[3];
+        unpack_vector(p[0], normal);
         if ((s_texture >> 30) == GX_TEXGEN_NORMAL) {
-            s16 normal[3];
-            for (unsigned i = 0; i < 3; ++i) normal[i] = signed10(p[0] >> (10 * i));
             for (unsigned i = 0; i < 2; ++i) {
-                s_texcoord[i] = (s16)(s_rawTexcoord[i] + (texture_dot(texture, normal, i) >> 21));
+                s_texcoord[i] = (s16)(s_rawTexcoord[i] + (matrix_dot(texture, normal, i) >> 21));
             }
         }
-        if (s_polygon & 15) s_vertexColor = weighted_color(s_diffuse, s_ambient, 20, 12, 5);
+        s_vertexColor = lit_color(normal, vector);
         return;
+    }
     case G3OP_TEXCOORD: {
         s_rawTexcoord[0] = (s16)p[0];
         s_rawTexcoord[1] = (s16)(p[0] >> 16);
@@ -665,7 +910,7 @@ void PbW2_G3RasterCommand(u32 op, const u32 *p, const MtxFx44 *clip, const MtxFx
             /* GX reads the texture matrix with the command, before any vertex. */
             const s16 vector[3] = { s_rawTexcoord[0], s_rawTexcoord[1], 1 };
             for (unsigned i = 0; i < 2; ++i) {
-                s_texcoord[i] = (s16)((texture_dot(texture, vector, i) + texture->m[3][i]) >> 12);
+                s_texcoord[i] = (s16)((matrix_dot(texture, vector, i) + texture->m[3][i]) >> 12);
             }
         } else {
             memcpy(s_texcoord, s_rawTexcoord, sizeof s_texcoord);
@@ -676,28 +921,50 @@ void PbW2_G3RasterCommand(u32 op, const u32 *p, const MtxFx44 *clip, const MtxFx
         s_xyz[0] = (s16)p[0]; s_xyz[1] = (s16)(p[0] >> 16); s_xyz[2] = (s16)p[1];
         break;
     case 0x24:
-        for (unsigned i = 0; i < 3; ++i) s_xyz[i] = (s16)(signed10(p[0] >> (10 * i)) * 64);
+        unpack_vector(p[0], s_xyz);
+        for (unsigned i = 0; i < 3; ++i) s_xyz[i] *= 64;
         break;
     case 0x25: s_xyz[0] = (s16)p[0]; s_xyz[1] = (s16)(p[0] >> 16); break;
     case 0x26: s_xyz[0] = (s16)p[0]; s_xyz[2] = (s16)(p[0] >> 16); break;
     case 0x27: s_xyz[1] = (s16)p[0]; s_xyz[2] = (s16)(p[0] >> 16); break;
     case 0x28:
-        for (unsigned i = 0; i < 3; ++i) s_xyz[i] = (s16)(s_xyz[i] + signed10(p[0] >> (10 * i)));
+        for (unsigned i = 0; i < 3; ++i) s_xyz[i] = (s16)(s_xyz[i] + signed_field(p[0] >> (10 * i), 10));
         break;
     case G3OP_POLYGON_ATTR: s_polygon = p[0]; return;
     case G3OP_TEXIMAGE_PARAM: s_texture = p[0]; return;
     case 0x2b: s_palette = p[0]; return;
-    case 0x30:
+    case G3OP_DIF_AMB:
         s_diffuse = p[0] & 0x7fff;
         s_ambient = (p[0] >> 16) & 0x7fff;
         if (p[0] & 0x8000) s_vertexColor = s_diffuse;
         return;
-    case G3OP_BEGIN: s_primitive = p[0] & 3; s_count = 0; s_inPrimitive = 1; return;
+    case G3OP_SPE_EMI:
+        s_specular = p[0] & 0x7fff;
+        s_emission = (p[0] >> 16) & 0x7fff;
+        s_useShininess = (p[0] & 0x8000) != 0;
+        return;
+    case G3OP_LIGHT_VECTOR: set_light_vector(p[0], vector); return;
+    case G3OP_LIGHT_COLOR: s_lights[p[0] >> 30].color = p[0] & 0x7fff; return;
+    case 0x34: /* SHININESS delivers four table entries per FIFO word. */
+        for (unsigned i = 0; i < sizeof s_shininess; ++i) s_shininess[i] = p[i / 4] >> (8 * (i & 3));
+        return;
+    case G3OP_BEGIN:
+        s_primitive = p[0] & 3;
+        s_lightMask = s_polygon & 15;
+        s_count = 0;
+        s_inPrimitive = 1;
+        return;
     case G3OP_END: s_inPrimitive = 0; return;
     case 0x50:
         start_frame();
 #ifdef PBW2_GPU_GEOMETRY
         if (s_gpuFrame && !render_with_pica()) replay_on_cpu();
+        if (!s_gpuFrame) {
+#endif
+            apply_edge_colors();
+            apply_fog((p[0] & (GX_BUFFERMODE_W << 1)) != 0);
+#ifdef PBW2_GPU_GEOMETRY
+        }
 #endif
         lock_display();
         memcpy(s_display, s_drawing.color, sizeof s_display);
@@ -710,11 +977,16 @@ void PbW2_G3RasterCommand(u32 op, const u32 *p, const MtxFx44 *clip, const MtxFx
     emit_vertex(clip, texture);
 }
 
-void PbW2_G3RasterComposite(u16 *rgb565) {
+void PbW2_G3RasterComposite(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawColors) {
     lock_display();
     for (unsigned i = 0; i < PIXELS; ++i) {
         u16 pixel = s_display[i];
-        if (pixel & 0x8000) rgb565[i] = ((pixel & 31) << 11) | ((pixel & 0x03e0) << 1) | ((pixel >> 10) & 31);
+        if ((pixel & 0x8000) && (!window || (window[i] & GX_WND_PLANEMASK_BG0))) {
+            u16 color = ((pixel & 31) << 11) | ((pixel & 0x03e0) << 1) | ((pixel >> 10) & 31);
+            rgb565[i] = color;
+            if (planes) planes[i] = GX_WND_PLANEMASK_BG0;
+            if (rawColors) rawColors[i] = color;
+        }
     }
     unlock_display();
 }

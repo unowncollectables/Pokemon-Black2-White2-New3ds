@@ -33,6 +33,7 @@ static struct {
 } s_texture[TEXTURES];
 static Batch s_batch[BATCHES];
 static unsigned s_vertexCount, s_batchCount, s_cacheBytes, s_uploads, s_hits;
+static unsigned s_alphaRef;
 static uint64_t s_frame;
 static bool s_ready, s_requested;
 
@@ -88,10 +89,14 @@ bool PbW2_PicaEnabled(void) {
     return s_ready;
 }
 
-bool PbW2_PicaBegin(void) {
+bool PbW2_PicaBegin(unsigned alphaRef) {
     if (!PbW2_PicaEnabled()) return false;
     ++s_frame;
     s_batchCount = s_vertexCount = 0;
+    /* A midpoint between consecutive GX alpha values tolerates either
+     * rounding direction in PICA's eight-bit alpha conversion. */
+    if (alphaRef == 0) s_alphaRef = 3;
+    else s_alphaRef = alphaRef == 31 ? 255 : ((2 * alphaRef + 1) * 255) / 62;
     return true;
 }
 
@@ -204,7 +209,7 @@ bool PbW2_PicaFinish(uint32_t clearColor, float clearDepth, uint16_t *result) {
         const Batch *batch = &s_batch[i];
         if (!previous || batch->test != previous->test) {
             switch (batch->test) {
-            case PICA_ALPHA_VISIBLE: C3D_AlphaTest(true, GPU_GREATER, 3); break;
+            case PICA_ALPHA_VISIBLE: C3D_AlphaTest(true, GPU_GREATER, s_alphaRef); break;
             case PICA_ALPHA_OPAQUE: C3D_AlphaTest(true, GPU_EQUAL, 255); break;
             }
         }

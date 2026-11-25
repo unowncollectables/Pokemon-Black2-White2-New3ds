@@ -99,30 +99,10 @@ void OS_SetIrqMask(void) { PBW2_STUB_LOG("link", "OS_SetIrqMask"); }
 void OS_WaitInterrupt(void) { PBW2_STUB_LOG("link", "OS_WaitInterrupt"); }
 void OSi_EnterDmaCallback(void) { PBW2_STUB_LOG("link", "OSi_EnterDmaCallback"); }
 void OSi_UnlockVram(void) { PBW2_STUB_LOG("link", "OSi_UnlockVram"); }
-void RTCCache_Init(void) { PBW2_STUB_LOG("link", "RTCCache_Init"); }
-void RTCCache_Update(void) { PBW2_STUB_LOG("link", "RTCCache_Update"); }
 void SNDEXi_Init(void) { PBW2_STUB_LOG("link", "SNDEXi_Init"); }
 /* IIR filter for the DS ADC: no ADC hardware on this platform, and the mic
  * path it serves is stubbed in mic_stub.c. */
 void SNDEXi_SetIirFilter(void) { PBW2_STUB_LOG("link", "SNDEXi_SetIirFilter"); }
-void SPLBehavior_ApplyCollisionPlane(void) { PBW2_STUB_LOG("link", "SPLBehavior_ApplyCollisionPlane"); }
-void SPLBehavior_ApplyConvergence(void) { PBW2_STUB_LOG("link", "SPLBehavior_ApplyConvergence"); }
-void SPLBehavior_ApplyGravity(void) { PBW2_STUB_LOG("link", "SPLBehavior_ApplyGravity"); }
-void SPLBehavior_ApplyMagnet(void) { PBW2_STUB_LOG("link", "SPLBehavior_ApplyMagnet"); }
-void SPLBehavior_ApplyRandom(void) { PBW2_STUB_LOG("link", "SPLBehavior_ApplyRandom"); }
-void SPLBehavior_ApplySpin(void) { PBW2_STUB_LOG("link", "SPLBehavior_ApplySpin"); }
-void SPLManager_CreateEmitter(void) { PBW2_STUB_LOG("link", "SPLManager_CreateEmitter"); }
-void SPLManager_CreateEmitterWithCallback(void) { PBW2_STUB_LOG("link", "SPLManager_CreateEmitterWithCallback"); }
-void SPLManager_DeleteAllEmitters(void) { PBW2_STUB_LOG("link", "SPLManager_DeleteAllEmitters"); }
-void SPLManager_DeleteEmitter(void) { PBW2_STUB_LOG("link", "SPLManager_DeleteEmitter"); }
-void SPLManager_Draw(void) { PBW2_STUB_LOG("link", "SPLManager_Draw"); }
-void SPLManager_LoadResources(void) { PBW2_STUB_LOG("link", "SPLManager_LoadResources"); }
-void SPLManager_New(void) { PBW2_STUB_LOG("link", "SPLManager_New"); }
-void SPLManager_Update(void) { PBW2_STUB_LOG("link", "SPLManager_Update"); }
-void SPLManager_UploadPalettes(void) { PBW2_STUB_LOG("link", "SPLManager_UploadPalettes"); }
-void SPLManager_UploadPalettesEx(void) { PBW2_STUB_LOG("link", "SPLManager_UploadPalettesEx"); }
-void SPLManager_UploadTextures(void) { PBW2_STUB_LOG("link", "SPLManager_UploadTextures"); }
-void SPLManager_UploadTexturesEx(void) { PBW2_STUB_LOG("link", "SPLManager_UploadTexturesEx"); }
 void allocConfigDSSoftwareFeature(void) { PBW2_STUB_LOG("link", "allocConfigDSSoftwareFeature"); }
 
 /* Slice 2e: online / wireless / camera / DSP stubs (void, logged). The DS

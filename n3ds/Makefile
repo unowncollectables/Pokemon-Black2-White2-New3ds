@@ -68,12 +68,14 @@ LIB_GAME_GFD := \
 LIB_GAME_G3D := \
 	res_struct_accessor.o res_struct_accessor_anm.o kernel.o mem.o anm.o glbstate.o util.o \
 	nsbca.o nsbma.o nsbta.o nsbtp.o nsbva.o sbc.o cgtool.o basic.o maya.o si3d.o 3dsmax.o xsi.o
+LIB_GAME_SPL := spl_anim.o spl_behavior.o spl_draw.o spl_emit.o spl_emitter.o spl_list.o spl_manager.o spl_random.o
 LIB_GAME_OBJS := \
 	../build/n3ds/$(GAME_SYM)/obj/lib/nitro/src/gx/gx_load2d.o \
 	$(foreach size,22 33 43 44,../build/n3ds/$(GAME_SYM)/obj/lib/nitro/src/fx/fx_mtx$(size).o) \
 	$(foreach o,$(LIB_GAME_G2D),../build/n3ds/$(GAME_SYM)/obj/lib/nnsys/src/g2d/$(o)) \
 	$(foreach o,$(LIB_GAME_GFD),../build/n3ds/$(GAME_SYM)/obj/lib/nnsys/src/gfd/$(o)) \
-	$(foreach o,$(LIB_GAME_G3D),../build/n3ds/$(GAME_SYM)/obj/lib/nnsys/src/g3d/$(o))
+	$(foreach o,$(LIB_GAME_G3D),../build/n3ds/$(GAME_SYM)/obj/lib/nnsys/src/g3d/$(o)) \
+	$(foreach o,$(LIB_GAME_SPL),../build/n3ds/$(GAME_SYM)/obj/lib/spl/src/$(o))
 CFLAGS += -DPBW2_LINK_GAME=1
 CFLAGS += $(shell for d in $(CURDIR)/../lib/*/include; do echo -I$$d; done)
 SHELL_SRC += source/game_thread.c nitro/mi_host.c nitro/ic_dc_host.c \
@@ -103,10 +105,68 @@ $(BUILD)/g3_fidelity.3dsx: $(BUILD)/g3_fidelity.elf
 	3dsxtool $< $@
 endif
 else
+SHELL_SRC += ../lib/nitro/src/rtc/rtc_convert.c
 GAME_LDFLAGS :=
 endif
 
 .PHONY: all b2 w2 headers game-objects link-rsp check clean
+.PHONY: home-menu-art
+BT ?= bannertool
+home-menu-art:
+	@case "$(GAME)" in \
+		BLACK2) game="Black 2"; directory=black2 ;; \
+		WHITE2) game="White 2"; directory=white2 ;; \
+		*) echo "Set GAME=BLACK2 or GAME=WHITE2" >&2; exit 1 ;; \
+	esac; \
+	python3 ../scripts/n3ds_home_menu_art.py "$(ROM)" "build/home-menu/$$directory" --game "$$game" --bannertool "$(BT)"
+
+.PHONY: test-input
+test-input: $(BUILD)/input_capture.3dsx
+
+INPUT_TEST_SRC := tests/input_capture.c source/input.c source/settings.c
+INPUT_TEST_WRAP := -Wl,--wrap=hidScanInput,--wrap=hidKeysDown,--wrap=hidKeysHeld,--wrap=hidKeysUp,--wrap=hidCircleRead
+$(BUILD)/input_capture.elf: $(INPUT_TEST_SRC)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -UPBW2_LINK_GAME -UPBW2_GPU_GEOMETRY $^ $(LDFLAGS) $(INPUT_TEST_WRAP) $(LIBPATHS) $(LIBS) -o $@
+
+$(BUILD)/input_capture.3dsx: $(BUILD)/input_capture.elf
+	3dsxtool $< $@
+
+.PHONY: test-present
+test-present: $(BUILD)/present_blit.3dsx
+
+$(BUILD)/present_blit.elf: tests/present_blit.c source/present.c
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -UPBW2_LINK_GAME $^ $(LDFLAGS) -Wl,--wrap=gfxGetFramebuffer $(LIBPATHS) $(LIBS) -o $@
+
+$(BUILD)/present_blit.3dsx: $(BUILD)/present_blit.elf
+	3dsxtool $< $@
+
+.PHONY: test-rtc
+test-rtc: $(BUILD)/rtc_cache.3dsx
+
+RTC_TEST_SRC := tests/rtc_cache.c nitro/rtc_host.c nitro/mi_host.c
+RTC_TEST_OBJS := ../build/n3ds/black2/obj/lib/nitro/src/rtc/rtc_convert.o \
+	../build/n3ds/black2/obj/src/gfl/rtc_cache.o
+$(BUILD)/rtc_cache.elf: $(RTC_TEST_SRC) $(RTC_TEST_OBJS)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $^ $(LDFLAGS) -Wl,--wrap=osGetTime $(LIBPATHS) $(LIBS) -o $@
+
+$(BUILD)/rtc_cache.3dsx: $(BUILD)/rtc_cache.elf
+	3dsxtool $< $@
+
+.PHONY: test-wave
+test-wave: $(BUILD)/wave_out.3dsx
+
+WAVE_TEST_SRC := tests/wave_out.c nitro/wave_out.c
+WAVE_TEST_WRAP := -Wl,--wrap=ndspChnWaveBufAdd,--wrap=ndspChnWaveBufClear,--wrap=ndspChnSetFormat \
+	-Wl,--wrap=ndspChnSetInterp,--wrap=ndspChnSetRate,--wrap=ndspChnSetMix,--wrap=ndspChnGetSamplePos,--wrap=DSP_FlushDataCache
+$(BUILD)/wave_out.elf: $(WAVE_TEST_SRC)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -DPBW2_LINK_GAME -I$(CURDIR)/../lib/nnsys/include $^ $(LDFLAGS) $(WAVE_TEST_WRAP) $(LIBPATHS) $(LIBS) -o $@
+
+$(BUILD)/wave_out.3dsx: $(BUILD)/wave_out.elf
+	3dsxtool $< $@
 
 all: check headers game-objects b2 w2
 

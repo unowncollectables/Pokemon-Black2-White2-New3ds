@@ -32,6 +32,7 @@
 #define WAVE_DS_CHANNELS 16
 #define WAVE_NDSP_BASE 1 /* DS ch N -> NDSP ch N+1 */
 #define WAVE_PCM_CAPACITY (64u * 1024u)
+enum { WAVE_FORMAT_IMA_ADPCM = 2, ADPCM_HEADER_SAMPLES = 8 };
 
 struct NNSSndWaveOut {
     int dsCh;
@@ -44,6 +45,7 @@ struct NNSSndWaveOut {
     int pan;
     u64 startTick;
     ndspWaveBuf buf;
+    ndspWaveBuf loopBuf;
 };
 
 static struct NNSSndWaveOut s_channels[WAVE_DS_CHANNELS];
@@ -69,6 +71,42 @@ static void wave_set_mix(struct NNSSndWaveOut *waveOut) {
     float right = waveOut->pan <= 64 ? (float)waveOut->pan / 64.0f : 1.0f;
     float mix[12] = {volume * left, volume * right};
     ndspChnSetMix(waveOut->ndspCh, mix);
+}
+
+static void decode_ima(s16 *pcm, const u8 *data, unsigned samples) {
+    static const u16 stepSizes[] = {
+        7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31,
+        34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143,
+        157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449, 494, 544,
+        598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707,
+        1878, 2066, 2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871,
+        5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899,
+        15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767,
+    };
+    static const s8 indexDeltas[] = {-1, -1, -1, -1, 2, 4, 6, 8};
+    int value = (s16)(data[0] | (data[1] << 8));
+    int index = data[2] & 127;
+    if (index > 88) index = 88;
+    data += 4;
+    for (unsigned i = 0; i < samples; ++i) {
+        unsigned code = (data[i / 2] >> ((i & 1) * 4)) & 15;
+        int step = stepSizes[index];
+        int delta = step >> 3;
+        if (code & 1) delta += step >> 2;
+        if (code & 2) delta += step >> 1;
+        if (code & 4) delta += step;
+        value += (code & 8) ? -delta : delta;
+        if (value > 32767) value = 32767;
+        if (value < -32767) value = -32767;
+        pcm[i] = value;
+        index += indexDeltas[code & 7];
+        if (index < 0) index = 0;
+        if (index > 88) index = 88;
+    }
+}
+
+static bool wave_pending(const ndspWaveBuf *buf) {
+    return buf->status == NDSP_WBUF_QUEUED || buf->status == NDSP_WBUF_PLAYING;
 }
 
 NNSSndWaveOutHandle NNS_SndWaveOutAllocChannel(int channel) {
@@ -101,18 +139,31 @@ BOOL NNS_SndWaveOutStart(NNSSndWaveOutHandle handle, NNSSndWaveFormat format, co
     Log_Line("AUDIO", "WaveOutStart fmt=%d loop=%d loopStart=%d samples=%d rate=%d vol=%d speed=%d pan=%d",
              (int)format, (int)loop, loopStart, samples, rate, volume, speed, pan);
     if (!waveOut || !waveOut->inUse || !data || samples <= 0 || rate <= 0 || speed <= 0
-        || (loop && loopStart != 0)) return FALSE;
-    if (format != NNS_SND_WAVE_FORMAT_PCM8 && format != NNS_SND_WAVE_FORMAT_PCM16) return FALSE;
+        || (loop && (loopStart < 0 || loopStart >= samples))) return FALSE;
+    bool adpcm = (int)format == WAVE_FORMAT_IMA_ADPCM;
+    if (format != NNS_SND_WAVE_FORMAT_PCM8 && format != NNS_SND_WAVE_FORMAT_PCM16 && !adpcm) return FALSE;
+    if (!loop) loopStart = 0;
+    if (adpcm) {
+        if (samples <= ADPCM_HEADER_SAMPLES || (samples & 7) || (loopStart & 7)) return FALSE;
+        samples -= ADPCM_HEADER_SAMPLES;
+        loopStart = loopStart >= ADPCM_HEADER_SAMPLES ? loopStart - ADPCM_HEADER_SAMPLES : 0;
+    }
     if (!Audio_IsNdspReady()) return FALSE;
     unsigned sampleBytes = format == NNS_SND_WAVE_FORMAT_PCM8 ? 1 : 2;
     if ((unsigned)samples > WAVE_PCM_CAPACITY / sampleBytes) return FALSE;
     void **pcm = &s_pcm[waveOut->dsCh];
-    if (!*pcm) *pcm = linearAlloc(WAVE_PCM_CAPACITY);
+    if (!*pcm) *pcm = linearAlloc(WAVE_PCM_CAPACITY + 3);
     if (!*pcm) return FALSE;
     if (waveOut->active) ndspChnWaveBufClear(waveOut->ndspCh);
     unsigned bytes = (unsigned)samples * sampleBytes;
-    memcpy(*pcm, data, bytes);
-    DSP_FlushDataCache(*pcm, bytes);
+    if (adpcm) decode_ima(*pcm, data, samples);
+    else memcpy(*pcm, data, bytes);
+    unsigned introBytes = (unsigned)loopStart * sampleBytes;
+    unsigned loopOffset = (introBytes + 3) & ~3u;
+    if (loopOffset != introBytes) {
+        memmove((u8 *)*pcm + loopOffset, (u8 *)*pcm + introBytes, bytes - introBytes);
+    }
+    DSP_FlushDataCache(*pcm, bytes + loopOffset - introBytes);
     waveOut->sampleRate = rate;
     waveOut->speed = speed;
     waveOut->volume = volume < 0 ? 0 : volume > 127 ? 127 : volume;
@@ -123,10 +174,17 @@ BOOL NNS_SndWaveOutStart(NNSSndWaveOutHandle handle, NNSSndWaveFormat format, co
     ndspChnSetRate(waveOut->ndspCh, wave_effective_rate(rate, speed));
     wave_set_mix(waveOut);
     memset(&waveOut->buf, 0, sizeof waveOut->buf);
+    memset(&waveOut->loopBuf, 0, sizeof waveOut->loopBuf);
     waveOut->buf.data_vaddr = *pcm;
-    waveOut->buf.nsamples = (u32)samples;
-    waveOut->buf.looping = loop ? true : false; /* NDSP loops from the buffer start; no loopStart field */
+    waveOut->buf.nsamples = loopStart ? (u32)loopStart : (u32)samples;
+    waveOut->buf.looping = loop && !loopStart;
     ndspChnWaveBufAdd(waveOut->ndspCh, &waveOut->buf);
+    if (loopStart) {
+        waveOut->loopBuf.data_vaddr = (u8 *)*pcm + loopOffset;
+        waveOut->loopBuf.nsamples = samples - loopStart;
+        waveOut->loopBuf.looping = true;
+        ndspChnWaveBufAdd(waveOut->ndspCh, &waveOut->loopBuf);
+    }
     waveOut->active = TRUE;
     waveOut->startTick = svcGetSystemTick();
     Log_Line("AUDIO", "WaveOutStart ch=%d playing at %.0f Hz, %d samples", waveOut->ndspCh,
@@ -137,7 +195,7 @@ BOOL NNS_SndWaveOutStart(NNSSndWaveOutHandle handle, NNSSndWaveFormat format, co
 BOOL NNS_SndWaveOutIsPlaying(NNSSndWaveOutHandle handle) {
     struct NNSSndWaveOut *waveOut = handle;
     if (!waveOut || !waveOut->active) return FALSE;
-    if (waveOut->buf.status == NDSP_WBUF_QUEUED || waveOut->buf.status == NDSP_WBUF_PLAYING) return TRUE;
+    if (wave_pending(&waveOut->buf) || wave_pending(&waveOut->loopBuf)) return TRUE;
     Log_Line("AUDIO", "WaveOutIsPlaying ch=%d ended status=%d samplePos=%lu after %llu ms", waveOut->dsCh,
              (int)waveOut->buf.status, (unsigned long)ndspChnGetSamplePos(waveOut->ndspCh),
              (unsigned long long)((svcGetSystemTick() - waveOut->startTick) / (SYSCLOCK_ARM11 / 1000)));
@@ -161,7 +219,7 @@ void NNS_SndWaveOutWaitForChannelStop(NNSSndWaveOutHandle handle) {
     if (!waveOut || !waveOut->active) return;
     ndspChnWaveBufClear(waveOut->ndspCh);
     for (i = 0; i < 200; ++i) {
-        if (waveOut->buf.status == NDSP_WBUF_FREE || waveOut->buf.status == NDSP_WBUF_DONE) break;
+        if (!wave_pending(&waveOut->buf) && !wave_pending(&waveOut->loopBuf)) break;
         svcSleepThread(1000000LL);
     }
     waveOut->active = FALSE;

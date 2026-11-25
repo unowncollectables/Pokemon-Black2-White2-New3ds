@@ -37,6 +37,26 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
   need a playthrough. The emulator test build skips the New 3DS speedup
   request that causes Azahar to abort.
 
+### Cartridge saves
+
+- The game's linked backup path reads and writes the original 512 KiB
+  flash image in its SD directory. Missing files read as erased flash.
+  The first game write creates the image. Existing files get the same
+  block and footer writes the game normally sends to the cartridge.
+- Startup only inspects the save. A file with the wrong size is rejected
+  instead of being resized or replaced. The game's save state machine
+  receives the result of each SD write.
+- Selecting New Game can create the game's own introductory save before
+  field control is available. The first normal field Save records the
+  player's location for Continue.
+- The native build preserves the DS's four-byte alignment for the
+  64-bit fields in six main save blocks. Compile-time checks enforce
+  their cartridge sizes and offsets so the game's CRCs cover the
+  original byte ranges.
+- Azahar loads a Black 2 cartridge save through Continue and reaches
+  the saved field in Striaton City with C-Gear disabled. The replay
+  opens the field menu and displays the saved party.
+
 ### Black 2 graphics follow-up
 
 - The New Game menu's red and gray background and item outlines render
@@ -49,6 +69,24 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
   world-to-screen projection for its dialogue. The Black 2 replay reaches
   movement after the opening with these changes. The map transition trace
   still includes two direct reads of the DS VBlank counter.
+- The compositor applies rectangular and OBJ window masks to backgrounds,
+  sprites, and the 3D layer. It samples affine sprites with their OAM
+  matrices and resolves BG and OBJ ties in DS priority order. Azahar shows
+  the Striaton City location banner over the field without the previous
+  white bands when continuing from a cartridge save. The ARM11 pixel
+  fixture covers the masks and priority order with both renderer paths.
+- Layer brightness follows each engine's BLDCNT/BLDY registers and
+  the visible BG, OBJ, 3D or backdrop plane. Window effects masks can
+  suppress it. Bag, Options and seasonal transitions use these registers.
+  The Black 2 Azahar replay activates the Striaton banner, opens Options
+  from the field menu and returns to the field.
+- Both versions link the SPL particle manager, emitter, and behavior
+  implementations. They issue geometry commands through the existing
+  GX implementation. The Black 2 Azahar replay reaches the opening
+  dialogue with the real engine linked.
+- The game refreshes its RTC cache through the native 3DS clock. The host
+  converts the clock to Nitro's epoch so saved timestamps and field time
+  use the original two-digit year.
 
 ### Black 2 geometry and rasterization
 
@@ -75,8 +113,8 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
   field visibility was restored.
   An ARM11 fixture covers box visibility, a translated box, clipping,
   depth, palette lookup, and capture to VRAM D.
-- The CPU renderer approximates lighting and translucent blending. Fog,
-  toon shading and exact capture blending remain open. The PICA200 backend
+- The CPU renderer approximates translucent blending. Exact capture and
+  fractional-alpha composition remain open. The PICA200 backend
   uses SoulSilver's `g3gpu.c` and `shaders/g3.v.pica` as references.
 - Triangles fully inside the clip volume go straight to projection.
   Triangles outside a common clip plane are discarded. The existing
@@ -89,6 +127,8 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
 - The title's SDK stream call opens PCM16 stream 0 in the staged
   `swan_sound_data.sdat`. The core 2 audio worker reads and interleaves
   blocks into NDSP buffers and follows the game's stop and fade requests.
+  It caches 8,192 frames per channel so a stereo track with separated
+  channels needs fewer SD seeks.
   Azahar captures stereo output at 32,728 Hz and silence after Start fades
   the stream. The ARM11 stream fixture covers block boundaries, seek,
   looping, and a malformed header.
@@ -98,19 +138,33 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
 
 ### Display settings and audio integration
 
-- L+R+Y opens the display menu on the lower LCD. D-pad selects, A toggles,
-  and B closes it. Each setting starts off and applies for the session.
+- L+R+Y opens the display menu on the lower LCD. Tap a row to toggle it,
+  or use the D-pad and A. B closes the menu. Each setting starts off
+  and applies for the session.
+  The Circle Pad cannot move the player while the menu is open. A held
+  stick stays blocked after the menu closes until it returns to neutral.
   LCD fit scales to 320×240 at 4:3 and maps bottom touches back to DS
   coordinates. Wide fill stretches the top image across 400×240. Sharp
   pixels selects point filtering for scaled screens.
 - Azahar verifies the menu toggles and the ARM11 fixture checks the
   default and scaled touch bounds. Wider field visibility, per-glyph
   sharp text, and native-resolution geometry remain open.
+- The presenter skips the game layer behind the settings menu when
+  display capture does not need it. Centered and scaled presentation
+  clear the margins and overwrite the picture once per frame.
 - The NDSP wave player copies cry PCM to linear memory before queuing
   it. SDAT wave and file metadata are read in two blocks to avoid
   thousands of small SD seeks on the first cry. The game checks the
   wave archive and sample boundaries before playback. Field music and
   sound effects still need the sequence player.
+- The same SDAT INFO cache supplies sequence IDs, bank assignments,
+  player parameters and the banks' wave archive references. The port
+  checks record and file ID bounds before handing data to the game.
+- WaveOut decodes DS IMA-ADPCM to PCM16 and queues a one-shot intro
+  followed by a looped sustain when a wave has a nonzero loop point.
+  Azahar NDSP telemetry verifies the sustain buffer wraps. These sample
+  playback features are available to the sequence player when it is
+  implemented.
 
 ### Experimental PICA200 geometry
 
@@ -136,6 +190,9 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
   TEXCOORD, NORMAL, or vertex submission, according to the material's
   mode. Both renderers consume these coordinates. The fixture checks
   both axes and verifies when the texture matrix is read.
+- NORMAL shades vertices from the enabled GX lights and the current
+  material, using the vector matrix, diffuse and ambient terms, emission,
+  and the optional shininess table. Both renderers use those vertex colors.
 - Mixed-alpha textures write depth for opaque texels. Fractional texels
   write depth when the polygon requests it. Textures with only one alpha
   class use one draw pass. LCDC uploads that overwrite a queued texture
@@ -146,6 +203,20 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
 - GX decals use texel alpha to select the color and polygon alpha for
   coverage. PICA draws decals with zero or full texel alpha. Frames with
   fractional decal texels use software for the DS fixed-point blend.
+- The host reads the GX alpha-test enable and reference at the start of
+  each frame. Fragments at or below the reference are discarded. An
+  enabled test with fractional polygon and texture alpha uses software
+  to reproduce the DS's five-bit multiplication and cutoff.
+- Toon shading samples the GX table with interpolated red intensity.
+  Highlight mode adds the lookup color to the textured or untextured
+  intensity. Fog uses the per-pixel flag, density and Z or W depth, and
+  honors color-plus-alpha and alpha-only modes. The host resolves these
+  effects in software when the GPU setting is enabled.
+- Shadow mode uses a depth-fail mask and rejects the occluder's polygon
+  ID. The CPU handles the shadow pass when the GPU setting is enabled.
+- Edge marking selects the palette entry from the nearer polygon's ID
+  at a depth boundary. The software pass colors those edges before fog.
+  Dual-layer anti-alias coverage and exact depth testing remain open.
 - Source A 3D capture copies the visibility bit with the color. Source
   A/B blending ignores contributions from invalid pixels. Capture
   offsets wrap within the destination bank. The synthetic fixture
@@ -502,7 +573,7 @@ Important host files under `n3ds/nitro/` and `n3ds/source/`:
 | `overlay_host.c` | Overlay load from `sdmc:/3ds/<game>_3ds/overlays/` |
 | `fs_host.c` | Path FS under staged `nitrofs/` |
 | `pad_host.c` | Input. Must not self-reset |
-| `save_shim.c` | Must not create or write a `.sav` |
+| `save_shim.c` | Stores cartridge flash ranges on SD when requested by the game |
 | `settings.c` | L+R+Y Settings. No gameplay toggles yet; do not write `config.txt` until a real default-off toggle exists |
 
 Display / POWCNT (keep this polarity):
@@ -681,6 +752,8 @@ Builder still needs a **B2W2 target** that:
    does not commit or upload dumps, saves, or logs.
 4. Keeps Black 2 and White 2 as two outputs of the same source tree,
    with the title IDs above and New 3DS clock / L2 / core 2 flags.
+5. Calls the [HOME Menu art helper](BUILDING.md#cia) with the matching
+   ROM and passes the generated icon and banner to its CIA packaging step.
 
 Coordinate the target's layout with the sister-port Builders so the
 user is not maintaining three different SD conventions without a
@@ -725,23 +798,20 @@ instead). Stage overlays at `sdmc:/3ds/<game>_3ds/overlays/`. After
 TitlePic after `pbw2_game_system_init_done`.
 
 `HW_NVRAM_USER_INFO` is host `PbW2_NvramUserInfo` with DS-default touch
-calibration. `pxi_service.c` completes CARD backup commands against an
-in-memory shadow (0xFF reads, no `.sav` file).
+calibration. The linked game's backup calls use `save_shim.c` for its SD
+save. The lower-level PXI test path still uses an in-memory shadow.
 
 Experimental `OS_Init` on New 3DS (`PBW2_LINK_GAME` shell `OS_Init`):
 `PbW2_OsThreadHostInit`, `PXI_Init`, `PbW2_RomHeaderHostInit`,
 `PbW2_DtcmHostInit`, `PbW2_NvramHostInit`, `CARD_Init` (resource lock,
 PXI FS callback, **no** CARD worker thread).
 
-### What is still stubbed
+### Remaining compatibility work
 
-- Sound. NDSP is not started. No ARM7 player, no music.
-- 3D replay. FIFO is captured. `NNS_G3dDraw`, host texture uploads,
-  matrix operations, and `GX_SetCapture` to VRAM D still need work.
+- SDAT sequence playback for field music, fanfares, and sequenced effects.
+- DS 3D dual-layer coverage and exact display capture blending.
 - DSi/TWL and the two DSP firmware images (`rom/dsp/*.inc`, ROM-backed,
   not in git).
-- Settings. The screen exists so the next feature has a place. No
-  `config.txt` yet.
 - A large set of later overlays (field, battle, comms). 344 overlays
   should eventually be linked statically or loaded from a native
   overlay table, not left as DS overlay files the ARM9 swaps by hand.

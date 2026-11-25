@@ -2,6 +2,7 @@
 #define POKEBW2_SAVE_TRAINER_GAME_INFO_H
 
 #include "types.h"
+#include "save/flash_layout.h"
 #include "struct_decls.h"
 
 // Save block 0x34, which swan calls the trainer game info and, in the names of its later functions, the trainer card
@@ -42,7 +43,7 @@ struct TrainerGameInfoSave {
     u8 surveyAnswers[TRAINER_GAME_INFO_SURVEY_ANSWER_COUNT];
     u16 surveyCounts[TRAINER_GAME_INFO_SURVEY_ANSWER_COUNT];
     // When the survey started, in seconds since 2000
-    s64 surveySeconds;
+    SaveS64 surveySeconds;
     u16 gymParties[TRAINER_GAME_INFO_GYM_COUNT][6];
     u32 drTable[TRAINER_GAME_INFO_DR_COUNT];
     // Never accessed: the block is cleared and saved whole

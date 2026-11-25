@@ -224,6 +224,8 @@ static u32 bg_char_addr(u32 dc, u16 cnt, int is_sub) {
 typedef struct {
     u16 colors[256 * 192];
     u8 planes[256 * 192];
+    const u8 *window;
+    bool track;
     u16 first;
     u16 second;
     u16 eva;
@@ -238,7 +240,9 @@ static unsigned blend_channel(unsigned a, unsigned b, const BgBlend *blend) {
 static inline void put_bg_pixel(u16 *out, BgBlend *blend, unsigned i, unsigned plane, u16 color) {
     u16 visible = color;
     if (blend != NULL) {
-        if ((blend->first & plane) && (blend->second & blend->planes[i])) {
+        u8 mask = blend->window ? blend->window[i] : 0x3f;
+        if (!(mask & plane)) return;
+        if ((mask & G2_WND_EFFECT) && (blend->first & plane) && (blend->second & blend->planes[i])) {
             u16 below = blend->colors[i];
             unsigned r = blend_channel(color >> 11, below >> 11, blend);
             unsigned g = blend_channel((color >> 6) & 31, (below >> 6) & 31, blend);
@@ -246,8 +250,10 @@ static inline void put_bg_pixel(u16 *out, BgBlend *blend, unsigned i, unsigned p
             visible = (u16)((r << 11) | (g << 6) | b);
         }
         /* A foreground layer blends against the original color of the layer beneath it. */
-        blend->colors[i] = color;
-        blend->planes[i] = (u8)plane;
+        if (blend->track) {
+            if (blend->first) blend->colors[i] = color;
+            blend->planes[i] = (u8)plane;
+        }
     }
     out[i] = visible;
 }
@@ -566,7 +572,7 @@ static u32 engine_obj_vram_mapped(int is_sub) {
     return HW_OBJ_VRAM;
 }
 
-static void draw_obj_layer(const u8 *regs, u32 dc, int is_sub, u16 *out) {
+static void draw_obj_layer(u32 dc, int is_sub, u16 *out, u8 *window, u8 inside, unsigned priority, BgBlend *blend) {
     static const u8 spw[3][4] = {{8, 16, 32, 64}, {16, 32, 32, 64}, {8, 8, 16, 32}};
     static const u8 sph[3][4] = {{8, 16, 32, 64}, {8, 8, 16, 32}, {16, 32, 32, 64}};
     u32 oam_base = is_sub ? HW_DB_OAM : HW_OAM;
@@ -576,93 +582,138 @@ static void draw_obj_layer(const u8 *regs, u32 dc, int is_sub, u16 *out) {
                                                       : engine_obj_pltt(is_sub);
     u32 obj1d = (dc & REG_GX_DISPCNT_OBJMAP_CH_MASK) != 0u;
     u32 obj1d_shift = (dc >> REG_GX_DISPCNT_EXOBJ_SHIFT) & 3u;
-    int pri;
     int i;
 
     if ((dc & 0x1000u) == 0) {
         return;
     }
-    for (pri = 3; pri >= 0; pri--) {
-        for (i = 127; i >= 0; i--) {
-            const u16 *a = oam + i * 4;
-            u32 shape = a[0] >> 14;
-            u32 size = a[1] >> 14;
-            int width;
-            int height;
-            int xs;
-            int ypos;
-            int xo;
-            int yo;
-            u32 tile_bytes;
-            u32 tile_base;
-            u32 tile_row_bytes;
-            int bpp8;
+    for (i = 127; i >= 0; i--) {
+        const u16 *a = oam + i * 4;
+        u32 shape = a[0] >> 14;
+        u32 size = a[1] >> 14;
+        int width;
+        int height;
+        int xs;
+        int ypos;
+        int xo;
+        int yo;
+        u32 tile_bytes;
+        u32 tile_base;
+        u32 tile_row_bytes;
+        int bpp8;
 
-            if (shape > 2) {
+        if (shape > 2) {
+            continue;
+        }
+        if ((a[0] & 0x300) == 0x200) {
+            continue;
+        }
+        if (out && ((a[2] >> 10) & 3) != priority) {
+            continue;
+        }
+        unsigned mode = (a[0] >> 10) & 3;
+        if ((mode == GX_OAM_MODE_OBJWND) != (out == NULL)) continue;
+        width = spw[shape][size];
+        height = sph[shape][size];
+        bool affine = (a[0] & 0x0100u) != 0;
+        bool doubleSize = affine && (a[0] & 0x0200u);
+        int boxWidth = doubleSize ? 2 * width : width;
+        int boxHeight = doubleSize ? 2 * height : height;
+        const u16 *matrix = oam + 16 * ((a[1] >> 9) & 31);
+        int pa = affine ? (s16)matrix[3] : (a[1] & 0x1000u) ? -256 : 256;
+        int pb = affine ? (s16)matrix[7] : 0;
+        int pc = affine ? (s16)matrix[11] : 0;
+        int pd = affine ? (s16)matrix[15] : (a[1] & 0x2000u) ? -256 : 256;
+        int xCenter = affine ? width * 128 : pa < 0 ? (width - 1) * 256 : 0;
+        int yCenter = affine ? height * 128 : pd < 0 ? (height - 1) * 256 : 0;
+        int xOrigin = affine ? -boxWidth / 2 : 0;
+        int yOrigin = affine ? -boxHeight / 2 : 0;
+        bpp8 = (a[0] & 0x2000) != 0;
+        tile_bytes = bpp8 ? 64u : 32u;
+        tile_base = (u32)(a[2] & 0x3ffu) << (5u + (obj1d ? obj1d_shift : 0u));
+        tile_row_bytes = obj1d ? (u32)(width >> 3) * tile_bytes : 0x400u;
+        xs = a[1] & 0x1ff;
+        ypos = a[0] & 255;
+        if (xs >= 256) {
+            xs -= 512;
+        }
+        if (ypos >= 192) {
+            ypos -= 256;
+        }
+        for (yo = 0; yo < boxHeight; yo++) {
+            int y = ypos + yo;
+            if (y < 0 || y >= 192) {
                 continue;
             }
-            if ((a[0] & 0x300) == 0x200) {
-                continue;
-            }
-            if (((a[2] >> 10) & 3) != (u32)pri) {
-                continue;
-            }
-            if (((a[0] >> 8) & 3u) == 2u) {
-                continue;
-            }
-            width = spw[shape][size];
-            height = sph[shape][size];
-            bpp8 = (a[0] & 0x2000) != 0;
-            tile_bytes = bpp8 ? 64u : 32u;
-            tile_base = (u32)(a[2] & 0x3ffu) << (5u + (obj1d ? obj1d_shift : 0u));
-            tile_row_bytes = obj1d ? (u32)(width >> 3) * tile_bytes : 0x400u;
-            xs = a[1] & 0x1ff;
-            ypos = a[0] & 255;
-            if (xs >= 256) {
-                xs -= 512;
-            }
-            if (ypos >= 192) {
-                ypos -= 256;
-            }
-            for (yo = 0; yo < height; yo++) {
-                int y = ypos + yo;
-                u32 py = (a[1] & 0x2000) ? (height - 1 - yo) : yo;
-                u32 row = tile_base + (py >> 3) * tile_row_bytes + (py & 7u) * (tile_bytes >> 3);
-                if (y < 0 || y >= 192) {
+            int sx = xCenter + xOrigin * pa + (yOrigin + yo) * pb;
+            int sy = yCenter + xOrigin * pc + (yOrigin + yo) * pd;
+            for (xo = 0; xo < boxWidth; xo++, sx += pa, sy += pc) {
+                int x = xs + xo;
+                u32 addr;
+                unsigned px = sx >> 8, py = sy >> 8;
+                u8 nib;
+                u32 ci, paletteIndex;
+
+                if (x < 0 || x >= 256 || px >= (unsigned)width || py >= (unsigned)height) {
                     continue;
                 }
-                for (xo = 0; xo < width; xo++) {
-                    int x = xs + xo;
-                    u32 addr;
-                    u32 px;
-                    u8 nib;
-                    u32 ci;
-
-                    if (x < 0 || x >= 256) {
-                        continue;
-                    }
-                    px = (a[1] & 0x1000) ? (width - 1 - xo) : xo;
-                    addr = row + (px >> 3) * tile_bytes;
-                    if (bpp8) {
-                        addr += px & 7u;
-                        ci = ovram[addr & 0x3ffffu];
-                        if (ci == 0) {
-                            continue;
-                        }
-                        out[y * 256 + x] = rgb555_to_565(pltt[ci]);
-                    } else {
-                        addr += (px & 7u) >> 1;
-                        nib = ovram[addr & 0x3ffffu];
-                        ci = (px & 1) ? (nib >> 4) : (nib & 0x0f);
-                        if (ci == 0) {
-                            continue;
-                        }
-                        out[y * 256 + x] = rgb555_to_565(pltt[(a[2] >> 12) * 16u + ci]);
+                addr = tile_base + (py >> 3) * tile_row_bytes + (py & 7u) * (tile_bytes >> 3)
+                     + (px >> 3) * tile_bytes;
+                if (bpp8) {
+                    addr += px & 7u;
+                    ci = ovram[addr & 0x3ffffu];
+                    paletteIndex = ci;
+                } else {
+                    addr += (px & 7u) >> 1;
+                    nib = ovram[addr & 0x3ffffu];
+                    ci = (px & 1) ? (nib >> 4) : (nib & 0x0f);
+                    paletteIndex = (a[2] >> 12) * 16u + ci;
+                }
+                if (!ci) continue;
+                unsigned pixel = y * 256 + x;
+                if (!out) window[pixel] = inside;
+                else if (!window || (window[pixel] & GX_WND_PLANEMASK_OBJ)) {
+                    u16 color = rgb555_to_565(pltt[paletteIndex]);
+                    out[pixel] = color;
+                    if (blend && blend->track) {
+                        if (blend->first) blend->colors[pixel] = color;
+                        blend->planes[pixel] = GX_WND_PLANEMASK_OBJ;
                     }
                 }
             }
         }
     }
+}
+
+static void apply_window_rect(u8 *window, u16 xBounds, u16 yBounds, u8 mask) {
+    unsigned left = xBounds >> 8, right = xBounds & 255;
+    unsigned top = yBounds >> 8, bottom = yBounds & 255;
+    if (left == right || top == bottom) return;
+    for (unsigned y = 0; y < 192; ++y) {
+        bool within = top < bottom ? y >= top && y < bottom : y >= top || y < bottom;
+        if (!within) continue;
+        u8 *row = window + y * 256;
+        if (left < right) {
+            memset(row + left, mask, right - left);
+        } else {
+            memset(row, mask, right);
+            memset(row + left, mask, 256 - left);
+        }
+    }
+}
+
+static u8 *build_window_mask(const u8 *regs, u32 dc, int is_sub) {
+    static u8 window[256 * 192];
+    unsigned enabled = (dc >> 13) & 7;
+    if (!enabled) return NULL;
+    u16 outside = reg_u16(regs, 0x4a);
+    memset(window, outside & 0x3f, sizeof window);
+    if (enabled & GX_WNDMASK_OW) draw_obj_layer(dc, is_sub, NULL, window, (outside >> 8) & 0x3f, 0, NULL);
+    /* Window 0 takes precedence over window 1, then over the OBJ window. */
+    u16 inside = reg_u16(regs, 0x48);
+    if (enabled & GX_WNDMASK_W1) apply_window_rect(window, reg_u16(regs, 0x42), reg_u16(regs, 0x46), (inside >> 8) & 0x3f);
+    if (enabled & GX_WNDMASK_W0) apply_window_rect(window, reg_u16(regs, 0x40), reg_u16(regs, 0x44), inside & 0x3f);
+    return window;
 }
 
 static void apply_master_bright(u16 *fb, u16 reg) {
@@ -692,6 +743,26 @@ static void apply_master_bright(u16 *fb, u16 reg) {
             b -= b * factor >> 4;
         }
         fb[i] = (u16)((r << 11) | (g << 5) | b);
+    }
+}
+
+static unsigned layer_brightness(unsigned color, unsigned factor, bool brighten) {
+    if (brighten) return color + (((63 - color) * factor + 8) >> 4);
+    return color - ((color * factor + 7) >> 4);
+}
+
+static void apply_layer_brightness(u16 *out, const BgBlend *blend, u16 bldcnt, unsigned factor) {
+    unsigned targets = bldcnt & 0x3f;
+    if (!targets || !factor) return;
+    bool brighten = (bldcnt & REG_G2_BLDCNT_EFFECT_MASK) == REG_G2_BLDCNT_EFFECT_INCREASE;
+    if (factor > 16) factor = 16;
+    for (unsigned i = 0; i < 256 * 192; ++i) {
+        if (!(blend->planes[i] & targets) || (blend->window && !(blend->window[i] & G2_WND_EFFECT))) continue;
+        u16 color = out[i];
+        unsigned r = layer_brightness((color >> 11) * 2, factor, brighten);
+        unsigned g = layer_brightness((color >> 5) & 63, factor, brighten);
+        unsigned b = layer_brightness((color & 31) * 2, factor, brighten);
+        out[i] = ((r >> 1) << 11) | (g << 5) | (b >> 1);
     }
 }
 
@@ -773,8 +844,19 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out) {
     for (i = 0; i < 256u * 192u; i++) {
         out[i] = backdrop;
     }
+    u8 *window = build_window_mask(regs, dc, is_sub);
     u16 bldcnt = reg_u16(regs, 0x50);
-    if ((bldcnt & REG_G2_BLDCNT_EFFECT_MASK) == REG_G2_BLDCNT_EFFECT_ALPHA) {
+    unsigned effect = bldcnt & REG_G2_BLDCNT_EFFECT_MASK;
+    unsigned factor = reg_u16(regs, 0x54) & 31;
+    bool layerBrightness = (effect == REG_G2_BLDCNT_EFFECT_INCREASE || effect == REG_G2_BLDCNT_EFFECT_DECREASE)
+                           && (bldcnt & 0x3f) && factor;
+    bool layerAlpha = effect == REG_G2_BLDCNT_EFFECT_ALPHA && (bldcnt & 0x3f) && (bldcnt & 0x3f00);
+    bg_blend.window = window;
+    bg_blend.track = layerAlpha || layerBrightness;
+    bg_blend.first = 0;
+    if (window || bg_blend.track) blend = &bg_blend;
+    if (bg_blend.track) memset(bg_blend.planes, 1u << 5, sizeof(bg_blend.planes));
+    if (layerAlpha) {
         u16 alpha = reg_u16(regs, 0x52);
         blend = &bg_blend;
         blend->first = bldcnt & 0x3f;
@@ -788,10 +870,10 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out) {
             blend->evb = 16;
         }
         memcpy(blend->colors, out, sizeof(blend->colors));
-        memset(blend->planes, 1u << 5, sizeof(blend->planes));
     }
     for (pri = 3; pri >= 0; pri--) {
-        for (bg = 0; bg < 4; bg++) {
+        /* BG0 wins a priority tie among BGs. OBJs with that priority go over them. */
+        for (bg = 3; bg >= 0; bg--) {
             u16 cnt = reg_u16(regs, 8 + bg * 2);
             if ((dc & (0x100u << bg)) == 0) {
                 continue;
@@ -800,13 +882,15 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out) {
                 continue;
             }
             if (bg == 0 && !is_sub && (dc & REG_GX_DISPCNT_BG02D3D_MASK)) {
-                PbW2_G3Compose(1, out);
+                PbW2_G3RasterComposite(out, window, bg_blend.track ? bg_blend.planes : NULL,
+                                       layerAlpha ? bg_blend.colors : NULL);
             } else {
                 draw_bg_layer(regs, dc, is_sub, bg, bgmode, out, blend);
             }
         }
+        draw_obj_layer(dc, is_sub, out, window, 0, pri, blend);
     }
-    draw_obj_layer(regs, dc, is_sub, out);
+    if (layerBrightness) apply_layer_brightness(out, blend, bldcnt, factor);
     if (!is_sub) capture_main(out, dc);
     apply_master_bright(out, reg_u16(regs, 0x6cu));
 }
@@ -826,6 +910,10 @@ int PbW2_ComposeScreens(u16 *top_rgb565, u16 *bottom_rgb565) {
     }
     if (main_fb) {
         compose_engine(pbw2_io + 0, 0, main_fb);
+    } else if (reg_GX_DISPCAPCNT & REG_GX_DISPCAPCNT_E_MASK) {
+        /* A hidden main LCD still drives the DS capture unit. */
+        static u16 captureMain[256 * 192];
+        compose_engine(pbw2_io + 0, 0, captureMain);
     }
     if (sub_fb) {
         compose_engine(pbw2_io + 0x1000, 1, sub_fb);

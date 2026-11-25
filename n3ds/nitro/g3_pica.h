@@ -38,7 +38,7 @@ bool PbW2_PicaInit(void);
 void PbW2_PicaExit(void);
 void PbW2_PicaSetEnabled(bool enabled);
 bool PbW2_PicaEnabled(void);
-bool PbW2_PicaBegin(void);
+bool PbW2_PicaBegin(unsigned alphaRef);
 int PbW2_PicaUpload(const PicaTexture *texture);
 unsigned PbW2_PicaTextureAlpha(int texture);
 bool PbW2_PicaTriangle(const PicaVertex vertex[3], int texture, PicaAlphaTest test,

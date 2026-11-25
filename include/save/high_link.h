@@ -2,6 +2,7 @@
 #define POKEBW2_SAVE_HIGH_LINK_H
 
 #include "types.h"
+#include "save/flash_layout.h"
 #include "gfl/heap.h"
 #include "struct_decls.h"
 
@@ -32,7 +33,7 @@ struct HighLinkSave {
     // Never accessed: the block is cleared and saved whole
     u8 padding1A6[6];
     // The play time counted by HighLinkSave_CountPlaySeconds
-    u64 seconds;
+    SaveU64 seconds;
 };
 
 // The block's size and its initial state; swan's names for them are misnomers

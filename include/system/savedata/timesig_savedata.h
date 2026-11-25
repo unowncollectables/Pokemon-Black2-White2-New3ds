@@ -2,6 +2,7 @@
 #define POKEBW2_SYSTEM_SAVEDATA_TIMESIG_SAVEDATA_H
 
 #include "types.h"
+#include "save/flash_layout.h"
 #include "struct_decls.h"
 
 #define TIMESIG_BADGE_COUNT 8
@@ -26,7 +27,7 @@ struct TimeSigSave {
     u8 signBlinks;
     TimeSigBadgeDate badgeDates[TIMESIG_BADGE_COUNT];
     union {
-        s64 seconds;
+        SaveS64 seconds;
         struct {
             u32 secondsLow;
             u32 secondsHigh;

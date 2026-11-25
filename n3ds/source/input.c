@@ -13,9 +13,11 @@ static bool s_cstickWasLive;
 static uint32_t s_down;
 static uint32_t s_held;
 static uint32_t s_blocked;
+static uint32_t s_circleDirections;
+static bool s_circleBlocked;
 
 uint32_t Input_GameHeld(void) {
-    return s_held & ~s_blocked;
+    return (s_held & ~s_blocked) | (s_circleBlocked ? 0 : s_circleDirections);
 }
 
 bool Input_Init(void) {
@@ -43,6 +45,17 @@ static void Log_Edge(uint32_t mask, const char *name) {
     }
 }
 
+static uint32_t CirclePadDirections(void) {
+    circlePosition circle;
+    uint32_t directions = 0;
+    hidCircleRead(&circle);
+    if (circle.dx > 80) directions |= KEY_DRIGHT;
+    if (circle.dx < -80) directions |= KEY_DLEFT;
+    if (circle.dy > 80) directions |= KEY_DUP;
+    if (circle.dy < -80) directions |= KEY_DDOWN;
+    return directions;
+}
+
 void Input_Scan(void) {
     hidScanInput();
     if (s_irrst) {
@@ -50,6 +63,8 @@ void Input_Scan(void) {
     }
     s_down = hidKeysDown();
     s_held = hidKeysHeld();
+    s_circleDirections = CirclePadDirections();
+    if (!s_circleDirections) s_circleBlocked = false;
     Log_Edge(KEY_ZL, "ZL");
     Log_Edge(KEY_ZR, "ZR");
     /* TEMP DIAGNOSTIC (Nov 24, 2026): prove the guest's hidKeysDown sees
@@ -74,7 +89,10 @@ void Input_Scan(void) {
         Log_Line("BTN", "ZR up");
     }
     s_blocked &= s_held;
-    if (Settings_Handle(s_down, s_held)) s_blocked |= s_held;
+    if (Settings_Handle(s_down, s_held)) {
+        s_blocked |= s_held;
+        s_circleBlocked |= s_circleDirections != 0;
+    }
 
     if (!s_irrst) {
         return;

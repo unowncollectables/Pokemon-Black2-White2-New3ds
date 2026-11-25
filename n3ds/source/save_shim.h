@@ -8,9 +8,8 @@
 /* Looks at the save file and does not create or write it. */
 void Save_Init(void);
 
-/* The only write entry. The shell does not call it. This phase refuses the
- * write so a bug here cannot create a save. The game, once linked, is the
- * caller, and the bytes stay the cartridge save. */
-bool Save_GameWrite(const void *data, uint32_t size);
+/* Cartridge flash byte ranges. Only the game's backup code calls writes. */
+bool Save_GameRead(uint32_t offset, void *data, uint32_t size);
+bool Save_GameWrite(uint32_t offset, const void *data, uint32_t size);
 
 #endif

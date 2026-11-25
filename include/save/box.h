@@ -2,6 +2,7 @@
 #define POKEBW2_SAVE_BOX_H
 
 #include "types.h"
+#include "save/flash_layout.h"
 #include "gfl/heap.h"
 #include "gfl/str.h"
 #include "pml/poke_party.h"
@@ -116,7 +117,7 @@ typedef struct {
 struct DayCareSave {
     DayCareSlot slots[DAY_CARE_SLOTS];
     BOOL eggSpawned;
-    u64 seed;
+    SaveU64 seed;
 };
 
 void DayCareSave_SetSpawnFlag(DayCareSave *dayCare);

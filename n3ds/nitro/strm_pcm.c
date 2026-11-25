@@ -6,13 +6,15 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { STRM_FORMAT_PCM16 = 1, READ_FRAMES = 1024 };
+enum { STRM_FORMAT_PCM16 = 1, READ_FRAMES = 8192 };
 
 struct StrmPcm {
     FSFile file;
     uint32_t data, blocks, blockBytes, blockFrames, lastBytes, lastFrames;
     uint32_t position, loopStart, end, rate;
+    uint32_t cacheStart, cacheFrames;
     uint8_t channels, loop, volume;
+    int16_t cache[2][READ_FRAMES];
 };
 
 static uint32_t le16(const uint8_t *p) {
@@ -122,32 +124,45 @@ unsigned StrmPcm_Volume(const StrmPcm *stream) {
     return stream->volume;
 }
 
+static int refill(StrmPcm *stream) {
+    uint32_t block = stream->position / stream->blockFrames;
+    uint32_t within = stream->position % stream->blockFrames;
+    int last = block == stream->blocks - 1;
+    uint32_t count = (last ? stream->lastFrames : stream->blockFrames) - within;
+    if (count > READ_FRAMES) count = READ_FRAMES;
+    if (count > stream->end - stream->position) count = stream->end - stream->position;
+    uint32_t stride = last ? stream->lastBytes : stream->blockBytes;
+    uint64_t offset = stream->data + (uint64_t)block * stream->blockBytes * stream->channels + 2 * (uint64_t)within;
+
+    /* Read a contiguous window per channel. A stereo STRM can put its
+     * channels megabytes apart, even when they belong to the same block. */
+    stream->cacheFrames = 0;
+    if (!read_at(&stream->file, offset, stream->cache[0], 2 * count)
+        || (stream->channels == 2 && !read_at(&stream->file, offset + stride, stream->cache[1], 2 * count))) {
+        return 0;
+    }
+    stream->cacheStart = stream->position;
+    stream->cacheFrames = count;
+    return 1;
+}
+
 unsigned StrmPcm_ReadStereo(StrmPcm *stream, int16_t *samples, unsigned frames) {
-    int16_t left[READ_FRAMES], right[READ_FRAMES];
     unsigned filled = 0;
     while (filled < frames) {
         if (stream->position == stream->end) {
             if (!stream->loop) break;
             stream->position = stream->loopStart;
         }
-        uint32_t block = stream->position / stream->blockFrames;
-        uint32_t within = stream->position % stream->blockFrames;
-        int last = block == stream->blocks - 1;
-        uint32_t available = (last ? stream->lastFrames : stream->blockFrames) - within;
+        if (stream->position - stream->cacheStart >= stream->cacheFrames && !refill(stream)) break;
+        uint32_t within = stream->position - stream->cacheStart;
+        uint32_t available = stream->cacheFrames - within;
         uint32_t count = frames - filled;
-        if (count > READ_FRAMES) count = READ_FRAMES;
         if (count > available) count = available;
-        if (count > stream->end - stream->position) count = stream->end - stream->position;
-        uint32_t stride = last ? stream->lastBytes : stream->blockBytes;
-        uint64_t offset = stream->data + (uint64_t)block * stream->blockBytes * stream->channels + 2 * (uint64_t)within;
-        if (!read_at(&stream->file, offset, left, 2 * count)
-            || (stream->channels == 2 && !read_at(&stream->file, offset + stride, right, 2 * count))) {
-            break;
-        }
-        const int16_t *second = stream->channels == 2 ? right : left;
+        const int16_t *left = stream->cache[0] + within;
+        const int16_t *right = stream->cache[stream->channels - 1] + within;
         for (uint32_t i = 0; i < count; ++i) {
             *samples++ = left[i];
-            *samples++ = second[i];
+            *samples++ = right[i];
         }
         filled += count;
         stream->position += count;

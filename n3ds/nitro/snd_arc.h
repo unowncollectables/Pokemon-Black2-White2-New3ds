@@ -3,6 +3,7 @@
 #define PBW2_SND_ARC_H
 
 #include "types.h"
+#include "nnsys/snd.h"
 
 /* Real SND archive file access against the staged SDAT (the path
  * NNS_SndArcInit recorded). Parses the SDAT INFO wave-arc table and
@@ -12,6 +13,8 @@
 #ifdef PBW2_LINK_GAME
 /* Called from NNS_SndArcInit with the archive path the game opened. */
 void SndArc_SetPath(const char *path);
+const NNSSndArcSeqInfo *SndArc_GetSeqInfo(int seqNo);
+const NNSSndArcBankInfo *SndArc_GetBankInfo(int bankNo);
 /* The file id of a wave archive, or 0xFFFFFFFF when it has none. */
 u32 SndArc_GetWaveArcFileId(int waveArcNo);
 /* The size of a file in the archive, or 0 when it has none. */

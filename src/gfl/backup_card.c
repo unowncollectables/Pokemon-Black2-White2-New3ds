@@ -5,17 +5,9 @@
 #include "nitro/os.h"
 
 #ifdef PBW2_N3DS
-#include "stub_log.h"
-#include <string.h>
+#include "save_shim.h"
 
-static int s_backup_host_logged;
-
-static void backup_host_log_once(void) {
-    if (!s_backup_host_logged) {
-        s_backup_host_logged = 1;
-        PBW2_STUB_LOG("save", "backup_card host (no async CARD worker)");
-    }
-}
+static BOOL sHostWriteResult;
 #endif
 
 static void setCardWrittenVerified(void *arg);
@@ -28,7 +20,6 @@ static BOOL sLocked;
 
 BOOL identifyGameCardBackup(void) {
 #ifdef PBW2_N3DS
-    backup_host_log_once();
     return TRUE;
 #else
     s32 lock_id = OS_GetLockID();
@@ -48,11 +39,11 @@ BOOL identifyGameCardBackup(void) {
 
 BOOL writeFlashWaitSuccess(u32 dest, const void *src, u32 size, BackupWriteErrorCallback callback) {
 #ifdef PBW2_N3DS
-    (void)dest;
-    (void)src;
-    (void)size;
-    (void)callback;
-    return TRUE;
+    BOOL result = Save_GameWrite(dest, src, size);
+    if (!result && callback != NULL) {
+        callback(FALSE);
+    }
+    return result;
 #else
     BOOL result;
     u16 lockId = startWriteFlash(dest, src, size, callback);
@@ -65,12 +56,11 @@ BOOL writeFlashWaitSuccess(u32 dest, const void *src, u32 size, BackupWriteError
 
 BOOL readFlashWaitSuccess(u32 src, void *dest, u32 size, BackupReadErrorCallback callback) {
 #ifdef PBW2_N3DS
-    (void)src;
-    (void)callback;
-    if (dest != NULL && size != 0) {
-        memset(dest, 0xFF, size);
+    BOOL result = Save_GameRead(src, dest, size);
+    if (!result && callback != NULL) {
+        callback();
     }
-    return FALSE;
+    return result;
 #else
     s32 lock_id = OS_GetLockID();
     BOOL result;
@@ -94,12 +84,11 @@ static void setCardWrittenVerified(void *arg) {
 
 u16 startWriteFlash(u32 dest, const void *src, u32 size, BackupWriteErrorCallback callback) {
 #ifdef PBW2_N3DS
-    (void)dest;
-    (void)src;
-    (void)size;
     (void)callback;
-    sWriteDone = TRUE;
-    return (u16)OS_GetLockID();
+    /* The host performs the request synchronously and reports its result
+     * through the same completion call as the cartridge path. */
+    sHostWriteResult = Save_GameWrite(dest, src, size);
+    return 0;
 #else
     u32 header;
     s32 lock_id = OS_GetLockID();
@@ -119,9 +108,11 @@ u16 startWriteFlash(u32 dest, const void *src, u32 size, BackupWriteErrorCallbac
 BOOL finishBackupGetResult(u16 lockId, BOOL *result, BackupWriteErrorCallback callback) {
 #ifdef PBW2_N3DS
     (void)lockId;
-    (void)callback;
     if (result != NULL) {
-        *result = TRUE;
+        *result = sHostWriteResult;
+    }
+    if (!sHostWriteResult && callback != NULL) {
+        callback(FALSE);
     }
     return TRUE;
 #else

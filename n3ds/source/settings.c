@@ -25,7 +25,10 @@ static const struct {
 #endif
 };
 
-enum { ROWS = sizeof s_options / sizeof s_options[0] };
+enum {
+    ROWS = sizeof s_options / sizeof s_options[0],
+    ROW_X = 20, ROW_WIDTH = 280, ROW_Y = 49, ROW_HEIGHT = 25, ROW_SPACING = 31,
+};
 
 bool Settings_Open(void) {
     return s_open;
@@ -45,7 +48,19 @@ bool Settings_Handle(uint32_t down, uint32_t held) {
     if (!s_open) return false;
     if (down & KEY_DUP) s_row = (s_row + ROWS - 1) % ROWS;
     if (down & KEY_DDOWN) s_row = (s_row + 1) % ROWS;
-    if (down & KEY_A) {
+    bool toggle = (down & KEY_A) != 0;
+    if (down & KEY_TOUCH) {
+        touchPosition touch;
+        hidTouchRead(&touch);
+        if (touch.px >= ROW_X && touch.px < ROW_X + ROW_WIDTH && touch.py >= ROW_Y) {
+            unsigned y = touch.py - ROW_Y;
+            if (y / ROW_SPACING < ROWS && y % ROW_SPACING < ROW_HEIGHT) {
+                s_row = y / ROW_SPACING;
+                toggle = true;
+            }
+        }
+    }
+    if (toggle) {
         s_display ^= s_options[s_row].flag;
 #ifdef PBW2_GPU_GEOMETRY
         PbW2_PicaSetEnabled((s_display & DISPLAY_PICA_GEOMETRY) != 0);
@@ -81,16 +96,19 @@ void Settings_Draw(void) {
     for (unsigned x = 0; x < width; ++x) {
         for (unsigned y = 0; y < stride; ++y) {
             u16 color = x < 12 || x >= 308 || y < 12 || y >= 228 ? 0x0842 : 0x18c6;
-            if (x >= 20 && x < 300 && y >= 49 + 31 * s_row && y < 74 + 31 * s_row) color = 0x32ac;
+            unsigned rowY = ROW_Y + ROW_SPACING * s_row;
+            if (x >= ROW_X && x < ROW_X + ROW_WIDTH && y >= rowY && y < rowY + ROW_HEIGHT)
+                color = 0x32ac;
             fb[x * stride + stride - 1 - y] = color;
         }
     }
     draw_text(fb, stride, 24, 25, "Display settings", 0xffff);
     for (unsigned i = 0; i < ROWS; ++i) {
-        draw_text(fb, stride, 26, 58 + 31 * i, s_options[i].label, 0xffff);
-        draw_text(fb, stride, 265, 58 + 31 * i, s_display & s_options[i].flag ? "On" : "Off", 0xffdf);
+        draw_text(fb, stride, 26, ROW_Y + 9 + ROW_SPACING * i, s_options[i].label, 0xffff);
+        draw_text(fb, stride, 265, ROW_Y + 9 + ROW_SPACING * i, s_display & s_options[i].flag ? "On" : "Off", 0xffdf);
     }
     draw_text(fb, stride, 24, 178, "Sharp pixels applies when scaled.", 0xbdff);
+    draw_text(fb, stride, 24, 192, "Tap a row to toggle it.", 0xbdff);
     draw_text(fb, stride, 24, 208, "D-pad  Select   A  Toggle   B  Close", 0xffff);
 #else
     printf("\x1b[1;0HSETTINGS");

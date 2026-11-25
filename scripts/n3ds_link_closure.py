@@ -59,12 +59,6 @@ INCLUDE_SRC_PREFIXES = (
     "src/entralink/fest_mission_field.c",
     "src/entralink/field_fmission_info.c",
     "src/entralink/intrude_work.c",
-    # NOTE: src/gfl/rtc_cache.c is deliberately NOT included: it reads the
-    # DS RTC hardware (unmapped here) into its cache, so its GetCached*
-    # would return zeros and break the field clock (ev_time.c). The host
-    # owns the clock (rtc_host.c) and provides the pure functions the game
-    # needs from that file: RTC_ConvertDaySecondsCached,
-    # RTC_ConvertSecondsCached, RTC_GetDayOfYear, RTC_GetCachedDateTime.
     # Slice 2c: the field's menu/proc ecosystem — the field code takes the
     # addresses of these proc tables (event_field_proclink.c, event_battle.c)
     # and queues procs from them, so they must link for real; void stubs
@@ -85,7 +79,6 @@ INCLUDE_SRC_PREFIXES = (
 
 EXCLUDE_SRC_FILES = {
     "src/system/main.c",
-    "src/gfl/rtc_cache.c",
     "src/gfl/net.c",
     "src/system/net_err.c",
     "src/system/game_sync_settings_proc.c",

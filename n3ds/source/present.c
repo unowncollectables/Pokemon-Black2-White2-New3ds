@@ -60,14 +60,12 @@ void GxShim_Present(uint32_t flags) {
         PbW2_GxDisplayTrace();
         /* Readiness gates the first game frame. Later frames can intentionally blank the LCDs. */
         if (PbW2_GameHasPresented() || PbW2_GameDisplayReady()) {
-            (void)PbW2_ComposeScreens(s_top, s_bottom);
+            u16 *top = (flags & PBW2_SCREEN_TOP) ? s_top : NULL;
+            u16 *bottom = (flags & PBW2_SCREEN_BOTTOM) && !Settings_Open() ? s_bottom : NULL;
+            (void)PbW2_ComposeScreens(top, bottom);
             uint32_t options = Settings_DisplayFlags();
-            if ((flags & PBW2_SCREEN_TOP) != 0) {
-                draw_game(GFX_TOP, s_top, options);
-            }
-            if ((flags & PBW2_SCREEN_BOTTOM) != 0) {
-                draw_game(GFX_BOTTOM, s_bottom, options);
-            }
+            if (top) draw_game(GFX_TOP, top, options);
+            if (bottom) draw_game(GFX_BOTTOM, bottom, options);
             pbw2_game_notify_present();
         }
     }
@@ -91,6 +89,11 @@ static u16 *landscape_fb(gfxScreen_t screen, u16 *stride, u16 *land_w) {
     }
     *land_w = land_h;
     return fb;
+}
+
+static void clear_side_margins(u16 *fb, unsigned stride, unsigned width, unsigned left, unsigned right) {
+    if (left) memset(fb, 0, (size_t)stride * left * sizeof(*fb));
+    if (right < width) memset(fb + right * stride, 0, (size_t)stride * (width - right) * sizeof(*fb));
 }
 
 #if defined(PBW2_LINK_GAME)
@@ -129,7 +132,8 @@ static void draw_game(gfxScreen_t screen, const u16 *src, uint32_t options) {
     if (!fb || stride != 240 || width < 320) return;
 
     GameRect rect = game_rect(screen, width, stride, options);
-    if (rect.width < width) memset(fb, 0, (size_t)stride * width * sizeof(*fb));
+    /* Scaled modes fill the LCD vertically. Only the side margins need clearing. */
+    clear_side_margins(fb, stride, width, rect.x, rect.x + rect.width);
     unsigned sampleY[240];
     for (unsigned y = 0; y < rect.height; ++y) {
         sampleY[y] = sample_axis(y, rect.height, GAME_HEIGHT);
@@ -197,10 +201,14 @@ void Present_BlitRGB565(gfxScreen_t screen, const uint16_t *pic, int pic_w, int 
     }
     ox = ((int)land_w - pic_w) / 2;
     oy = ((int)stride - pic_h) / 2;
-    memset(fb, 0, (size_t)stride * land_w * sizeof(*fb));
+    clear_side_margins(fb, stride, land_w, ox, ox + pic_w);
+    unsigned bottom = stride - oy - pic_h;
 
     for (x = 0; x < pic_w; x++) {
-        u16 *out = fb + (ox + x) * stride + stride - 1 - oy;
+        u16 *column = fb + (ox + x) * stride;
+        if (bottom) memset(column, 0, bottom * sizeof(*column));
+        if (oy) memset(column + stride - oy, 0, oy * sizeof(*column));
+        u16 *out = column + stride - 1 - oy;
         for (y = 0; y < pic_h; y++) {
             out[-y] = pic[y * pic_w + x];
         }
