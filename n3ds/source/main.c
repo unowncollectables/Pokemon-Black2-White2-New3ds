@@ -187,6 +187,7 @@ int main(int argc, char **argv) {
              PBW2_LIB_C_TOTAL);
 
     Save_Init();
+    Settings_Init(PBW2_SD_DIR "/display.cfg");
     Input_Init();
     Audio_Start();
     Io_Start();

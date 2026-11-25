@@ -12,6 +12,8 @@ enum {
     DISPLAY_PICA_GEOMETRY = 1u << 3,
 };
 
+/* Load preferences from a path that remains valid while the app runs. */
+void Settings_Init(const char *path);
 /* L+R+Y opens Settings. Returns true when the game should ignore input. */
 bool Settings_Handle(uint32_t down, uint32_t held);
 bool Settings_Open(void);

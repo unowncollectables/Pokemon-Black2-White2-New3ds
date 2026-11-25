@@ -139,8 +139,9 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
 ### Display settings and audio integration
 
 - L+R+Y opens the display menu on the lower LCD. Tap a row to toggle it,
-  or use the D-pad and A. B closes the menu. Each setting starts off
-  and applies for the session.
+  or use the D-pad and A. B closes the menu. Each setting starts off.
+  Closing the menu after a change records the choices in the game's
+  `display.cfg` on SD. The next launch restores them.
   The Circle Pad cannot move the player while the menu is open. A held
   stick stays blocked after the menu closes until it returns to neutral.
   LCD fit scales to 320×240 at 4:3 and maps bottom touches back to DS

@@ -49,12 +49,61 @@ static const char *check(void) {
     return NULL;
 }
 
+static void toggle_lcd_fit(void) {
+    Settings_Handle(KEY_Y, KEY_L | KEY_R | KEY_Y);
+    Settings_Handle(KEY_A, KEY_A);
+    Settings_Handle(KEY_B, KEY_B);
+}
+
+static const char *check_preferences(void) {
+    const char *path = "sdmc:/display-prefs-test.cfg";
+    const char *pending = "sdmc:/display-prefs-test.cfg.tmp";
+    remove(path);
+    remove(pending);
+    Settings_Init(path);
+    if (Settings_DisplayFlags()) return "missing file uses the defaults";
+    FILE *file = fopen(path, "rb");
+    if (file) {
+        fclose(file);
+        return "launch created a preferences file";
+    }
+
+    toggle_lcd_fit();
+    Settings_Init(path);
+    if (Settings_DisplayFlags() != DISPLAY_LCD_FIT) return "selection survives restart";
+    toggle_lcd_fit();
+    Settings_Init(path);
+    if (Settings_DisplayFlags()) return "a new selection replaces old settings";
+
+    file = fopen(pending, "wb");
+    if (!file) return "open staged preferences";
+    fputs("PBW2-DISPLAY 1\nf4\n", file);
+    if (fclose(file)) return "close staged preferences";
+    Settings_Init(path);
+    if (Settings_DisplayFlags()) return "complete primary takes precedence over staged data";
+    remove(path);
+    Settings_Init(path);
+    if (Settings_DisplayFlags() != DISPLAY_SHARP_PIXELS) return "recover staged data and mask unknown flags";
+    remove(pending);
+
+    file = fopen(path, "wb");
+    if (!file) return "open truncated preferences";
+    fputs("PBW2-DISPLAY 1\n0", file);
+    if (fclose(file)) return "close truncated preferences";
+    Settings_Init(path);
+    if (Settings_DisplayFlags()) return "truncated data uses defaults";
+    remove(path);
+    return NULL;
+}
+
 int main(void) {
     archiveMountSdmc();
     FILE *out = fopen("sdmc:/input-capture-test.txt", "w");
     if (out) {
         const char *failure = check();
         fprintf(out, "Circle Pad settings input %s%s\n", failure ? "FAIL " : "PASS", failure ? failure : "");
+        failure = check_preferences();
+        fprintf(out, "Display preferences %s%s\n", failure ? "FAIL " : "PASS", failure ? failure : "");
         fclose(out);
     }
     for (;;) svcSleepThread(1000000000);

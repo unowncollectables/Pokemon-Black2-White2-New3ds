@@ -76,6 +76,8 @@ shadow mask depth and polygon-ID rejection, and edge marking.
 and read `sdmc:/input-capture-test.txt`. It checks Circle Pad input while
 opening and closing Settings, direction changes before release, and
 normal analog and digital movement once the stick returns to neutral.
+It also verifies display preferences after reloading, replacing an
+existing file, recovery from a staged write, and fallback for invalid data.
 
 ### Native LCD regression fixture
 

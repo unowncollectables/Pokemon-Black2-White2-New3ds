@@ -8,10 +8,16 @@
 
 #include <3ds.h>
 #include <stdio.h>
+#include <string.h>
 
 static bool s_open;
 static unsigned s_row;
 static uint32_t s_display;
+static uint32_t s_persisted;
+static const char *s_path;
+static char s_tempPath[128];
+static const char s_configHeader[] = "PBW2-DISPLAY 1\n";
+static const char s_hex[] = "0123456789abcdef";
 
 static const struct {
     const char *label;
@@ -27,8 +33,53 @@ static const struct {
 
 enum {
     ROWS = sizeof s_options / sizeof s_options[0],
+    DISPLAY_MASK = DISPLAY_LCD_FIT | DISPLAY_WIDE_FILL | DISPLAY_SHARP_PIXELS | DISPLAY_PICA_GEOMETRY,
     ROW_X = 20, ROW_WIDTH = 280, ROW_Y = 49, ROW_HEIGHT = 25, ROW_SPACING = 31,
 };
+
+static bool load_display(const char *path, uint32_t *flags) {
+    FILE *file = fopen(path, "rb");
+    if (!file) return false;
+    char entry[sizeof s_configHeader + 2];
+    bool complete = fread(entry, 1, sizeof entry, file) == sizeof entry && fgetc(file) == EOF && !ferror(file);
+    fclose(file);
+    const unsigned start = sizeof s_configHeader - 1;
+    if (!complete || memcmp(entry, s_configHeader, start) || entry[start + 2] != '\n') return false;
+    const char *high = entry[start] ? strchr(s_hex, entry[start]) : NULL;
+    const char *low = entry[start + 1] ? strchr(s_hex, entry[start + 1]) : NULL;
+    if (!high || !low) return false;
+    *flags = ((high - s_hex) * 16 + (low - s_hex)) & DISPLAY_MASK;
+    return true;
+}
+
+void Settings_Init(const char *path) {
+    s_display = 0;
+    s_path = NULL;
+    int length = snprintf(s_tempPath, sizeof s_tempPath, "%s.tmp", path);
+    if (length > 0 && (unsigned)length < sizeof s_tempPath) {
+        s_path = path;
+        if (!load_display(s_path, &s_display)) load_display(s_tempPath, &s_display);
+    }
+    s_persisted = s_display;
+#ifdef PBW2_GPU_GEOMETRY
+    PbW2_PicaSetEnabled((s_display & DISPLAY_PICA_GEOMETRY) != 0);
+#endif
+}
+
+static void save_display(void) {
+    if (!s_path || s_display == s_persisted) return;
+    FILE *file = fopen(s_tempPath, "wb");
+    if (file) {
+        bool written = fprintf(file, "%s%02lx\n", s_configHeader, (unsigned long)s_display) > 0;
+        bool closed = fclose(file) == 0;
+        if (written && closed && rename(s_tempPath, s_path) == 0) {
+            s_persisted = s_display;
+            return;
+        }
+        if (!written || !closed) remove(s_tempPath);
+    }
+    Log_Line("CFG", "could not save display preferences");
+}
 
 bool Settings_Open(void) {
     return s_open;
@@ -37,11 +88,13 @@ bool Settings_Open(void) {
 bool Settings_Handle(uint32_t down, uint32_t held) {
     if ((held & KEY_L) && (held & KEY_R) && (down & KEY_Y)) {
         s_open = !s_open;
+        if (!s_open) save_display();
         Log_Line("CFG", s_open ? "settings open" : "settings close");
         return true;
     }
     if (s_open && (down & KEY_B)) {
         s_open = false;
+        save_display();
         Log_Line("CFG", "settings close");
         return true;
     }
