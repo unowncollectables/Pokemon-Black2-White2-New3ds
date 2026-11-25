@@ -1,0 +1,271 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+#include "g3_pica.h"
+
+#include "log.h"
+
+#include <3ds.h>
+#include <citro3d.h>
+#include <string.h>
+
+enum { WIDTH = 256, HEIGHT = 192, TARGET_HEIGHT = 256, VERTICES = 24576, BATCHES = 1024, TEXTURES = 128 };
+enum { TEXTURE_CACHE_BYTES = 6 * 1024 * 1024 };
+
+extern const u8 _binary_g3_pass_shbin_start[], _binary_g3_pass_shbin_end[];
+
+typedef struct {
+    unsigned first, count;
+    int texture;
+    PicaAlphaTest test;
+    unsigned translucentId;
+    bool decal, writeDepth;
+} Batch;
+
+static DVLB_s *s_shader;
+static shaderProgram_s s_program;
+static C3D_RenderTarget *s_target;
+static PicaVertex *s_vertices;
+static u32 *s_pixels;
+static struct {
+    C3D_Tex texture;
+    PicaTextureKey key;
+    uint64_t frame;
+    unsigned bytes, alpha;
+} s_texture[TEXTURES];
+static Batch s_batch[BATCHES];
+static unsigned s_vertexCount, s_batchCount, s_cacheBytes, s_uploads, s_hits;
+static uint64_t s_frame;
+static bool s_ready, s_requested;
+
+bool PbW2_PicaInit(void) {
+    if (!C3D_Init(C3D_DEFAULT_CMDBUF_SIZE)) return false;
+    s_ready = true;
+    s_target = C3D_RenderTargetCreate(WIDTH, TARGET_HEIGHT, GPU_RB_RGBA8, GPU_RB_DEPTH24_STENCIL8);
+    s_vertices = linearAlloc(sizeof(*s_vertices) * VERTICES);
+    s_pixels = linearAlloc(WIDTH * TARGET_HEIGHT * sizeof(*s_pixels));
+    s_shader = DVLB_ParseFile((u32 *)_binary_g3_pass_shbin_start,
+                              _binary_g3_pass_shbin_end - _binary_g3_pass_shbin_start);
+    if (!s_target || !s_vertices || !s_pixels || !s_shader) {
+        PbW2_PicaExit();
+        return false;
+    }
+    shaderProgramInit(&s_program);
+    shaderProgramSetVsh(&s_program, &s_shader->DVLE[0]);
+    return true;
+}
+
+static void evict(unsigned i) {
+    if (!s_texture[i].bytes) return;
+    C3D_TexDelete(&s_texture[i].texture);
+    s_cacheBytes -= s_texture[i].bytes;
+    s_texture[i].bytes = 0;
+}
+
+void PbW2_PicaExit(void) {
+    if (!s_ready) return;
+    for (unsigned i = 0; i < TEXTURES; ++i) evict(i);
+    if (s_shader) {
+        if (s_program.vertexShader) shaderProgramFree(&s_program);
+        DVLB_Free(s_shader);
+    }
+    if (s_pixels) linearFree(s_pixels);
+    if (s_vertices) linearFree(s_vertices);
+    if (s_target) C3D_RenderTargetDelete(s_target);
+    C3D_Fini();
+    s_ready = false;
+}
+
+void PbW2_PicaSetEnabled(bool enabled) {
+    __atomic_store_n(&s_requested, enabled, __ATOMIC_RELAXED);
+}
+
+bool PbW2_PicaEnabled(void) {
+    static bool tried;
+    if (!__atomic_load_n(&s_requested, __ATOMIC_RELAXED)) return false;
+    if (!s_ready && !tried) {
+        tried = true;
+        if (!PbW2_PicaInit()) Log_Line("GPU", "PICA200 setup failed, using the CPU rasterizer");
+    }
+    return s_ready;
+}
+
+bool PbW2_PicaBegin(void) {
+    if (!PbW2_PicaEnabled()) return false;
+    ++s_frame;
+    s_batchCount = s_vertexCount = 0;
+    return true;
+}
+
+static GPU_TEXTURE_WRAP_PARAM wrap(unsigned repeat, unsigned mirror) {
+    return repeat ? (mirror ? GPU_MIRRORED_REPEAT : GPU_REPEAT) : GPU_CLAMP_TO_EDGE;
+}
+
+static unsigned oldest_unreferenced(void) {
+    unsigned oldest = TEXTURES;
+    for (unsigned i = 0; i < TEXTURES; ++i) {
+        if (s_texture[i].bytes && s_texture[i].frame != s_frame
+            && (oldest == TEXTURES || s_texture[i].frame < s_texture[oldest].frame)) oldest = i;
+    }
+    return oldest;
+}
+
+int PbW2_PicaUpload(const PicaTexture *texture) {
+    unsigned width = texture->width, height = texture->height;
+    if (width > 1024 || height > 1024) return -1;
+    for (unsigned i = 0; i < TEXTURES; ++i) {
+        if (s_texture[i].bytes && !memcmp(&s_texture[i].key, &texture->key, sizeof texture->key)) {
+            s_texture[i].frame = s_frame;
+            ++s_hits;
+            return i;
+        }
+    }
+    unsigned bytes = width * height * 4;
+    while (s_cacheBytes + bytes > TEXTURE_CACHE_BYTES) {
+        unsigned oldest = oldest_unreferenced();
+        if (oldest == TEXTURES) return -1;
+        evict(oldest);
+    }
+    unsigned slot = 0;
+    while (slot < TEXTURES && s_texture[slot].bytes) ++slot;
+    if (slot == TEXTURES) slot = oldest_unreferenced();
+    if (slot == TEXTURES) return -1;
+    evict(slot);
+    C3D_Tex *tex = &s_texture[slot].texture;
+    if (!C3D_TexInit(tex, width, height, GPU_RGBA8)) return -1;
+    u32 *tiles = tex->data;
+    unsigned alpha = 0;
+    for (unsigned y = 0; y < height; ++y) {
+        /* DS T coordinates start at the top. PICA addresses tiled rows
+         * from the bottom, so reverse the upload while retaining DS UVs. */
+        unsigned tiledY = height - 1 - y;
+        for (unsigned x = 0; x < width; ++x) {
+            unsigned morton = (x & 1) | ((tiledY & 1) << 1) | ((x & 2) << 1) | ((tiledY & 2) << 2)
+                              | ((x & 4) << 2) | ((tiledY & 4) << 3);
+            unsigned tile = (tiledY / 8) * (width / 8) + x / 8;
+            u32 rgba = texture->texel(texture->source, x, y);
+            unsigned texelAlpha = rgba & 255;
+            if (texelAlpha == 255) alpha |= PICA_TEX_ALPHA_OPAQUE;
+            else if (texelAlpha) alpha |= PICA_TEX_ALPHA_FRACTIONAL;
+            tiles[tile * 64 + morton] = rgba;
+        }
+    }
+    C3D_TexFlush(tex);
+    C3D_TexSetFilter(tex, GPU_NEAREST, GPU_NEAREST);
+    unsigned mode = texture->mode;
+    C3D_TexSetWrap(tex, wrap(mode & (1u << 16), mode & (1u << 18)), wrap(mode & (1u << 17), mode & (1u << 19)));
+    s_texture[slot].key = texture->key;
+    s_texture[slot].frame = s_frame;
+    s_texture[slot].bytes = bytes;
+    s_texture[slot].alpha = alpha;
+    s_cacheBytes += bytes;
+    ++s_uploads;
+    return slot;
+}
+
+unsigned PbW2_PicaTextureAlpha(int texture) {
+    return texture < 0 ? PICA_TEX_ALPHA_OPAQUE : s_texture[texture].alpha;
+}
+
+bool PbW2_PicaTriangle(const PicaVertex vertex[3], int texture, PicaAlphaTest test,
+                      bool decal, unsigned translucentId, bool writeDepth) {
+    if (s_vertexCount + 3 > VERTICES) return false;
+    Batch *batch = s_batchCount ? &s_batch[s_batchCount - 1] : NULL;
+    if (!batch || batch->texture != texture || batch->test != test || batch->translucentId != translucentId
+        || batch->writeDepth != writeDepth || batch->decal != decal) {
+        if (s_batchCount == BATCHES) return false;
+        batch = &s_batch[s_batchCount++];
+        *batch = (Batch){s_vertexCount, 0, texture, test, translucentId, decal, writeDepth};
+    }
+    for (unsigned i = 0; i < 3; ++i) s_vertices[s_vertexCount++] = vertex[i];
+    batch->count += 3;
+    return true;
+}
+
+bool PbW2_PicaFinish(uint32_t clearColor, float clearDepth, uint16_t *result) {
+    if (!s_batchCount || !C3D_FrameBegin(0)) return false;
+    GSPGPU_FlushDataCache(s_vertices, s_vertexCount * sizeof(*s_vertices));
+    C3D_RenderTargetClear(s_target, C3D_CLEAR_ALL, clearColor, (unsigned)(0xffffff * clearDepth));
+    C3D_FrameDrawOn(s_target);
+    C3D_SetViewport(0, 0, WIDTH, HEIGHT);
+    C3D_BindProgram(&s_program);
+    C3D_AttrInfo *attrs = C3D_GetAttrInfo();
+    AttrInfo_Init(attrs);
+    AttrInfo_AddLoader(attrs, 0, GPU_FLOAT, 4);
+    AttrInfo_AddLoader(attrs, 1, GPU_FLOAT, 2);
+    AttrInfo_AddLoader(attrs, 2, GPU_FLOAT, 4);
+    C3D_BufInfo *buffers = C3D_GetBufInfo();
+    BufInfo_Init(buffers);
+    BufInfo_Add(buffers, s_vertices, sizeof(*s_vertices), 3, 0x210);
+    C3D_CullFace(GPU_CULL_NONE);
+    C3D_DepthMap(true, -1.0f, 0.0f);
+    C3D_StencilOp(GPU_STENCIL_KEEP, GPU_STENCIL_KEEP, GPU_STENCIL_REPLACE);
+    for (unsigned i = 1; i < 6; ++i) C3D_TexEnvInit(C3D_GetTexEnv(i));
+    const Batch *previous = NULL;
+    for (unsigned i = 0; i < s_batchCount; ++i) {
+        const Batch *batch = &s_batch[i];
+        if (!previous || batch->test != previous->test) {
+            switch (batch->test) {
+            case PICA_ALPHA_VISIBLE: C3D_AlphaTest(true, GPU_GREATER, 3); break;
+            case PICA_ALPHA_OPAQUE: C3D_AlphaTest(true, GPU_EQUAL, 255); break;
+            }
+        }
+        bool textured = batch->texture >= 0;
+        if (textured && (!previous || batch->texture != previous->texture)) {
+            C3D_TexBind(0, &s_texture[batch->texture].texture);
+        }
+        if (!previous || textured != (previous->texture >= 0) || batch->decal != previous->decal) {
+            C3D_TexEnv *env = C3D_GetTexEnv(0);
+            C3D_TexEnvInit(env);
+            if (batch->decal) {
+                C3D_TexEnvSrc(env, C3D_RGB, GPU_TEXTURE0, GPU_PRIMARY_COLOR, GPU_TEXTURE0);
+                C3D_TexEnvOpRgb(env, GPU_TEVOP_RGB_SRC_COLOR, GPU_TEVOP_RGB_SRC_COLOR, GPU_TEVOP_RGB_SRC_ALPHA);
+                C3D_TexEnvFunc(env, C3D_RGB, GPU_INTERPOLATE);
+                C3D_TexEnvSrc(env, C3D_Alpha, GPU_PRIMARY_COLOR, 0, 0);
+                C3D_TexEnvFunc(env, C3D_Alpha, GPU_REPLACE);
+            } else if (textured) {
+                C3D_TexEnvSrc(env, C3D_Both, GPU_PRIMARY_COLOR, GPU_TEXTURE0, 0);
+                C3D_TexEnvFunc(env, C3D_Both, GPU_MODULATE);
+            } else {
+                C3D_TexEnvSrc(env, C3D_Both, GPU_PRIMARY_COLOR, 0, 0);
+                C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
+            }
+        }
+        bool blend = batch->translucentId != 0;
+        if (!previous || batch->translucentId != previous->translucentId) {
+            C3D_StencilTest(true, blend ? GPU_NOTEQUAL : GPU_ALWAYS, batch->translucentId, 0x7f, 0x7f);
+        }
+        if (!previous || blend != (previous->translucentId != 0)) {
+            if (blend) {
+                C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_MAX, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_ONE, GPU_ONE);
+            } else {
+                C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
+            }
+        }
+        if (!previous || batch->writeDepth != previous->writeDepth) {
+            C3D_DepthTest(true, GPU_LEQUAL, batch->writeDepth ? GPU_WRITE_ALL : GPU_WRITE_COLOR);
+        }
+        C3D_DrawArrays(GPU_TRIANGLES, batch->first, batch->count);
+        previous = batch;
+    }
+    u32 dims = GX_BUFFER_DIM(WIDTH, TARGET_HEIGHT);
+    u32 flags = GX_TRANSFER_FLIP_VERT(1) | GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8)
+                | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGBA8);
+    C3D_SyncDisplayTransfer(s_target->frameBuf.colorBuf, dims, s_pixels, dims, flags);
+    C3D_FrameEnd(0);
+    /* Beginning the next frame waits for its predecessor, including the transfer. */
+    if (!C3D_FrameBegin(0)) return false;
+    C3D_FrameEnd(GX_CMDLIST_FLUSH);
+    GSPGPU_InvalidateDataCache(s_pixels, WIDTH * TARGET_HEIGHT * sizeof(*s_pixels));
+    for (unsigned i = 0; i < WIDTH * HEIGHT; ++i) {
+        u32 rgba = s_pixels[i];
+        result[i] = ((rgba >> 27) & 31) | ((rgba >> 14) & 0x3e0) | ((rgba >> 1) & 0x7c00)
+                    | ((rgba & 255) > 3 ? 0x8000 : 0);
+    }
+    static bool reported;
+    if (!reported) {
+        Log_Line("GPU", "first PICA200 frame (%u triangles, %u batches, %u uploads)", s_vertexCount / 3,
+                 s_batchCount, s_uploads);
+        reported = true;
+    }
+    if (s_frame == 2 || s_frame % 120 == 0) Log_Line("GPU", "texture cache: %u hits, %u uploads", s_hits, s_uploads);
+    return true;
+}

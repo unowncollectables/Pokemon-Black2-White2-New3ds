@@ -4,6 +4,7 @@
 #if defined(PBW2_LINK_GAME)
 
 #include "log.h"
+#include "g3_raster.h"
 #include "vram_host.h"
 
 #include <string.h>
@@ -57,7 +58,9 @@ BOOL PbW2_TryDmaCopy32(const void *src, void *dest, u32 size) {
     }
     PbW2_VramNoteLoad(size);
     arm_src = in_vram_range((uintptr_t)src) ? PbW2_VramMap(src) : src;
+    PbW2_G3RasterBeforeLcdcWrite(darm, size);
     memcpy(PbW2_VramMap((void *)(uintptr_t)darm), arm_src, size);
+    PbW2_VramNoteLcdcWrite(darm, size);
     return TRUE;
 }
 
@@ -81,9 +84,11 @@ BOOL PbW2_TryDmaFill32(void *dest, u32 data, u32 size) {
     PbW2_VramNoteLoad(size);
     p = PbW2_VramMap((void *)(uintptr_t)darm);
     words = size / 4u;
+    PbW2_G3RasterBeforeLcdcWrite(darm, size);
     for (i = 0; i < words; i++) {
         p[i] = data;
     }
+    PbW2_VramNoteLcdcWrite(darm, size);
     return TRUE;
 }
 

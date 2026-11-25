@@ -24,6 +24,10 @@ static u8 s_bg[PBW2_BG_SIZE];
 static u8 s_lcdc[PBW2_LCDC_SIZE];
 static u8 s_oam[PBW2_OAM_SIZE];
 static u32 s_load_bytes;
+static u32 s_lcdcRevision[7];
+enum { REV_PAGE_BYTES = 256 };
+static u32 s_pageRevision[(HW_LCDC_VRAM_H - HW_LCDC_VRAM_A) / REV_PAGE_BYTES];
+static u32 s_revision;
 static u32 s_bg_scr_upload_off[4];
 static int s_host_ready;
 
@@ -31,11 +35,62 @@ void PbW2_VramHostInit(void) {
     memset(s_pltt, 0, sizeof s_pltt);
     memset(s_bg, 0, sizeof s_bg);
     memset(s_lcdc, 0, sizeof s_lcdc);
+    PbW2_VramNoteLcdcWrite(HW_LCDC_VRAM_A, sizeof s_lcdc);
     memset(s_oam, 0, sizeof s_oam);
     s_load_bytes = 0;
     memset(s_bg_scr_upload_off, 0, sizeof s_bg_scr_upload_off);
     PbW2_AffineTrackInit();
     s_host_ready = 1;
+}
+
+u32 PbW2_VramLcdcBankMask(u32 address, u32 bytes) {
+    static const u32 boundary[] = {
+        HW_LCDC_VRAM_A, HW_LCDC_VRAM_B, HW_LCDC_VRAM_C, HW_LCDC_VRAM_D,
+        HW_LCDC_VRAM_E, HW_LCDC_VRAM_F, HW_LCDC_VRAM_G, HW_LCDC_VRAM_H,
+    };
+    if (!bytes || address >= HW_LCDC_VRAM_H || (u64)address + bytes <= HW_LCDC_VRAM_A) return 0;
+    u32 mask = 0;
+    for (unsigned bank = 0; bank < 7; ++bank) {
+        if (address < boundary[bank + 1] && (u64)address + bytes > boundary[bank]) mask |= 1u << bank;
+    }
+    return mask;
+}
+
+void PbW2_VramNoteLcdcWrite(u32 address, u32 bytes) {
+    if (!bytes || address >= HW_LCDC_VRAM_H || (u64)address + bytes <= HW_LCDC_VRAM_A) return;
+    u32 revision = __atomic_add_fetch(&s_revision, 1, __ATOMIC_RELAXED);
+    u32 first = address < HW_LCDC_VRAM_A ? HW_LCDC_VRAM_A : address;
+    u64 end = (u64)address + bytes;
+    if (end > HW_LCDC_VRAM_H) end = HW_LCDC_VRAM_H;
+    for (unsigned page = (first - HW_LCDC_VRAM_A) / REV_PAGE_BYTES;
+         page <= (end - HW_LCDC_VRAM_A - 1) / REV_PAGE_BYTES; ++page) {
+        __atomic_store_n(&s_pageRevision[page], revision, __ATOMIC_RELEASE);
+    }
+    u32 mask = PbW2_VramLcdcBankMask(address, bytes);
+    for (unsigned bank = 0; bank < 7; ++bank) {
+        if (mask & (1u << bank)) {
+            __atomic_store_n(&s_lcdcRevision[bank], revision, __ATOMIC_RELEASE);
+        }
+    }
+}
+
+u32 PbW2_VramBankRevision(unsigned bank) {
+    return __atomic_load_n(&s_lcdcRevision[bank], __ATOMIC_ACQUIRE);
+}
+
+u32 PbW2_VramRangeRevision(const void *mapped, u32 bytes) {
+    uintptr_t address = (uintptr_t)mapped;
+    uintptr_t start = (uintptr_t)s_lcdc;
+    unsigned span = HW_LCDC_VRAM_H - HW_LCDC_VRAM_A;
+    if (address < start || address - start >= span || !bytes) return 0;
+    unsigned offset = address - start;
+    if (bytes > span - offset) bytes = span - offset;
+    u32 latest = 0;
+    for (unsigned page = offset / REV_PAGE_BYTES; page <= (offset + bytes - 1) / REV_PAGE_BYTES; ++page) {
+        u32 revision = __atomic_load_n(&s_pageRevision[page], __ATOMIC_ACQUIRE);
+        if (revision > latest) latest = revision;
+    }
+    return latest;
 }
 
 void PbW2_VramClearLcdcAliases(void) {

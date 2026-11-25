@@ -2,6 +2,9 @@
 #include "settings.h"
 
 #include "log.h"
+#ifdef PBW2_GPU_GEOMETRY
+#include "g3_pica.h"
+#endif
 
 #include <3ds.h>
 #include <stdio.h>
@@ -17,6 +20,9 @@ static const struct {
     {"LCD fit (4:3)", DISPLAY_LCD_FIT},
     {"Wide fill (stretch top)", DISPLAY_WIDE_FILL},
     {"Sharp pixels (point filter)", DISPLAY_SHARP_PIXELS},
+#ifdef PBW2_GPU_GEOMETRY
+    {"GPU geometry (experimental)", DISPLAY_PICA_GEOMETRY},
+#endif
 };
 
 enum { ROWS = sizeof s_options / sizeof s_options[0] };
@@ -41,6 +47,9 @@ bool Settings_Handle(uint32_t down, uint32_t held) {
     if (down & KEY_DDOWN) s_row = (s_row + 1) % ROWS;
     if (down & KEY_A) {
         s_display ^= s_options[s_row].flag;
+#ifdef PBW2_GPU_GEOMETRY
+        PbW2_PicaSetEnabled((s_display & DISPLAY_PICA_GEOMETRY) != 0);
+#endif
         Log_Line("CFG", "%s %s", s_options[s_row].label, s_display & s_options[s_row].flag ? "on" : "off");
     }
     return true;
@@ -81,8 +90,7 @@ void Settings_Draw(void) {
         draw_text(fb, stride, 26, 58 + 31 * i, s_options[i].label, 0xffff);
         draw_text(fb, stride, 265, 58 + 31 * i, s_display & s_options[i].flag ? "On" : "Off", 0xffdf);
     }
-    draw_text(fb, stride, 24, 157, "Wide fill uses the full top LCD.", 0xbdff);
-    draw_text(fb, stride, 24, 173, "Sharp pixels applies when scaled.", 0xbdff);
+    draw_text(fb, stride, 24, 178, "Sharp pixels applies when scaled.", 0xbdff);
     draw_text(fb, stride, 24, 208, "D-pad  Select   A  Toggle   B  Close", 0xffff);
 #else
     printf("\x1b[1;0HSETTINGS");

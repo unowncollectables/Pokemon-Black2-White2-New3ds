@@ -8,6 +8,9 @@
 #include "present.h"
 #include "save_shim.h"
 #include "settings.h"
+#ifdef PBW2_GPU_GEOMETRY
+#include "g3_pica.h"
+#endif
 #include "title_pic.h"
 #include "workers.h"
 #include "game_present.h"
@@ -139,6 +142,9 @@ static void Draw_Bottom(void) {
 static void Shutdown(void) {
     /* Stop and join every worker before releasing ndsp or the GPU. */
     Workers_Shutdown();
+#ifdef PBW2_GPU_GEOMETRY
+    PbW2_PicaExit();
+#endif
     Audio_NdspExit();
     Input_Exit();
     Log_Line("3DS", "exit");

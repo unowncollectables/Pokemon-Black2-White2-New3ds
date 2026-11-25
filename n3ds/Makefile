@@ -3,6 +3,8 @@
 # PBW2_LOCAL_SYSBASE=1 links devkitPro's libsysbase plus compat/syscall_shim.c
 # PBW2_LINK_GAME=1 links compiled pokebw2 objects as Pbw2_GameMain (shell keeps main).
 
+.DEFAULT_GOAL := all
+
 ifeq ($(strip $(DEVKITPRO)),)
 $(error Set DEVKITPRO, for example /opt/devkitpro)
 endif
@@ -83,6 +85,23 @@ SHELL_SRC += source/game_thread.c nitro/mi_host.c nitro/ic_dc_host.c \
 	nitro/g3_intercept.c nitro/g3_gecom_host.c nitro/g3_raster.c
 GAME_RSP := $(CURDIR)/../build/n3ds/$(shell echo $(GAME) | tr A-Z a-z)/game_objects.rsp
 GAME_LDFLAGS := @$(GAME_RSP)
+ifneq ($(PBW2_GPU_GEOMETRY),0)
+CFLAGS += -DPBW2_GPU_GEOMETRY
+SHELL_SRC += nitro/g3_pica.c
+GPU_SHADER := $(BUILD)/g3_pass.o
+LIBS := -lcitro3d $(LIBS)
+.PHONY: test-g3
+test-g3: $(BUILD)/g3_fidelity.3dsx
+
+G3_TEST_SRC := tests/g3_fidelity.c nitro/g3_pica.c nitro/g3_intercept.c nitro/g3_raster.c nitro/ds2d_compose.c \
+	nitro/vram_host.c nitro/vram_dma.c nitro/affine_track.c nitro/cp_div_host.c nitro/fx_host.c
+G3_TEST_MTX := $(foreach size,43 44,../build/n3ds/$(GAME_SYM)/obj/lib/nitro/src/fx/fx_mtx$(size).o)
+$(BUILD)/g3_fidelity.elf: $(G3_TEST_SRC) $(G3_TEST_MTX) $(GPU_SHADER)
+	$(CC) $(CFLAGS) $(GAMEFLAGS) $^ $(LDFLAGS) -Wl,--wrap=PbW2_PicaFinish $(LIBPATHS) $(LIBS) -o $@
+
+$(BUILD)/g3_fidelity.3dsx: $(BUILD)/g3_fidelity.elf
+	3dsxtool $< $@
+endif
 else
 GAME_LDFLAGS :=
 endif
@@ -123,10 +142,16 @@ $(BUILD)/$(TARGET).3dsx: $(BUILD)/$(TARGET).elf
 	python3 $(CURDIR)/../scripts/n3ds_check_3dsx_reloc.py $<
 	@echo built $@
 
-$(BUILD)/$(TARGET).elf: $(SHELL_SRC) include/pbw2_port.h ../build/n3ds/pbw2_build_status.h
+$(BUILD)/$(TARGET).elf: $(SHELL_SRC) $(GPU_SHADER) include/pbw2_port.h ../build/n3ds/pbw2_build_status.h
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) $(GAMEFLAGS) $(SHELL_SRC) $(LDFLAGS) $(GAME_LDFLAGS) $(LIB_GAME_OBJS) $(LIBPATHS) $(LIBS) \
+	$(CC) $(CFLAGS) $(GAMEFLAGS) $(SHELL_SRC) $(GPU_SHADER) $(LDFLAGS) $(GAME_LDFLAGS) $(LIB_GAME_OBJS) $(LIBPATHS) $(LIBS) \
 		-Wl,-Map,$(BUILD)/$(TARGET).map -o $@
+
+$(BUILD)/g3_pass.o: shaders/g3_pass.v.pica
+	@mkdir -p $(BUILD)
+	picasso -o $(BUILD)/g3_pass.shbin $<
+	cd $(BUILD) && arm-none-eabi-objcopy -I binary -O elf32-littlearm -B arm \
+		--rename-section .data=.rodata,alloc,load,readonly,data,contents g3_pass.shbin g3_pass.o
 
 clean:
 	rm -rf build

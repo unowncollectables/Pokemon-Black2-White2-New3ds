@@ -4,6 +4,8 @@
 
 Needs devkitPro `3ds-dev` (`DEVKITPRO=/opt/devkitpro`) and Python 3.11 or newer.
 Does not read `orig/` and does not download a ROM.
+Linked builds also use Citro3D and Picasso from devkitPro. Set
+`PBW2_GPU_GEOMETRY=0` to build with the CPU renderer alone.
 
 ```sh
 export DEVKITPRO=/opt/devkitpro
@@ -41,6 +43,25 @@ It does not write a `.sav`. Do not commit `extract/`, `sd-stage/`, or a romfs
 payload.
 
 `make -C n3ds b2` or `make -C n3ds w2` builds one game after the objects.
+
+### Geometry regression fixture
+
+After the Black 2 objects are built, use the synthetic texture and capture
+fixture. It requires no staged game data.
+
+```sh
+PBW2_LINK_GAME=1 make -C n3ds GAME=BLACK2 BUILD=build/g3-test test-g3
+```
+
+Run `n3ds/build/g3-test/g3_fidelity.3dsx` on the 3DS or in Azahar. It writes
+`sdmc:/g3-fidelity.txt`. A passing result reports CPU and PICA200 separately
+and counts 21 completed GPU frames. It checks texture-coordinate generation
+from texture coordinates, normals, and vertices, including when each command
+reads the texture matrix. It also checks overlap between translucent
+polygons with the same and different IDs, opaque reset, alpha-zero texels,
+and optional depth writes for fractional texels. It exercises software
+fallback when a palette is rewritten mid-frame and when GX decal colors
+need fractional fixed-point interpolation.
 
 ### If the compiler is not devkitARM's
 

@@ -5,6 +5,7 @@
 #if defined(PBW2_LINK_GAME)
 
 #include "g3_intercept.h"
+#include "g3_raster.h"
 #include "log.h"
 #include "nitro/hw.h"
 #include "nitro/gx.h"
@@ -711,34 +712,41 @@ static void capture_main(u16 *out, u32 dc) {
         unsigned evb = (capture >> REG_GX_DISPCAPCNT_EVB_SHIFT) & 31;
         unsigned writeOffset = ((capture >> 18) & 3) * 0x4000;
         unsigned readOffset = displayMode == 2 ? 0 : ((capture >> 26) & 3) * 0x4000;
-        const u16 *input = out;
-        if (capture & (1u << REG_GX_DISPCAPCNT_SRCA_SHIFT)) {
-            static u16 capture3d[256 * 192];
-            memset(capture3d, 0, sizeof capture3d);
-            PbW2_G3Compose(1, capture3d);
-            input = capture3d;
+        static u16 capture3d[256 * 192];
+        int source3d = (capture & (1u << REG_GX_DISPCAPCNT_SRCA_SHIFT)) != 0;
+        if (source3d && mode != 1) {
+            PbW2_G3RasterCapture(capture3d);
         }
         if (eva > 16) eva = 16;
         if (evb > 16) evb = 16;
         if (banks[destBank] == GX_VRAMCNT_LCDC) {
-            u16 *dest = PbW2_VramMap((void *)(uintptr_t)(HW_LCDC_VRAM_A + destBank * 0x20000));
+            u32 bankAddress = HW_LCDC_VRAM_A + destBank * 0x20000;
+            u16 *dest = PbW2_VramMap((void *)(uintptr_t)bankAddress);
             for (unsigned y = 0; y < heights[size]; ++y) {
                 for (unsigned x = 0; x < width; ++x) {
                     unsigned i = y * width + x;
-                    u16 rgb = input[y * 256 + x];
-                    u16 a = (rgb >> 11) | ((rgb >> 1) & 0x03e0) | ((rgb & 31) << 10) | 0x8000;
+                    u16 rgb = out[y * 256 + x];
+                    u16 a = source3d && mode != 1 ? capture3d[y * 256 + x]
+                                     : (rgb >> 11) | ((rgb >> 1) & 0x03e0) | ((rgb & 31) << 10) | 0x8000;
                     u16 b = banks[displayBank] == GX_VRAMCNT_LCDC ? source[(readOffset + i) & 0xffff] : 0;
                     u16 pixel = mode == 0 ? a : b;
                     if (mode >= 2) {
                         pixel = (a | b) & 0x8000;
+                        unsigned weightA = (a & 0x8000) ? eva : 0;
+                        unsigned weightB = (b & 0x8000) ? evb : 0;
                         for (unsigned shift = 0; shift < 15; shift += 5) {
-                            unsigned channel = ((((a >> shift) & 31) * eva) + (((b >> shift) & 31) * evb)) >> 4;
+                            unsigned channel = ((((a >> shift) & 31) * weightA) + (((b >> shift) & 31) * weightB)) >> 4;
                             pixel |= (channel > 31 ? 31 : channel) << shift;
                         }
                     }
                     dest[(writeOffset + i) & 0xffff] = pixel;
                 }
             }
+            unsigned written = width * heights[size];
+            unsigned first = 0x10000 - writeOffset;
+            if (first > written) first = written;
+            PbW2_VramNoteLcdcWrite(bankAddress + 2 * writeOffset, 2 * first);
+            if (written > first) PbW2_VramNoteLcdcWrite(bankAddress, 2 * (written - first));
         }
         if (reg_GX_DISPCAPCNT == capture) reg_GX_DISPCAPCNT = capture & ~REG_GX_DISPCAPCNT_E_MASK;
     }

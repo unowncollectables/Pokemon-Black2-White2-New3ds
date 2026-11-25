@@ -6,6 +6,7 @@
 
 #if defined(PBW2_LINK_GAME)
 #include "g3_intercept.h"
+#include "g3_raster.h"
 #include "nitro/gx.h"
 #include "nitro/mi.h"
 #include "vram_host.h"
@@ -32,6 +33,16 @@ static void pbw2_note_scr_dest(const void *dest) {
     }
 }
 
+static void pbw2_prepare_lcdc(const void *mapped, u32 size) {
+    u32 arm;
+    if (PbW2_VramResolveArm(mapped, &arm)) PbW2_G3RasterBeforeLcdcWrite(arm, size);
+}
+
+static void pbw2_note_lcdc(const void *mapped, u32 size) {
+    u32 arm;
+    if (PbW2_VramResolveArm(mapped, &arm)) PbW2_VramNoteLcdcWrite(arm, size);
+}
+
 static void pbw2_note_copy(void *dest, u32 size) {
     if ((u32)(uintptr_t)dest >= 0x05000000u && (u32)(uintptr_t)dest < 0x08000000u) {
         PbW2_VramNoteLoad(size);
@@ -46,7 +57,9 @@ void MI_CpuCopy8(const void *src, void *dest, u32 size) {
         void *d = pbw2_map_ptr(dest);
         const void *s = pbw2_map_ptr(src);
         pbw2_note_copy(dest, size);
+        pbw2_prepare_lcdc(d, size);
         memcpy(d, s, size);
+        pbw2_note_lcdc(d, size);
 #else
         memcpy(dest, src, size);
 #endif
@@ -58,7 +71,9 @@ void MI_CpuFill8(void *dest, u8 value, u32 size) {
 #if defined(PBW2_LINK_GAME)
         void *d = pbw2_map_ptr(dest);
         pbw2_note_copy(dest, size);
+        pbw2_prepare_lcdc(d, size);
         memset(d, value, size);
+        pbw2_note_lcdc(d, size);
 #else
         memset(dest, value, size);
 #endif
@@ -89,7 +104,9 @@ void MIi_CpuCopy32(const void *src, void *dest, u32 size) {
     void *d = pbw2_map_ptr(dest);
     const void *s = pbw2_map_ptr(src);
     pbw2_note_copy(dest, size);
+    pbw2_prepare_lcdc(d, size);
     memcpy(d, s, size);
+    pbw2_note_lcdc(d, size);
 #else
     memcpy(dest, src, size);
 #endif
@@ -98,6 +115,7 @@ void MIi_CpuCopy32(const void *src, void *dest, u32 size) {
 void MIi_CpuClear32(u32 value, void *dest, u32 size) {
 #if defined(PBW2_LINK_GAME)
     dest = pbw2_map_ptr(dest);
+    pbw2_prepare_lcdc(dest, size);
 #endif
     u32 *p = dest;
     u32 words = size / 4u;
@@ -105,6 +123,9 @@ void MIi_CpuClear32(u32 value, void *dest, u32 size) {
     for (i = 0; i < words; i++) {
         p[i] = value;
     }
+#if defined(PBW2_LINK_GAME)
+    pbw2_note_lcdc(p, size);
+#endif
 }
 
 void MIi_CpuClearFast(u32 value, void *dest, u32 size) {
@@ -137,7 +158,9 @@ void MI_Copy32B(const void *src, void *dest) {
         void *d = pbw2_map_ptr(dest);
         const void *s = pbw2_map_ptr(src);
         pbw2_note_copy(dest, 32);
+        pbw2_prepare_lcdc(d, 32);
         memcpy(d, s, 32);
+        pbw2_note_lcdc(d, 32);
 #else
         memcpy(dest, src, 32);
 #endif
@@ -156,7 +179,9 @@ void MIi_CpuCopy16(const void *src, void *dest, u32 size) {
     void *d = pbw2_map_ptr(dest);
     const void *s = pbw2_map_ptr(src);
     pbw2_note_copy(dest, size);
+    pbw2_prepare_lcdc(d, size);
     memcpy(d, s, size);
+    pbw2_note_lcdc(d, size);
 #else
     memcpy(dest, src, size);
 #endif
@@ -166,12 +191,16 @@ void MIi_CpuClear16(u16 value, void *dest, u32 size) {
     u32 i;
 #if defined(PBW2_LINK_GAME)
     dest = pbw2_map_ptr(dest);
+    pbw2_prepare_lcdc(dest, size);
 #endif
     u16 *p = dest;
     u32 words = size / 2u;
     for (i = 0; i < words; i++) {
         p[i] = value;
     }
+#if defined(PBW2_LINK_GAME)
+    pbw2_note_lcdc(p, size);
+#endif
 }
 
 void MIi_CpuCopyFast(const void *src, void *dest, u32 size) {
@@ -179,7 +208,9 @@ void MIi_CpuCopyFast(const void *src, void *dest, u32 size) {
     void *d = pbw2_map_ptr(dest);
     const void *s = pbw2_map_ptr(src);
     pbw2_note_copy(dest, size);
+    pbw2_prepare_lcdc(d, size);
     memcpy(d, s, size);
+    pbw2_note_lcdc(d, size);
 #else
     memcpy(dest, src, size);
 #endif
@@ -195,7 +226,9 @@ void MIi_CpuSend32(const void *src, volatile void *dest, u32 size) {
         void *d = pbw2_map_ptr((void *)dest);
         const void *s = pbw2_map_ptr(src);
         pbw2_note_copy((void *)dest, size);
+        pbw2_prepare_lcdc(d, size);
         memcpy(d, s, size);
+        pbw2_note_lcdc(d, size);
     }
 #else
     memcpy((void *)dest, src, size);
@@ -231,6 +264,7 @@ void MI_UncompressLZ8(const void *src, void *dest) {
     header = (u32)s[0] | ((u32)s[1] << 8) | ((u32)s[2] << 16) | ((u32)s[3] << 24);
     s += 4;
     left = header >> 8;
+    pbw2_prepare_lcdc(d, left);
     extended = (header & 0xfu) != 0;
     while (left > 0) {
         flags = *s++;
@@ -269,6 +303,7 @@ void MI_UncompressLZ8(const void *src, void *dest) {
             flags <<= 1;
         }
     }
+    pbw2_note_lcdc(pbw2_map_ptr(dest), header >> 8);
 #else
     (void)src;
     (void)dest;

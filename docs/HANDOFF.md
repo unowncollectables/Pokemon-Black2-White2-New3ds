@@ -76,9 +76,8 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
   An ARM11 fixture covers box visibility, a translated box, clipping,
   depth, palette lookup, and capture to VRAM D.
 - The CPU renderer approximates lighting and translucent blending. Fog,
-  toon shading, some texture-coordinate generation modes, exact capture
-  blending, and PICA200 acceleration remain open. SoulSilver's
-  `g3gpu.c` and `shaders/g3.v.pica` are the acceleration reference.
+  toon shading and exact capture blending remain open. The PICA200 backend
+  uses SoulSilver's `g3gpu.c` and `shaders/g3.v.pica` as references.
 - Triangles fully inside the clip volume go straight to projection.
   Triangles outside a common clip plane are discarded. The existing
   clipping pass handles triangles that cross a plane. A synthetic Azahar
@@ -112,6 +111,49 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
   thousands of small SD seeks on the first cry. The game checks the
   wave archive and sample boundaries before playback. Field music and
   sound effects still need the sequence player.
+
+### Experimental PICA200 geometry
+
+- Enable **GPU geometry (experimental)** under L+R+Y. The default is
+  the CPU rasterizer. The host batches projected triangles and draws on
+  a PICA200 color/depth target. It queues the transfer back to the
+  256×192 layer so existing BG0 composition and title VRAM capture can
+  consume it. The DS compositor and LCD scaling still run on ARM11.
+- A bounded texture cache keeps PICA textures across frames. LCDC DMA,
+  CPU transfers and display capture update VRAM page revisions. Cache
+  entries track texels, compressed block descriptors and palettes. The
+  title reuses all 15 textures on its second GPU frame. The fixture
+  covers depth, clipping, indexed textures, palette cache hits and
+  invalidation, and capture to VRAM D. Azahar shows Kyurem, the blue
+  title scene and the opening Aspertia field through the GPU backend.
+  The 120-frame Aspertia sample records 4,962 texture cache hits and
+  58 uploads.
+- PICA uploads reverse the tiled row order to retain DS texture
+  orientation. Negative repeating UVs shift by a whole repeat period,
+  including the two-period mirror case. The fixture checks an
+  asymmetric texture on both axes and an updated 4×4 descriptor.
+- The GX interpreter generates signed, fixed-point texture coordinates on
+  TEXCOORD, NORMAL, or vertex submission, according to the material's
+  mode. Both renderers consume these coordinates. The fixture checks
+  both axes and verifies when the texture matrix is read.
+- Mixed-alpha textures write depth for opaque texels. Fractional texels
+  write depth when the polygon requests it. Textures with only one alpha
+  class use one draw pass. LCDC uploads that overwrite a queued texture
+  replay those triangles before the bytes change.
+- Translucent polygons with the same GX ID contribute once per pixel
+  until another ID or an opaque fragment replaces it. PICA stores the ID
+  in stencil. Alpha-zero fragments leave the stencil and depth intact.
+- GX decals use texel alpha to select the color and polygon alpha for
+  coverage. PICA draws decals with zero or full texel alpha. Frames with
+  fractional decal texels use software for the DS fixed-point blend.
+- Source A 3D capture copies the visibility bit with the color. Source
+  A/B blending ignores contributions from invalid pixels. Capture
+  offsets wrap within the destination bank. The synthetic fixture
+  verifies these cases through both rasterizers and detects unintended
+  CPU fallback. See [BUILDING.md](BUILDING.md#geometry-regression-fixture).
+- GPU preparation can fall back to CPU rasterization for that frame.
+  Hardware timing, 3D blending parity, direct GPU composition, wider
+  field visibility and native-resolution render targets remain open.
 
 ### Audio follow-up — LLE unlock, title stream verified, wave player built (Nov 24–25, Ghost)
 
@@ -218,7 +260,7 @@ local branch.
    physical New 3DS.
 2. **3D parity and speed:** Kyurem renders. Verify the field across maps,
    complete the missing GX effects, and measure frame time on hardware
-   before carrying the rendering path over to PICA200.
+   with both rendering backends.
 3. **QOL: still ZERO ported** (inventory: 55 features, 49 apply; the
    inventory lives outside this repo in the cloud workspace). Order once
    the field walks: settings first, cheap host-side items, wide/sharp
@@ -454,7 +496,7 @@ Important host files under `n3ds/nitro/` and `n3ds/source/`:
 | `gx_host.c` | GX shims, DISPCNT/POWCNT, present hook |
 | `g3_intercept.c` | 3D command intercept |
 | `g3_gecom_host.c` | Real `NNS_G3dGeBufferOP_N` / flush / `NNS_G3dInit`; FIFO capture |
-| `g3_gx_stub.c` | FIFO/display-list consumption stubs until Citro3D replay exists |
+| `g3_pica.c` | Experimental Citro3D triangle batches, texture cache and readback |
 | `g3d_glb_stubs.c` | First-call stubs: `NNS_G3dDraw`, TexLoad/Bind, GetMdlSet, MTX |
 | `game_present.c` | LINK_GAME present; default path must stay r15-identical |
 | `overlay_host.c` | Overlay load from `sdmc:/3ds/<game>_3ds/overlays/` |
@@ -496,7 +538,7 @@ Title 2D: sub BG3 (`a/0/2/6` files 0/1/2) is the Pokémon Black 2 logo +
 ice; sub BG2 (file 3) is scrolling ice; sub OBJ should be PRESS START;
 main BG3 (files 8/9/10) is "Developed by GAME FREAK inc." Main display
 mode is `GX_DISPMODE_VRAM_D` with `GX_SetCapture` of 2D3D+VRAM to bank D
-for motion blur. The CPU rasterizer and VRAM capture show Kyurem in Azahar.
+for motion blur. Both geometry backends feed that capture in Azahar.
 
 ## 6. Milestone history (r18–r29)
 

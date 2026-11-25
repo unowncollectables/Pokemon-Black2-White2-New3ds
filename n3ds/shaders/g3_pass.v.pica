@@ -1,0 +1,11 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; The host supplies clip coordinates and colors after the GX geometry stage.
+.out position position
+.out uv texcoord0
+.out color color
+.proc main
+    mov position, v0
+    mov uv, v1
+    mov color, v2
+    end
+.end

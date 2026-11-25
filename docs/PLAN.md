@@ -22,11 +22,12 @@ by `python3 configure.py && ninja` for the matching DS ROM. It is not committed.
 
 ## Video
 
-The host composites both DS 2D engines and the CPU-rendered geometry layer.
+The host composites both DS 2D engines and the geometry layer. The
+experimental PICA200 backend is available beside the default CPU rasterizer.
 The Black 2 title uses the same VRAM capture and display path as the DS game.
 Finish geometry effects, compare with DS rendering, and measure frame
-timing on hardware. The sister ports are references for PICA200
-acceleration, presentation order, and thread lifetime. Settings offers
+timing on hardware. The sister ports are references for direct GPU
+composition, presentation order, and thread lifetime. Settings offers
 LCD fit, wide fill and point-filtered scaling. Wider field visibility,
 per-glyph text and higher-resolution geometry follow the baseline renderer.
 
