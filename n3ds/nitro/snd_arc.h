@@ -15,6 +15,7 @@
 void SndArc_SetPath(const char *path);
 const NNSSndArcSeqInfo *SndArc_GetSeqInfo(int seqNo);
 const NNSSndArcBankInfo *SndArc_GetBankInfo(int bankNo);
+const NNSSndArcPlayerInfo *SndArc_GetPlayerInfo(int playerNo);
 /* The file id of a wave archive, or 0xFFFFFFFF when it has none. */
 u32 SndArc_GetWaveArcFileId(int waveArcNo);
 /* The size of a file in the archive, or 0 when it has none. */

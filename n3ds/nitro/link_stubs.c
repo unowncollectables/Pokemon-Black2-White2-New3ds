@@ -66,27 +66,10 @@ void MI_WaitNDma(void) { PBW2_STUB_LOG("link", "MI_WaitNDma"); }
 void MIC_Init(void) { PBW2_STUB_LOG("link", "MIC_Init"); }
 void NCFG_ReadConfigEx(void) { PBW2_STUB_LOG("link", "NCFG_ReadConfigEx"); }
 void NNS_SndArcSetLoadBlockSize(void) { PBW2_STUB_LOG("link", "NNS_SndArcSetLoadBlockSize"); }
-void NNS_SndHandleInit(void) { PBW2_STUB_LOG("link", "NNS_SndHandleInit"); }
-void NNS_SndHandleReleaseSeq(void) { PBW2_STUB_LOG("link", "NNS_SndHandleReleaseSeq"); }
 /* NNS_SndHeapAlloc/Create/Destroy/LoadState/SaveState/GetCurrentLevel are
  * NOT stubbed here: the real lib/nnsys/src/snd/snd_heap.c is linked
  * (closure INCLUDE via lib_nnsys_path_ok). Do not re-add them. */
 void NNS_SndInit(void) { PBW2_STUB_LOG("link", "NNS_SndInit"); }
-void NNS_SndMain(void) { PBW2_STUB_LOG("link", "NNS_SndMain"); }
-void NNS_SndPlayerMoveVolume(void) { PBW2_STUB_LOG("link", "NNS_SndPlayerMoveVolume"); }
-void NNS_SndPlayerPause(void) { PBW2_STUB_LOG("link", "NNS_SndPlayerPause"); }
-void NNS_SndPlayerSetPlayableSeqCount(void) { PBW2_STUB_LOG("link", "NNS_SndPlayerSetPlayableSeqCount"); }
-void NNS_SndPlayerSetPlayerVolume(void) { PBW2_STUB_LOG("link", "NNS_SndPlayerSetPlayerVolume"); }
-void NNS_SndPlayerSetTempoRatio(void) { PBW2_STUB_LOG("link", "NNS_SndPlayerSetTempoRatio"); }
-void NNS_SndPlayerSetTrackModDepth(void) { PBW2_STUB_LOG("link", "NNS_SndPlayerSetTrackModDepth"); }
-void NNS_SndPlayerSetTrackModSpeed(void) { PBW2_STUB_LOG("link", "NNS_SndPlayerSetTrackModSpeed"); }
-void NNS_SndPlayerSetTrackMute(void) { PBW2_STUB_LOG("link", "NNS_SndPlayerSetTrackMute"); }
-void NNS_SndPlayerSetTrackMuteEx(void) { PBW2_STUB_LOG("link", "NNS_SndPlayerSetTrackMuteEx"); }
-void NNS_SndPlayerSetTrackPan(void) { PBW2_STUB_LOG("link", "NNS_SndPlayerSetTrackPan"); }
-void NNS_SndPlayerSetTrackPitch(void) { PBW2_STUB_LOG("link", "NNS_SndPlayerSetTrackPitch"); }
-void NNS_SndPlayerSetTrackVolume(void) { PBW2_STUB_LOG("link", "NNS_SndPlayerSetTrackVolume"); }
-void NNS_SndPlayerSetVolume(void) { PBW2_STUB_LOG("link", "NNS_SndPlayerSetVolume"); }
-void NNS_SndPlayerStopSeq(void) { PBW2_STUB_LOG("link", "NNS_SndPlayerStopSeq"); }
 void NNS_SndSetMasterVolume(void) { PBW2_STUB_LOG("link", "NNS_SndSetMasterVolume"); }
 void NNS_SndSetMonoFlag(void) { PBW2_STUB_LOG("link", "NNS_SndSetMonoFlag"); }
 void NNS_SndUpdateDriverInfo(void) { PBW2_STUB_LOG("link", "NNS_SndUpdateDriverInfo"); }

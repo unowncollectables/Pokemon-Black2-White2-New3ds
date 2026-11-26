@@ -31,7 +31,7 @@
 
 #define WAVE_DS_CHANNELS 16
 #define WAVE_NDSP_BASE 1 /* DS ch N -> NDSP ch N+1 */
-#define WAVE_PCM_CAPACITY (64u * 1024u)
+#define WAVE_PCM_CAPACITY (512u * 1024u) /* 512 KiB: the largest SDAT wave decodes to 451 KiB */
 enum { WAVE_FORMAT_IMA_ADPCM = 2, ADPCM_HEADER_SAMPLES = 8 };
 
 struct NNSSndWaveOut {

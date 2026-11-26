@@ -150,6 +150,10 @@ const NNSSndArcSeqInfo *SndArc_GetSeqInfo(int seqNo) {
     return seq && seq->fileId < s_arc.fatCount ? seq : NULL;
 }
 
+const NNSSndArcPlayerInfo *SndArc_GetPlayerInfo(int playerNo) {
+    return info_record(0x18, playerNo, sizeof(NNSSndArcPlayerInfo));
+}
+
 const NNSSndArcBankInfo *SndArc_GetBankInfo(int bankNo) {
     const NNSSndArcBankInfo *bank = info_record(0x10, bankNo, sizeof *bank);
     return bank && bank->fileId < s_arc.fatCount ? bank : NULL;

@@ -191,6 +191,75 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
   playback features are available to the sequence player when it is
   implemented.
 
+### Sequence player — BGM + SEs sounding (Nov 25, Ghost)
+
+- Title cry verdict: **fixed, no fix needed.** Verified in the real
+  waveform (`runs/b2w2-audio-cry-verify2/capture.wav`, 137.5 s): guest
+  log `WaveOutIsPlaying ch=15 ended status=3 samplePos=21576 after
+  2111 ms` — all 21,576 samples consumed (old broken runs: samplePos=0
+  after 198 ms). Waveform burst onset ~41.3 s, ends ~43.5 s. The cry
+  only plays when A/Start is pressed on the title screen
+  (`src/demo/title/title.c:47,363`) — a verify run that presses nothing
+  hears no cry at all. `audio_capture` call shape: lotus_debug takes
+  `{"session": …, "command": {"operation": "audio_capture", "enabled":
+  bool}}` (the bare `{"operation": …}` form fails deserialization);
+  `cry-capture.py` in the Lotus driver was fixed and gained `--press`.
+- New host NNS sequence player (`n3ds/nitro/seq_player.c`, ~1,100
+  lines), driven by `NNS_SndMain` once per game frame: SSEQ
+  interpreter (tempo/tracks, NOTE/REST, BANKPROG, CALL/RETURN, JUMP
+  loops, D4/FC loops, 1- and 2-byte controls), program → SBNK
+  instrument → SWAR wave → DS channel via the wave player. Real
+  StartSeq/StopSeq/Pause/volume/fade/CountPlaying/GetTick/
+  ReadDriverTrackInfo replace the silent stubs; `SndArc_GetPlayerInfo`
+  added; the regen script's skip set was updated. Build needs
+  `PBW2_LINK_GAME=1` and `DEVKITPRO=/opt/devkitpro` + tools/bin on
+  PATH. Build: `black2_3ds.3dsx`, SHA1
+  `f2ac00f823296da92f254a009a6d5bd9b5e3e7d4` (9,098,984 bytes, reloc
+  OK).
+- Verification (all LLE, `--audio-emulation 1 --card b2w2-dsp`,
+  `audio_capture`): SE run (620 s playthrough) — 129 notes played, 34
+  dropped, then the drops were fixed: 1351 MESSAGE 34 plays / 68 notes
+  / 0 dropped, 1356 DECIDE 10 plays / 20 notes / 0 dropped, 1352
+  SELECT, 1357, 1365, 1382, 2036 all 0 dropped; intro plays through to
+  the field with no regression; cries Black Kyurem 2,098 ms + Cinccino
+  1,401 ms, both full length. BGM run (180 s, START at 130 s) — 1171 GF
+  logo 18 notes / 0 dropped (was 0/4); TITLE01 1,067 notes / 0 dropped
+  / 4,825 ticks (was 18/20), stopped correctly by the START press;
+  waveform shows continuous music 5–95 s, no cliff at 65 s — TITLE01
+  carries the title after the stream ends. Cry at ~105 s, intro BGM
+  1009 from ~110 s. PSG run (360 s) — 1387 KON 5 notes / 0 dropped,
+  1383 BOWA2 6 notes / 0 dropped (were 0/4 and 0/6); 12 fmt=1 PCM16
+  synth starts, 0.35–0.45 s each, volumes 10–70; intro mix continuously
+  audible.
+- Three bugs found by testing, all fixed: (1) wave total length is
+  `loopStart + loopLen` words, not loopLen alone (verified on 8
+  looping waves: `(loopStart+loopLen)*4 == data length` exactly);
+  loopLen alone put the loop point past the buffer end for every
+  looping wave. (2) SBNK drum-set (16) / key-split (17) entries are
+  12-byte `SNDInstData` — the wave fields sit 2 bytes further in than
+  first read, so every regional/range program resolved to a bogus wave
+  and dropped (TITLE01's 20 drops). Entry type now dispatches
+  PCM/PSG/NOISE per note. (3) Wave cap 64 KiB → 512 KiB per channel
+  (`wave_out.c`): largest SDAT wave decodes to 451 KiB; 51 waves exceed
+  64 KiB. Bonus: PSG (square, duty `(wave[0]+1)/8`) and NOISE are now
+  synthesized in software with an ADSR envelope — the 3DS has no DS PSG
+  hardware. This covers 1387/1383, whose SWARs are empty (0 samples)
+  because they are PSG, not sampled.
+- Open question answered: the stream is a ~24 s one-shot intro piece;
+  SEQ_BGM_TITLE01 is the looping title music. Both are requested at the
+  title; the sequence is the one that carries it.
+- Remaining, sized not built: arithmetic opcodes 0xA0–0xBF (none in any
+  inventoried sequence; a track hitting one stops instead of
+  desyncing); ADSR on sampled notes (constant volume per note now; the
+  synth does apply ADSR); modulation/portamento/pitch-bend LFOs
+  (stored, not applied); SetTrackPitch stored, not applied (unit
+  unverified); DIRECTPCM instruments (fRecord 4, none in inventoried
+  banks). **One re-check still open:** the 620 s run's field section
+  was silent from ~320 s because the demo BGM 1102's notes were
+  pre-fix garbage — the fix should have cured it, but no full
+  playthrough to the field has been re-run on the fixed build yet.
+  That is the natural next job.
+
 ### Experimental PICA200 geometry
 
 - Enable **GPU geometry (experimental)** under L+R+Y. The default is

@@ -16,7 +16,11 @@ skip = {"FX_Div", "FX_Sqrt", "FX_Atan2Idx", "FX_Inv", "__memcpy", "MATH_QSort", 
 # here as void: a void CountPlaying stub reports a player active
 # forever and hangs the intro in POKEMON_APPEAR. The WaveOut channel
 # functions live in n3ds/nitro/wave_out.c (real NDSP player) — never
-# re-add those either.
+# re-add those either. The sequence player lives in
+# n3ds/nitro/seq_player.c (real NNS_SndMain + NNS_SndPlayer* control +
+# NNS_SndHandle*) — never re-add those either: a void NNS_SndMain
+# would stop every BGM and SE, and a void StopSeq would leave
+# sequences playing forever.
 SND_SILENT = {
     "NNS_SndArcGetBankInfo", "NNS_SndArcGetFileAddress", "NNS_SndArcGetFileSize",
     "NNS_SndArcGetGroupInfo", "NNS_SndArcGetSeqInfo", "NNS_SndArcGetSeqParam", "NNS_SndArcSetFileAddress",
@@ -29,6 +33,14 @@ SND_SILENT = {
     "NNS_SndWaveOutFreeChannel", "NNS_SndWaveOutStop", "NNS_SndWaveOutWaitForChannelStop",
     "NNS_SndWaveOutSetVolume", "NNS_SndWaveOutSetSpeed",
     "NNS_SndArcReadFile", "NNS_SndPlayerReadDriverTrackInfo",
+    "NNS_SndMain", "NNS_SndPlayerStopSeq", "NNS_SndPlayerPause",
+    "NNS_SndPlayerSetVolume", "NNS_SndPlayerSetInitialVolume", "NNS_SndPlayerMoveVolume",
+    "NNS_SndPlayerSetPlayerVolume", "NNS_SndPlayerSetPlayableSeqCount",
+    "NNS_SndPlayerSetAllocatableChannel", "NNS_SndPlayerSetChannelPriority",
+    "NNS_SndPlayerSetTempoRatio", "NNS_SndPlayerSetTrackMute", "NNS_SndPlayerSetTrackMuteEx",
+    "NNS_SndPlayerSetTrackPan", "NNS_SndPlayerSetTrackPitch", "NNS_SndPlayerSetTrackVolume",
+    "NNS_SndPlayerSetTrackModDepth", "NNS_SndPlayerSetTrackModSpeed",
+    "NNS_SndHandleInit", "NNS_SndHandleReleaseSeq",
 }
 DATA_OR_HOSTED = {
     "SDK_AUTOLOAD_DTCM_START", "NNSi_objSizeWTbl", "NNSi_objSizeHTbl",
