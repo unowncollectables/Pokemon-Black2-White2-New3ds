@@ -87,7 +87,7 @@ void GxShim_Present(uint32_t flags) {
                     draw_scaled(GFX_TOP, wide, 320, options, topInk);
                 } else Present_DrawGameWithText(GFX_TOP, top, options, topInk);
             }
-            if (bottom) Present_DrawGameWithText(GFX_BOTTOM, bottom, options, bottomInk);
+            Present_DrawBottomCached(bottom, options, bottomInk);
             pbw2_game_notify_present();
         }
     }
@@ -249,6 +249,58 @@ void Present_DrawGame(gfxScreen_t screen, const u16 *src, uint32_t options) {
     Present_DrawGameWithText(screen, src, options, NULL);
 }
 
+/* Keep track of which of libctru's two LCD buffers contains the latest bottom image. */
+static struct {
+    u16 image[GAME_WIDTH * GAME_HEIGHT];
+    u32 ink[GAME_WIDTH * GAME_HEIGHT];
+    u16 *buffers[2];
+    uint32_t options;
+    bool hasInk, reused;
+} s_bottomCache;
+
+void Present_DrawBottomCached(const u16 *src, uint32_t options, const u32 *ink) {
+    s_bottomCache.reused = false;
+    u16 stride, width;
+    u16 *fb = src ? landscape_fb(GFX_BOTTOM, &stride, &width) : NULL;
+    if (!fb || stride != 240 || width != 320) {
+        s_bottomCache.buffers[0] = s_bottomCache.buffers[1] = NULL;
+        if (src) Present_DrawGameWithText(GFX_BOTTOM, src, options, ink);
+        return;
+    }
+    options &= DISPLAY_LCD_FIT | DISPLAY_SHARP_PIXELS;
+    bool same = s_bottomCache.buffers[0] && options == s_bottomCache.options &&
+                (ink != NULL) == s_bottomCache.hasInk &&
+                memcmp(src, s_bottomCache.image, sizeof s_bottomCache.image) == 0 &&
+                (!ink || memcmp(ink, s_bottomCache.ink, sizeof s_bottomCache.ink) == 0);
+    if (same && (fb == s_bottomCache.buffers[0] || fb == s_bottomCache.buffers[1])) {
+        s_bottomCache.reused = true;
+        return;
+    }
+    if (same) {
+        s_bottomCache.buffers[1] = fb;
+    } else {
+        memcpy(s_bottomCache.image, src, sizeof s_bottomCache.image);
+        if (ink) memcpy(s_bottomCache.ink, ink, sizeof s_bottomCache.ink);
+        s_bottomCache.hasInk = ink != NULL;
+        s_bottomCache.options = options;
+        s_bottomCache.buffers[0] = fb;
+        s_bottomCache.buffers[1] = NULL;
+    }
+    Present_DrawGameWithText(GFX_BOTTOM, src, options, ink);
+}
+
+void Present_Flush(void) {
+    if (s_bottomCache.reused) {
+        /* The game uses a single RGB565 image at the top. The retained bottom
+         * buffer was already flushed when it was last written. */
+        u16 stride, width;
+        u16 *top = landscape_fb(GFX_TOP, &stride, &width);
+        if (top && stride == 240 && width == 400 &&
+            R_SUCCEEDED(GSPGPU_FlushDataCache(top, stride * width * sizeof(*top)))) return;
+    }
+    gfxFlushBuffers();
+}
+
 static void clear_screen(gfxScreen_t screen) {
     u16 stride;
     u16 width;
@@ -263,6 +315,7 @@ void Present_Clear(uint32_t flags) {
         clear_screen(GFX_TOP);
     }
     if (flags & PBW2_SCREEN_BOTTOM) {
+        Present_DrawBottomCached(NULL, 0, NULL);
         clear_screen(GFX_BOTTOM);
     }
 }

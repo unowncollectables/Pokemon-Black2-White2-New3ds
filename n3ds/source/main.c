@@ -270,7 +270,11 @@ int main(int argc, char **argv) {
         u64 flushStart = svcGetSystemTick();
 #endif
 
+#if defined(PBW2_LINK_GAME)
+        Present_Flush();
+#else
         gfxFlushBuffers();
+#endif
         gfxSwapBuffers();
 #if defined(PBW2_LINK_GAME)
         if (PbW2_GameHasPresented()) report_present_time(frameStart, flushStart, svcGetSystemTick());
