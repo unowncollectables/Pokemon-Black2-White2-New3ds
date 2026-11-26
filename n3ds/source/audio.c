@@ -8,6 +8,7 @@
 
 #if defined(PBW2_LINK_GAME)
 
+#include "seq_player.h"
 #include "strm_pcm.h"
 #include "wave_out.h"
 
@@ -75,6 +76,7 @@ static void Audio_Thread(void *arg) {
     StrmPcm *stream = NULL;
     unsigned writeIndex = 0, rate = 0, baseMs = 0;
     u64 framesQueued = 0, fadeBegin = 0, fadeEnd = 0;
+    u64 lastSeqTick = 0;
     float volume = 0;
     bool eof = false;
     ndspChnSetFormat(STREAM_CHANNEL, NDSP_FORMAT_STEREO_PCM16);
@@ -164,6 +166,18 @@ static void Audio_Thread(void *arg) {
         LightLock_Lock(&s_request.lock);
         if (s_request.command == STREAM_IDLE) s_request.positionMs = pos;
         LightLock_Unlock(&s_request.lock);
+        /* Drive the sequence player at ~60 Hz from this core-2
+         * thread, so a game-thread stall cannot starve the music.
+         * SeqPlayer_Tick's dt is wall-clock based, so jitter in the
+         * firing interval is absorbed; the 0.1 s cap inside it never
+         * engages at a steady 16.6 ms tick. */
+        {
+            u64 now = svcGetSystemTick();
+            if (now - lastSeqTick >= SYSCLOCK_ARM11 / 60) {
+                SeqPlayer_Tick();
+                lastSeqTick = now;
+            }
+        }
         svcSleepThread(5000000LL);
     }
 
@@ -198,6 +212,7 @@ void Audio_Start(void) {
     ndspSetOutputMode(NDSP_OUTPUT_STEREO);
     LightLock_Init(&s_request.lock);
     s_request.ready = Workers_Start("audio", Audio_Thread, 0x20, 2, NULL);
+    if (s_request.ready) SeqPlayer_SetAudioThreadTick(true);
 #endif
 }
 
@@ -210,6 +225,10 @@ void Audio_NdspExit(void) {
         s_pcm = NULL;
         s_ndsp = false;
         s_request.ready = false;
+        /* Hand the sequence tick back to the game thread, so music
+         * keeps advancing (with the old game-thread timing) if the
+         * audio worker ever goes away. */
+        SeqPlayer_SetAudioThreadTick(false);
     }
 #endif
 }

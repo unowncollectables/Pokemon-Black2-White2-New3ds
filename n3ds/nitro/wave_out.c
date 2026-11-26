@@ -51,12 +51,20 @@ struct NNSSndWaveOut {
 
 static struct NNSSndWaveOut s_channels[WAVE_DS_CHANNELS];
 static void *s_pcm[WAVE_DS_CHANNELS];
+/* Serializes the channel table and PCM buffers between the game thread
+ * (cry/mic paths) and the audio thread (the sequence tick, which holds
+ * the seq lock when it calls in here — order is seq -> wave, and no
+ * wave entry point calls back into the sequence player). A
+ * zero-initialized LightLock is unlocked, so this needs no init hook. */
+static LightLock s_waveLock;
 
 void WaveOut_Shutdown(void) {
+    LightLock_Lock(&s_waveLock);
     for (unsigned i = 0; i < WAVE_DS_CHANNELS; ++i) {
         if (s_pcm[i]) linearFree(s_pcm[i]);
         s_pcm[i] = NULL;
     }
+    LightLock_Unlock(&s_waveLock);
 }
 
 static float wave_effective_rate(int sampleRate, int speed) {
@@ -124,22 +132,32 @@ static NNSSndWaveOutHandle alloc_channel(int channel, bool sequenceNote) {
 }
 
 NNSSndWaveOutHandle NNS_SndWaveOutAllocChannel(int channel) {
+    NNSSndWaveOutHandle handle;
     PBW2_STUB_LOG("snd", "NNS_SndWaveOutAllocChannel (wave player)");
     Log_Line("AUDIO", "WaveOutAllocChannel ch=%d", channel);
-    return alloc_channel(channel, false);
+    LightLock_Lock(&s_waveLock);
+    handle = alloc_channel(channel, false);
+    LightLock_Unlock(&s_waveLock);
+    return handle;
 }
 
 NNSSndWaveOutHandle WaveOut_AllocSequenceChannel(int channel) {
-    return alloc_channel(channel, true);
+    NNSSndWaveOutHandle handle;
+    LightLock_Lock(&s_waveLock);
+    handle = alloc_channel(channel, true);
+    LightLock_Unlock(&s_waveLock);
+    return handle;
 }
 
 void NNS_SndWaveOutFreeChannel(NNSSndWaveOutHandle handle) {
     struct NNSSndWaveOut *waveOut = handle;
     if (!waveOut) return;
     if (!waveOut->sequenceNote) Log_Line("AUDIO", "WaveOutFreeChannel ch=%d", waveOut->dsCh);
+    LightLock_Lock(&s_waveLock);
     if (waveOut->active) ndspChnWaveBufClear(waveOut->ndspCh);
     waveOut->active = FALSE;
     waveOut->inUse = FALSE;
+    LightLock_Unlock(&s_waveLock);
 }
 
 BOOL NNS_SndWaveOutStart(NNSSndWaveOutHandle handle, NNSSndWaveFormat format, const void *data, BOOL loop,
@@ -150,22 +168,41 @@ BOOL NNS_SndWaveOutStart(NNSSndWaveOutHandle handle, NNSSndWaveFormat format, co
         Log_Line("AUDIO", "WaveOutStart fmt=%d loop=%d loopStart=%d samples=%d rate=%d vol=%d speed=%d pan=%d",
                  (int)format, (int)loop, loopStart, samples, rate, volume, speed, pan);
     }
+    LightLock_Lock(&s_waveLock);
     if (!waveOut || !waveOut->inUse || !data || samples <= 0 || rate <= 0 || speed <= 0
-        || (loop && (loopStart < 0 || loopStart >= samples))) return FALSE;
+        || (loop && (loopStart < 0 || loopStart >= samples))) {
+        LightLock_Unlock(&s_waveLock);
+        return FALSE;
+    }
     bool adpcm = (int)format == WAVE_FORMAT_IMA_ADPCM;
-    if (format != NNS_SND_WAVE_FORMAT_PCM8 && format != NNS_SND_WAVE_FORMAT_PCM16 && !adpcm) return FALSE;
+    if (format != NNS_SND_WAVE_FORMAT_PCM8 && format != NNS_SND_WAVE_FORMAT_PCM16 && !adpcm) {
+        LightLock_Unlock(&s_waveLock);
+        return FALSE;
+    }
     if (!loop) loopStart = 0;
     if (adpcm) {
-        if (samples <= ADPCM_HEADER_SAMPLES || (samples & 7) || (loopStart & 7)) return FALSE;
+        if (samples <= ADPCM_HEADER_SAMPLES || (samples & 7) || (loopStart & 7)) {
+            LightLock_Unlock(&s_waveLock);
+            return FALSE;
+        }
         samples -= ADPCM_HEADER_SAMPLES;
         loopStart = loopStart >= ADPCM_HEADER_SAMPLES ? loopStart - ADPCM_HEADER_SAMPLES : 0;
     }
-    if (!Audio_IsNdspReady()) return FALSE;
+    if (!Audio_IsNdspReady()) {
+        LightLock_Unlock(&s_waveLock);
+        return FALSE;
+    }
     unsigned sampleBytes = format == NNS_SND_WAVE_FORMAT_PCM8 ? 1 : 2;
-    if ((unsigned)samples > WAVE_PCM_CAPACITY / sampleBytes) return FALSE;
+    if ((unsigned)samples > WAVE_PCM_CAPACITY / sampleBytes) {
+        LightLock_Unlock(&s_waveLock);
+        return FALSE;
+    }
     void **pcm = &s_pcm[waveOut->dsCh];
     if (!*pcm) *pcm = linearAlloc(WAVE_PCM_CAPACITY + 3);
-    if (!*pcm) return FALSE;
+    if (!*pcm) {
+        LightLock_Unlock(&s_waveLock);
+        return FALSE;
+    }
     if (waveOut->active) ndspChnWaveBufClear(waveOut->ndspCh);
     unsigned bytes = (unsigned)samples * sampleBytes;
     if (adpcm) decode_ima(*pcm, data, samples);
@@ -203,20 +240,30 @@ BOOL NNS_SndWaveOutStart(NNSSndWaveOutHandle handle, NNSSndWaveFormat format, co
         Log_Line("AUDIO", "WaveOutStart ch=%d playing at %.0f Hz, %d samples", waveOut->ndspCh,
                  (double)wave_effective_rate(rate, speed), samples);
     }
+    LightLock_Unlock(&s_waveLock);
     return TRUE;
 }
 
 BOOL NNS_SndWaveOutIsPlaying(NNSSndWaveOutHandle handle) {
     struct NNSSndWaveOut *waveOut = handle;
-    if (!waveOut || !waveOut->active) return FALSE;
-    if (wave_pending(&waveOut->buf) || wave_pending(&waveOut->loopBuf)) return TRUE;
-    if (!waveOut->sequenceNote) {
-        Log_Line("AUDIO", "WaveOutIsPlaying ch=%d ended status=%d samplePos=%lu after %llu ms", waveOut->dsCh,
-                 (int)waveOut->buf.status, (unsigned long)ndspChnGetSamplePos(waveOut->ndspCh),
-                 (unsigned long long)((svcGetSystemTick() - waveOut->startTick) / (SYSCLOCK_ARM11 / 1000)));
+    bool playing;
+    if (!waveOut) return FALSE;
+    LightLock_Lock(&s_waveLock);
+    if (!waveOut->active) {
+        LightLock_Unlock(&s_waveLock);
+        return FALSE;
     }
-    waveOut->active = FALSE;
-    return FALSE;
+    playing = wave_pending(&waveOut->buf) || wave_pending(&waveOut->loopBuf);
+    if (!playing) {
+        if (!waveOut->sequenceNote) {
+            Log_Line("AUDIO", "WaveOutIsPlaying ch=%d ended status=%d samplePos=%lu after %llu ms", waveOut->dsCh,
+                     (int)waveOut->buf.status, (unsigned long)ndspChnGetSamplePos(waveOut->ndspCh),
+                     (unsigned long long)((svcGetSystemTick() - waveOut->startTick) / (SYSCLOCK_ARM11 / 1000)));
+        }
+        waveOut->active = FALSE;
+    }
+    LightLock_Unlock(&s_waveLock);
+    return playing ? TRUE : FALSE;
 }
 
 void NNS_SndWaveOutStop(NNSSndWaveOutHandle handle) {
@@ -227,34 +274,61 @@ void NNS_SndWaveOutStop(NNSSndWaveOutHandle handle) {
                  (int)waveOut->buf.status, (unsigned long)ndspChnGetSamplePos(waveOut->ndspCh),
                  (unsigned long long)((svcGetSystemTick() - waveOut->startTick) / (SYSCLOCK_ARM11 / 1000)));
     }
+    LightLock_Lock(&s_waveLock);
     if (waveOut->active) ndspChnWaveBufClear(waveOut->ndspCh);
     waveOut->active = FALSE;
+    LightLock_Unlock(&s_waveLock);
 }
 
 void NNS_SndWaveOutWaitForChannelStop(NNSSndWaveOutHandle handle) {
     struct NNSSndWaveOut *waveOut = handle;
     int i;
-    if (!waveOut || !waveOut->active) return;
+    if (!waveOut) return;
+    /* Do not hold the lock across the sleep loop: the audio thread's
+     * tick takes this lock for every note, and blocking it for up to
+     * 200 ms would stall the music — the very thing this change fixes.
+     * The buf status is driven by NDSP, so polling it unlocked is
+     * safe; only the active flag is set under the lock. */
+    LightLock_Lock(&s_waveLock);
+    if (!waveOut->active) {
+        LightLock_Unlock(&s_waveLock);
+        return;
+    }
     ndspChnWaveBufClear(waveOut->ndspCh);
+    LightLock_Unlock(&s_waveLock);
     for (i = 0; i < 200; ++i) {
         if (!wave_pending(&waveOut->buf) && !wave_pending(&waveOut->loopBuf)) break;
         svcSleepThread(1000000LL);
     }
+    LightLock_Lock(&s_waveLock);
     waveOut->active = FALSE;
+    LightLock_Unlock(&s_waveLock);
 }
 
 void NNS_SndWaveOutSetVolume(NNSSndWaveOutHandle handle, int volume) {
     struct NNSSndWaveOut *waveOut = handle;
-    if (!waveOut || !waveOut->active) return;
+    if (!waveOut) return;
+    LightLock_Lock(&s_waveLock);
+    if (!waveOut->active) {
+        LightLock_Unlock(&s_waveLock);
+        return;
+    }
     waveOut->volume = volume < 0 ? 0 : volume > 127 ? 127 : volume;
     wave_set_mix(waveOut);
+    LightLock_Unlock(&s_waveLock);
 }
 
 void NNS_SndWaveOutSetSpeed(NNSSndWaveOutHandle handle, int speed) {
     struct NNSSndWaveOut *waveOut = handle;
-    if (!waveOut || !waveOut->active) return;
+    if (!waveOut) return;
+    LightLock_Lock(&s_waveLock);
+    if (!waveOut->active) {
+        LightLock_Unlock(&s_waveLock);
+        return;
+    }
     waveOut->speed = speed;
     ndspChnSetRate(waveOut->ndspCh, wave_effective_rate(waveOut->sampleRate, speed));
+    LightLock_Unlock(&s_waveLock);
 }
 
 #endif

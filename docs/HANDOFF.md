@@ -308,6 +308,55 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
   3D is CPU-rasterized at ~4.5 fps. The fps job is the next big one
   after the crash is confirmed on hardware.
 
+### First-battle crash + choppy music (Nov 26, Ghost)
+
+- Nate's hardware test on 6df15a5ea (Nov 26 morning): the VBlank
+  crash fix held — he got past Bianca's house warp all the way to the
+  first battle, chose a Pokémon, saw the battle animations (slow but
+  there). New crash right as the first battle starts (log 2,423
+  lines + Luma dump; the log ends after overlay 147 load/unload, the
+  screen mid-darken, mbright=0x4010). The dump, parsed by hand:
+  PC `0x005c2754`, `r3 = FAR = 0x06860000`, DFSR 5 (translation
+  fault, section, READ), faulting instruction `ldrh r3, [r3]` =
+  `u16 color = *vram;` (fld3d_ci.c:1523) in
+  `EventFieldEffect_DimCaptureColor`. The battle transition's
+  screen-darkening dims the 256×192 captured frame (0xc000 u16s) at
+  raw DS address `0x06860000` = VRAM bank D (LCDC view), right after
+  `GX_SetBankForBG(GX_VRAM_BG_128_D)`. On the 3DS that address is
+  unmapped → data abort on the very first pixel.
+- Fix (commit `7bc16dbd1`): under `PBW2_N3DS` resolve the pointer
+  through `PbW2_VramMap((const void *)0x06860000)` — the capture
+  already lands in the right host buffer (s_lcdc + 0x60000) — then
+  `MI_CpuCopy16` the dimmed 0x18000 bytes to
+  `PbW2_VramMap((const void *)0x06000000)` so the bitmap BG displays
+  it (the display side reads from s_bg + 0, a different buffer; on a
+  real DS the two views are the same RAM). DS build untouched.
+  Disassembly confirms the fixed build calls `PbW2_VramMap` instead
+  of loading the raw literal.
+- Verification — NOT closed in the emulator: 0 exceptions across
+  every run (continue-test 1,424 lines, battle-verify 2,401, live
+  steering, audio-verify 922), but the battle transition was never
+  reached — Hugh's event loops identically (one line, walks off,
+  re-triggers) and the starter scene (overlay 316) never fires in the
+  emulator, even though it fired on Nate's hardware from the same
+  save. That is a separate event/script-chain issue; a hardware test
+  is the verification that matters for this fix.
+- Choppy music — FIXED and verified: `SeqPlayer_Tick` ran once per
+  game frame via `NNS_SndMain` with a 0.1 s dt cap, so a game-thread
+  stall skipped seconds of music (worst gap 4,036 ms on hardware).
+  Fix (commit `cf005a744`): the core-2 audio thread drives
+  `SeqPlayer_Tick` at ~60 Hz; the game-thread `NNS_SndMain` is a
+  no-op while the audio thread owns the tick, with fallback to the
+  game thread if NDSP never starts. Threading: one static LightLock
+  in seq_player.c (tick + public entry points; the delegators don't
+  take it — LightLock is non-recursive) and its own LightLock in
+  wave_out.c, lock order seq→wave. 600 s audio verify: ZERO
+  sequence-update gaps over 100 ms, 0 exceptions, field BGM
+  continuous while GX dipped to 7.5 fps with 53 overlay loads.
+- Side finding: once the Trainer Card is open, no button closes it
+  (B/X/A/START/SELECT all fail) — possible port bug, not
+  investigated.
+
 ### Experimental PICA200 geometry
 
 - Enable **GPU geometry (experimental)** under L+R+Y. The default is

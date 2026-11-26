@@ -47,6 +47,10 @@
 #include "system/wordset.h"
 #include "text/system/0368.h"
 
+#if defined(PBW2_N3DS)
+#include "vram_host_api.h"
+#endif
+
 // The field effects of the 3D scenes of ARCID_FLD3D_CI_FILE (fld3d_ci.c, after the file name that its allocations
 // pass): the Pokemon's sprite of a field move, the battle cut-ins and Alder's flight, with their particles, sounds and
 // screen fades. Function names from swan (https://github.com/ds-pokemon-hacking/swan, GPL-3.0); the layouts are ours
@@ -1519,7 +1523,14 @@ GameEvent *EventFieldEffect_CreateAlderFly(GameSystem *gsys, Fld3DCi *ci, u32 ac
 
 static void EventFieldEffect_DimCaptureColor(void) {
     u32 banks = GX_ResetBankForBG();
+#if defined(PBW2_N3DS)
+    /* The capture lives in the host's LCDC-backed VRAM (bank D); the raw
+     * DS address 0x06860000 is unmapped on the 3DS, so resolve it through
+     * the host map — same pattern as G2_GetBG*ScrPtr. */
+    u16 *vram = PbW2_VramMap((const void *)0x06860000);
+#else
     u16 *vram = (u16 *)0x6860000;
+#endif
     int i;
 
     for (i = 0; i < 0xc000; i++) {
@@ -1535,6 +1546,14 @@ static void EventFieldEffect_DimCaptureColor(void) {
         *vram = (a << 15) | (b << 10) | (g << 5) | r;
         vram++;
     }
+#if defined(PBW2_N3DS)
+    /* On the DS the LCDC view and the BG view are the same physical RAM,
+     * so the dimmed capture shows as the bitmap BG once bank D is back in
+     * BG mode. On the port the views are split buffers: mirror the dimmed
+     * frame into the BG view of bank D (offset 0, GX_VRAM_BG_128_D) so the
+     * transition displays it. */
+    MI_CpuCopy16(PbW2_VramMap((const void *)0x06860000), PbW2_VramMap((const void *)0x06000000), 0x18000);
+#endif
     GX_SetBankForBG(banks);
 }
 

@@ -147,6 +147,26 @@ static u32 s_allocChBitFlag[32];
 static u64 s_lastTick;
 static BOOL s_setupDone;
 static BOOL s_ndspDownLogged;
+/* Serializes the slot state (s_slots, s_playerVolume,
+ * s_playableSeqCount, s_allocChBitFlag, s_lastTick) between the game
+ * thread (public entry points) and the audio thread (SeqPlayer_Tick).
+ * The tick calls into wave_out while holding this lock, so the order
+ * is seq -> wave; the cry/mic paths take only the wave lock, so there
+ * is no reverse nesting. LightLock is non-recursive: the three
+ * delegating entry points (StartSeq, SetInitialVolume, SetTrackMuteEx)
+ * do NOT take it — their targets do. */
+static LightLock s_seqLock;
+/* True once the audio thread owns the tick (set by Audio_Start after
+ * the worker starts). Read without the lock by NNS_SndMain; the write
+ * is a single bool and the worst case is one extra game-thread tick
+ * during the startup handover, which the wall-clock dt absorbs. */
+static bool s_audioThreadTick;
+
+void SeqPlayer_SetAudioThreadTick(bool on) {
+    LightLock_Lock(&s_seqLock);
+    s_audioThreadTick = on;
+    LightLock_Unlock(&s_seqLock);
+}
 
 static u16 seq_rd16(const u8 *p) { return (u16)(p[0] | (p[1] << 8)); }
 
@@ -923,11 +943,15 @@ static void seq_start_fade(SeqSlot *slot, int target, int frames, BOOL stopAtEnd
 void SeqPlayer_Tick(void) {
     static u64 windowStart, longestGap;
     static unsigned cappedUpdates;
-    u64 now = svcGetSystemTick();
-    u64 gap = s_lastTick ? now - s_lastTick : 0;
+    u64 now, gap;
     float dt = 0.0f;
     bool playing = false;
     int i;
+    LightLock_Lock(&s_seqLock);
+    /* now/gap/dt live inside the lock: two threads ticking at once
+     * (the startup handover) must not both advance the same span. */
+    now = svcGetSystemTick();
+    gap = s_lastTick ? now - s_lastTick : 0;
     if (s_lastTick) {
         dt = (float)gap / (float)SYSCLOCK_ARM11;
         if (dt > 0.1f) dt = 0.1f;
@@ -958,16 +982,19 @@ void SeqPlayer_Tick(void) {
         longestGap = 0;
         cappedUpdates = 0;
     }
+    LightLock_Unlock(&s_seqLock);
 }
 
 void NNS_SndMain(void) {
-    SeqPlayer_Tick();
+    if (!s_audioThreadTick) SeqPlayer_Tick();
 }
 
 /* ---- Player setup ---- */
 
 BOOL NNS_SndArcPlayerSetup(NNSSndHeapHandle heap) {
     int i;
+    LightLock_Init(&s_seqLock);
+    LightLock_Lock(&s_seqLock);
     s_heap = heap;
     for (i = 0; i < 32; ++i) {
         const NNSSndArcPlayerInfo *info = SndArc_GetPlayerInfo(i);
@@ -976,6 +1003,7 @@ BOOL NNS_SndArcPlayerSetup(NNSSndHeapHandle heap) {
         s_allocChBitFlag[i] = info ? info->allocChBitFlag : 0xffffu;
     }
     s_setupDone = TRUE;
+    LightLock_Unlock(&s_seqLock);
     PBW2_STUB_LOG("snd", "NNS_SndArcPlayerSetup (sequence player)");
     return TRUE;
 }
@@ -994,9 +1022,16 @@ BOOL NNS_SndArcPlayerStartSeqEx(NNSSndHandle *handle, int playerNo, int bankNo, 
     PBW2_STUB_LOG("snd", "NNS_SndArcPlayerStartSeqEx (sequence player)");
     Log_Line("AUDIO", "StartSeqEx player=%d bank=%d prio=%d seq=%d", playerNo, bankNo, playerPrio,
              seqNo);
-    if (!handle || playerNo < 0 || playerNo >= 32) return FALSE;
+    LightLock_Lock(&s_seqLock);
+    if (!handle || playerNo < 0 || playerNo >= 32) {
+        LightLock_Unlock(&s_seqLock);
+        return FALSE;
+    }
     info = SndArc_GetSeqInfo(seqNo);
-    if (!info) return FALSE;
+    if (!info) {
+        LightLock_Unlock(&s_seqLock);
+        return FALSE;
+    }
     if (bankNo < 0) bankNo = (int)info->param.bankNo;
     if (playerPrio < 0) playerPrio = (int)info->param.playerPrio;
     active = seq_count_on_player(playerNo);
@@ -1008,21 +1043,34 @@ BOOL NNS_SndArcPlayerStartSeqEx(NNSSndHandle *handle, int playerNo, int bankNo, 
                 lowest = i;
             }
         }
-        if (lowest < 0 || playerPrio < lowestPrio) return FALSE;
+        if (lowest < 0 || playerPrio < lowestPrio) {
+            LightLock_Unlock(&s_seqLock);
+            return FALSE;
+        }
         seq_finish_slot(lowest);
     }
     if (!NNS_SndArcLoadSeqEx(seqNo,
                              NNS_SND_ARC_LOAD_SEQ | NNS_SND_ARC_LOAD_BANK | NNS_SND_ARC_LOAD_WAVE,
                              s_heap)) {
+        LightLock_Unlock(&s_seqLock);
         return FALSE;
     }
     seqBytes = NNS_SndArcGetFileAddress(info->fileId);
-    if (!seqBytes) return FALSE;
+    if (!seqBytes) {
+        LightLock_Unlock(&s_seqLock);
+        return FALSE;
+    }
     dataOff = seq_rd32(seqBytes + 0x18);
     fileSize = SndArc_GetFileSize(info->fileId);
-    if (dataOff >= fileSize) return FALSE;
+    if (dataOff >= fileSize) {
+        LightLock_Unlock(&s_seqLock);
+        return FALSE;
+    }
     copy = malloc(fileSize - dataOff);
-    if (!copy) return FALSE;
+    if (!copy) {
+        LightLock_Unlock(&s_seqLock);
+        return FALSE;
+    }
     memcpy(copy, seqBytes + dataOff, fileSize - dataOff);
     idx = -1;
     for (i = 0; i < SEQ_SLOTS; ++i) {
@@ -1033,6 +1081,7 @@ BOOL NNS_SndArcPlayerStartSeqEx(NNSSndHandle *handle, int playerNo, int bankNo, 
     }
     if (idx < 0) {
         free(copy);
+        LightLock_Unlock(&s_seqLock);
         return FALSE;
     }
     slot = &s_slots[idx];
@@ -1094,9 +1143,11 @@ BOOL NNS_SndArcPlayerStartSeqEx(NNSSndHandle *handle, int playerNo, int bankNo, 
     }
     Log_Line("AUDIO", "SeqPlayer seq=%d started on player %d, %d tracks, bank %d", seqNo, playerNo,
              __builtin_popcount((unsigned)mask), bankNo);
+    LightLock_Unlock(&s_seqLock);
     return TRUE;
 }
 
+/* No lock here: StartSeqEx takes it. */
 BOOL NNS_SndArcPlayerStartSeq(NNSSndHandle *handle, int seqNo) {
     const NNSSndArcSeqInfo *info;
     PBW2_STUB_LOG("snd", "NNS_SndArcPlayerStartSeq (sequence player)");
@@ -1110,66 +1161,111 @@ BOOL NNS_SndArcPlayerStartSeq(NNSSndHandle *handle, int seqNo) {
 /* ---- Player control ---- */
 
 void NNS_SndPlayerStopSeq(NNSSndHandle *handle, int fadeFrame) {
-    SeqSlot *slot = seq_slot_from_handle(handle);
-    if (!slot) return;
+    SeqSlot *slot;
+    LightLock_Lock(&s_seqLock);
+    slot = seq_slot_from_handle(handle);
+    if (!slot) {
+        LightLock_Unlock(&s_seqLock);
+        return;
+    }
     if (fadeFrame > 0) {
         seq_start_fade(slot, 0, fadeFrame, TRUE);
     } else {
         seq_finish_slot((int)(slot - s_slots));
     }
+    LightLock_Unlock(&s_seqLock);
 }
 
 void NNS_SndPlayerPause(NNSSndHandle *handle, BOOL flag) {
-    SeqSlot *slot = seq_slot_from_handle(handle);
+    SeqSlot *slot;
+    LightLock_Lock(&s_seqLock);
+    slot = seq_slot_from_handle(handle);
     if (slot) slot->paused = flag ? TRUE : FALSE;
+    LightLock_Unlock(&s_seqLock);
 }
 
 void NNS_SndPlayerSetVolume(NNSSndHandle *handle, int volume) {
-    SeqSlot *slot = seq_slot_from_handle(handle);
-    if (!slot) return;
+    SeqSlot *slot;
+    LightLock_Lock(&s_seqLock);
+    slot = seq_slot_from_handle(handle);
+    if (!slot) {
+        LightLock_Unlock(&s_seqLock);
+        return;
+    }
     slot->volume = volume < 0 ? 0 : volume > 127 ? 127 : volume;
     seq_update_volume(slot, 0xffff);
+    LightLock_Unlock(&s_seqLock);
 }
 
+/* No lock here: SetVolume takes it. */
 void NNS_SndPlayerSetInitialVolume(NNSSndHandle *handle, int volume) {
     NNS_SndPlayerSetVolume(handle, volume);
 }
 
 void NNS_SndPlayerMoveVolume(NNSSndHandle *handle, int targetVolume, int frames) {
-    SeqSlot *slot = seq_slot_from_handle(handle);
-    if (!slot) return;
+    SeqSlot *slot;
+    LightLock_Lock(&s_seqLock);
+    slot = seq_slot_from_handle(handle);
+    if (!slot) {
+        LightLock_Unlock(&s_seqLock);
+        return;
+    }
     if (targetVolume < 0) targetVolume = 0;
     if (targetVolume > 127) targetVolume = 127;
     seq_start_fade(slot, targetVolume, frames, FALSE);
+    LightLock_Unlock(&s_seqLock);
 }
 
 void NNS_SndPlayerSetPlayerVolume(int playerNo, int volume) {
-    if (playerNo < 0 || playerNo >= 32) return;
+    LightLock_Lock(&s_seqLock);
+    if (playerNo < 0 || playerNo >= 32) {
+        LightLock_Unlock(&s_seqLock);
+        return;
+    }
     s_playerVolume[playerNo] = volume < 0 ? 0 : volume > 127 ? 127 : volume;
     for (int i = 0; i < SEQ_SLOTS; ++i) {
         if (s_slots[i].inUse && s_slots[i].playerNo == playerNo) seq_update_volume(&s_slots[i], 0xffff);
     }
+    LightLock_Unlock(&s_seqLock);
 }
 
 void NNS_SndPlayerSetPlayableSeqCount(int playerNo, int seqCount) {
-    if (playerNo < 0 || playerNo >= 32 || seqCount < 1) return;
+    LightLock_Lock(&s_seqLock);
+    if (playerNo < 0 || playerNo >= 32 || seqCount < 1) {
+        LightLock_Unlock(&s_seqLock);
+        return;
+    }
     s_playableSeqCount[playerNo] = seqCount;
+    LightLock_Unlock(&s_seqLock);
 }
 
 void NNS_SndPlayerSetAllocatableChannel(int playerNo, u32 chBitFlag) {
-    if (playerNo < 0 || playerNo >= 32) return;
+    LightLock_Lock(&s_seqLock);
+    if (playerNo < 0 || playerNo >= 32) {
+        LightLock_Unlock(&s_seqLock);
+        return;
+    }
     s_allocChBitFlag[playerNo] = chBitFlag;
+    LightLock_Unlock(&s_seqLock);
 }
 
 void NNS_SndPlayerSetChannelPriority(NNSSndHandle *handle, int prio) {
-    SeqSlot *slot = seq_slot_from_handle(handle);
+    SeqSlot *slot;
+    LightLock_Lock(&s_seqLock);
+    slot = seq_slot_from_handle(handle);
     if (slot) slot->playerPrio = prio;
+    LightLock_Unlock(&s_seqLock);
 }
 
 void NNS_SndPlayerSetTrackMute(NNSSndHandle *handle, u16 trackBitMask, BOOL flag) {
-    SeqSlot *slot = seq_slot_from_handle(handle);
+    SeqSlot *slot;
     int t, n;
-    if (!slot) return;
+    LightLock_Lock(&s_seqLock);
+    slot = seq_slot_from_handle(handle);
+    if (!slot) {
+        LightLock_Unlock(&s_seqLock);
+        return;
+    }
     for (t = 0; t < SEQ_TRACKS; ++t) {
         if (!(trackBitMask & (1u << t))) continue;
         slot->tracks[t].muted = flag ? TRUE : FALSE;
@@ -1177,36 +1273,55 @@ void NNS_SndPlayerSetTrackMute(NNSSndHandle *handle, u16 trackBitMask, BOOL flag
             for (n = 0; n < SEQ_TRACK_NOTES; ++n) seq_note_off(slot, t, n);
         }
     }
+    LightLock_Unlock(&s_seqLock);
 }
 
+/* No lock here: SetTrackMute takes it. */
 void NNS_SndPlayerSetTrackMuteEx(NNSSndHandle *handle, u16 trackBitMask, NNSSndSeqMute muteType) {
     /* Mute types other than plain mute are treated as mute/unmute. */
     NNS_SndPlayerSetTrackMute(handle, trackBitMask, muteType != 0);
 }
 
 void NNS_SndPlayerSetTrackVolume(NNSSndHandle *handle, u16 trackBitMask, int volume) {
-    SeqSlot *slot = seq_slot_from_handle(handle);
+    SeqSlot *slot;
     int t;
-    if (!slot) return;
+    LightLock_Lock(&s_seqLock);
+    slot = seq_slot_from_handle(handle);
+    if (!slot) {
+        LightLock_Unlock(&s_seqLock);
+        return;
+    }
     for (t = 0; t < SEQ_TRACKS; ++t) {
         if (trackBitMask & (1u << t)) slot->tracks[t].volume = volume < 0 ? 0 : volume > 127 ? 127 : volume;
     }
     seq_update_volume(slot, trackBitMask);
+    LightLock_Unlock(&s_seqLock);
 }
 
 void NNS_SndPlayerSetTrackPan(NNSSndHandle *handle, u16 trackBitMask, int pan) {
-    SeqSlot *slot = seq_slot_from_handle(handle);
+    SeqSlot *slot;
     int t;
-    if (!slot) return;
+    LightLock_Lock(&s_seqLock);
+    slot = seq_slot_from_handle(handle);
+    if (!slot) {
+        LightLock_Unlock(&s_seqLock);
+        return;
+    }
     for (t = 0; t < SEQ_TRACKS; ++t) {
         if (trackBitMask & (1u << t)) slot->tracks[t].pan = pan < -128 ? -128 : pan > 127 ? 127 : pan;
     }
+    LightLock_Unlock(&s_seqLock);
 }
 
 void NNS_SndPlayerSetTrackPitch(NNSSndHandle *handle, u16 trackBitMask, int pitch) {
-    SeqSlot *slot = seq_slot_from_handle(handle);
+    SeqSlot *slot;
     int t;
-    if (!slot) return;
+    LightLock_Lock(&s_seqLock);
+    slot = seq_slot_from_handle(handle);
+    if (!slot) {
+        LightLock_Unlock(&s_seqLock);
+        return;
+    }
     for (t = 0; t < SEQ_TRACKS; ++t) {
         if (trackBitMask & (1u << t)) {
             SeqTrack *track = &slot->tracks[t];
@@ -1214,51 +1329,88 @@ void NNS_SndPlayerSetTrackPitch(NNSSndHandle *handle, u16 trackBitMask, int pitc
             seq_update_track_pitch(track);
         }
     }
+    LightLock_Unlock(&s_seqLock);
 }
 
 void NNS_SndPlayerSetTrackModDepth(NNSSndHandle *handle, u16 trackBitMask, int value) {
-    SeqSlot *slot = seq_slot_from_handle(handle);
+    SeqSlot *slot;
     int t;
-    if (!slot) return;
+    LightLock_Lock(&s_seqLock);
+    slot = seq_slot_from_handle(handle);
+    if (!slot) {
+        LightLock_Unlock(&s_seqLock);
+        return;
+    }
     for (t = 0; t < SEQ_TRACKS; ++t) {
         if (trackBitMask & (1u << t)) slot->tracks[t].modDepth = (u8)value;
     }
+    LightLock_Unlock(&s_seqLock);
 }
 
 void NNS_SndPlayerSetTrackModSpeed(NNSSndHandle *handle, u16 trackBitMask, int value) {
-    SeqSlot *slot = seq_slot_from_handle(handle);
+    SeqSlot *slot;
     int t;
-    if (!slot) return;
+    LightLock_Lock(&s_seqLock);
+    slot = seq_slot_from_handle(handle);
+    if (!slot) {
+        LightLock_Unlock(&s_seqLock);
+        return;
+    }
     for (t = 0; t < SEQ_TRACKS; ++t) {
         if (trackBitMask & (1u << t)) slot->tracks[t].modSpeed = (u8)value;
     }
+    LightLock_Unlock(&s_seqLock);
 }
 
 void NNS_SndPlayerSetTempoRatio(NNSSndHandle *handle, int ratio) {
-    SeqSlot *slot = seq_slot_from_handle(handle);
+    SeqSlot *slot;
+    LightLock_Lock(&s_seqLock);
+    slot = seq_slot_from_handle(handle);
     if (slot) slot->tempoRatio = ratio > 0 ? ratio : 256;
+    LightLock_Unlock(&s_seqLock);
 }
 
 u32 NNS_SndPlayerGetTick(NNSSndHandle *handle) {
-    SeqSlot *slot = seq_slot_from_handle(handle);
-    return slot ? slot->tick : 0;
+    SeqSlot *slot;
+    u32 tick;
+    LightLock_Lock(&s_seqLock);
+    slot = seq_slot_from_handle(handle);
+    tick = slot ? slot->tick : 0;
+    LightLock_Unlock(&s_seqLock);
+    return tick;
 }
 
 int NNS_SndPlayerCountPlayingSeqByPlayerNo(int playerNo) {
-    return seq_count_on_player(playerNo);
+    int n;
+    LightLock_Lock(&s_seqLock);
+    n = seq_count_on_player(playerNo);
+    LightLock_Unlock(&s_seqLock);
+    return n;
 }
 
 int NNS_SndPlayerCountPlayingSeqBySeqNo(int seqNo) {
-    return seq_count_seq(seqNo);
+    int n;
+    LightLock_Lock(&s_seqLock);
+    n = seq_count_seq(seqNo);
+    LightLock_Unlock(&s_seqLock);
+    return n;
 }
 
 BOOL NNS_SndPlayerReadDriverTrackInfo(NNSSndHandle *handle, int trackNo, SNDTrackInfo *trackInfo) {
-    SeqSlot *slot = seq_slot_from_handle(handle);
+    SeqSlot *slot;
     SeqTrack *track;
     int n, chCount = 0;
-    if (!slot || !trackInfo || trackNo < 0 || trackNo >= SEQ_TRACKS) return FALSE;
+    LightLock_Lock(&s_seqLock);
+    slot = seq_slot_from_handle(handle);
+    if (!slot || !trackInfo || trackNo < 0 || trackNo >= SEQ_TRACKS) {
+        LightLock_Unlock(&s_seqLock);
+        return FALSE;
+    }
     track = &slot->tracks[trackNo];
-    if (!track->active) return FALSE;
+    if (!track->active) {
+        LightLock_Unlock(&s_seqLock);
+        return FALSE;
+    }
     memset(trackInfo, 0, sizeof *trackInfo);
     trackInfo->prgNo = track->program;
     trackInfo->volume = track->volume;
@@ -1273,6 +1425,7 @@ BOOL NNS_SndPlayerReadDriverTrackInfo(NNSSndHandle *handle, int trackNo, SNDTrac
         }
     }
     trackInfo->chCount = (u8)chCount;
+    LightLock_Unlock(&s_seqLock);
     return TRUE;
 }
 
@@ -1283,9 +1436,11 @@ void NNS_SndHandleInit(NNSSndHandle *handle) {
 void NNS_SndHandleReleaseSeq(NNSSndHandle *handle) {
     SeqSlot *slot;
     if (!handle) return;
+    LightLock_Lock(&s_seqLock);
     slot = seq_slot_from_handle(handle);
     if (slot) slot->handle = NULL;
     handle->player = NULL;
+    LightLock_Unlock(&s_seqLock);
 }
 
 #endif
