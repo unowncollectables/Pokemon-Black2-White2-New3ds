@@ -31,7 +31,7 @@ typedef struct {
 static GameRect game_rect(gfxScreen_t screen, unsigned lcdWidth, unsigned lcdHeight, uint32_t options) {
     unsigned width = GAME_WIDTH;
     unsigned height = GAME_HEIGHT;
-    if ((options & DISPLAY_LCD_FIT) || (screen == GFX_TOP && (options & DISPLAY_TOP_FIT))) {
+    if ((options & DISPLAY_LCD_FIT) || (screen == GFX_TOP && (options & (DISPLAY_TOP_FIT | DISPLAY_WIDE_FIELD)))) {
         width = lcdHeight * GAME_WIDTH / GAME_HEIGHT;
         height = lcdHeight;
     }
@@ -46,6 +46,10 @@ uint32_t Present_Flags(void) {
     return s_flags;
 }
 
+#if defined(PBW2_LINK_GAME)
+static void draw_scaled(gfxScreen_t screen, const u16 *src, unsigned sourceWidth, uint32_t options);
+#endif
+
 void GxShim_Present(uint32_t flags) {
 #if defined(PBW2_LINK_GAME)
     static u16 s_top[256 * 192];
@@ -58,7 +62,18 @@ void GxShim_Present(uint32_t flags) {
             u16 *bottom = (flags & PBW2_SCREEN_BOTTOM) && !Settings_Open() ? s_bottom : NULL;
             (void)PbW2_ComposeScreens(top, bottom);
             uint32_t options = Settings_DisplayFlags();
-            if (top) Present_DrawGame(GFX_TOP, top, options);
+            if (top) {
+                const u16 *sides = PbW2_TopSides();
+                if (sides && (options & DISPLAY_WIDE_FIELD)) {
+                    static u16 wide[320 * GAME_HEIGHT];
+                    for (unsigned y = 0; y < GAME_HEIGHT; ++y) {
+                        memcpy(wide + y * 320, sides + y * 64, 32 * sizeof(u16));
+                        memcpy(wide + y * 320 + 32, top + y * GAME_WIDTH, GAME_WIDTH * sizeof(u16));
+                        memcpy(wide + y * 320 + 288, sides + y * 64 + 32, 32 * sizeof(u16));
+                    }
+                    draw_scaled(GFX_TOP, wide, 320, options);
+                } else Present_DrawGame(GFX_TOP, top, options);
+            }
             if (bottom) Present_DrawGame(GFX_BOTTOM, bottom, options);
             pbw2_game_notify_present();
         }
@@ -123,17 +138,13 @@ static unsigned sample_axis(unsigned pixel, unsigned output, unsigned input, boo
     return fixed;
 }
 
-void Present_DrawGame(gfxScreen_t screen, const u16 *src, uint32_t options) {
-    if (!(options & (DISPLAY_LCD_FIT | DISPLAY_TOP_FIT)) ||
-        (screen == GFX_BOTTOM && !(options & DISPLAY_LCD_FIT))) {
-        Present_BlitRGB565(screen, src, GAME_WIDTH, GAME_HEIGHT);
-        return;
-    }
+static void draw_scaled(gfxScreen_t screen, const u16 *src, unsigned sourceWidth, uint32_t options) {
     u16 stride, width;
     u16 *fb = landscape_fb(screen, &stride, &width);
     if (!fb || stride != 240 || width < 320) return;
 
     GameRect rect = game_rect(screen, width, stride, options);
+    if (sourceWidth == 320) rect = (GameRect){0, 0, width, stride};
     /* Scaled modes fill the LCD vertically. Only the side margins need clearing. */
     clear_side_margins(fb, stride, width, rect.x, rect.x + rect.width);
     bool sharp = (options & DISPLAY_SHARP_PIXELS) != 0;
@@ -142,19 +153,28 @@ void Present_DrawGame(gfxScreen_t screen, const u16 *src, uint32_t options) {
         sampleY[y] = sample_axis(y, rect.height, GAME_HEIGHT, sharp);
     }
     for (unsigned x = 0; x < rect.width; ++x) {
-        unsigned sx = sample_axis(x, rect.width, GAME_WIDTH, sharp);
+        unsigned sx = sample_axis(x, rect.width, sourceWidth, sharp);
         u16 *out = fb + (rect.x + x) * stride + stride - 1 - rect.y;
         unsigned xi = sx >> 5;
-        unsigned xn = xi + (xi < GAME_WIDTH - 1);
+        unsigned xn = xi + (xi < sourceWidth - 1);
         for (unsigned y = 0; y < rect.height; ++y) {
             unsigned sy = sampleY[y];
             unsigned yi = sy >> 5;
             unsigned yn = yi + (yi < GAME_HEIGHT - 1);
-            u16 a = mix565(src[yi * GAME_WIDTH + xi], src[yi * GAME_WIDTH + xn], sx & 31);
-            u16 b = mix565(src[yn * GAME_WIDTH + xi], src[yn * GAME_WIDTH + xn], sx & 31);
+            u16 a = mix565(src[yi * sourceWidth + xi], src[yi * sourceWidth + xn], sx & 31);
+            u16 b = mix565(src[yn * sourceWidth + xi], src[yn * sourceWidth + xn], sx & 31);
             out[-(int)y] = mix565(a, b, sy & 31);
         }
     }
+}
+
+void Present_DrawGame(gfxScreen_t screen, const u16 *src, uint32_t options) {
+    if (!(options & (DISPLAY_LCD_FIT | DISPLAY_TOP_FIT | DISPLAY_WIDE_FIELD)) ||
+        (screen == GFX_BOTTOM && !(options & DISPLAY_LCD_FIT))) {
+        Present_BlitRGB565(screen, src, GAME_WIDTH, GAME_HEIGHT);
+        return;
+    }
+    draw_scaled(screen, src, GAME_WIDTH, options);
 }
 
 static void clear_screen(gfxScreen_t screen) {

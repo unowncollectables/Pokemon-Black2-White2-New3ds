@@ -644,7 +644,7 @@ static u8 *build_window_mask(const u8 *regs, u32 dc, int is_sub) {
     return window;
 }
 
-static void apply_master_bright(u16 *fb, u16 reg) {
+static void apply_master_bright(u16 *fb, unsigned pixels, u16 reg) {
     u16 mode = reg & REG_GX_MASTER_BRIGHT_E_MOD_MASK;
     u32 factor = reg & REG_GX_MASTER_BRIGHT_E_VALUE_MASK;
     int brighten = mode == REG_GX_MASTER_BRIGHT_MODE_UP;
@@ -653,10 +653,10 @@ static void apply_master_bright(u16 *fb, u16 reg) {
         return;
     }
     if (factor >= 16) {
-        memset(fb, brighten ? 0xff : 0, 256u * 192u * sizeof(*fb));
+        memset(fb, brighten ? 0xff : 0, pixels * sizeof(*fb));
         return;
     }
-    for (u32 i = 0; i < 256u * 192u; i++) {
+    for (u32 i = 0; i < pixels; i++) {
         u16 p = fb[i];
         u32 r = (p >> 11) & 0x1f;
         u32 g = (p >> 5) & 0x3f;
@@ -754,6 +754,12 @@ static void capture_main(u16 *out, u32 dc) {
     }
 }
 
+static u16 s_sides[64 * 192];
+static bool s_haveSides;
+const u16 *PbW2_TopSides(void) {
+    return s_haveSides ? s_sides : NULL;
+}
+
 static void compose_engine(const u8 *regs, int is_sub, u16 *out) {
     static BgBlend bg_blend;
     BgBlend *blend = NULL;
@@ -810,8 +816,11 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out) {
                 continue;
             }
             if (bg == 0 && !is_sub && (dc & REG_GX_DISPCNT_BG02D3D_MASK)) {
-                PbW2_G3RasterComposite(out, window, bg_blend.track ? bg_blend.planes : NULL,
-                                       layerAlpha ? bg_blend.colors : NULL);
+                bool extend = PbW2_G3WideCamera() && ((dc >> 16) & 3) == 1 &&
+                              !window && !layerBrightness && !layerAlpha &&
+                              !(reg_GX_DISPCAPCNT & REG_GX_DISPCAPCNT_E_MASK);
+                s_haveSides = PbW2_G3RasterComposite(out, window, bg_blend.track ? bg_blend.planes : NULL,
+                                       layerAlpha ? bg_blend.colors : NULL, extend ? s_sides : NULL, backdrop);
             } else {
                 draw_bg_layer(regs, dc, is_sub, bg, bgmode, out, blend);
             }
@@ -820,7 +829,8 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out) {
     }
     if (layerBrightness) apply_layer_brightness(out, blend, bldcnt, factor);
     if (!is_sub) capture_main(out, dc);
-    apply_master_bright(out, reg_u16(regs, 0x6cu));
+    if (!is_sub && s_haveSides) apply_master_bright(s_sides, 64 * 192, reg_u16(regs, 0x6cu));
+    apply_master_bright(out, 256 * 192, reg_u16(regs, 0x6cu));
 }
 
 int PbW2_ComposeScreens(u16 *top_rgb565, u16 *bottom_rgb565) {
@@ -828,6 +838,7 @@ int PbW2_ComposeScreens(u16 *top_rgb565, u16 *bottom_rgb565) {
     u16 *main_fb;
     u16 *sub_fb;
 
+    s_haveSides = false;
     s_mode5_diag.compose_frames++;
     if (main_upper) {
         main_fb = top_rgb565;

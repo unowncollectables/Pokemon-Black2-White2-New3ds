@@ -873,6 +873,33 @@ static bool check_optional_edges(void) {
     return false;
 }
 
+static bool check_wide_frame(bool gpu) {
+    static u16 sides[64 * 192];
+    memset(pbw2_io, 0, sizeof pbw2_io);
+    PbW2_G3InterceptInit();
+    PBW2_VU16(0x04000304) = 0x8000;
+    reg_G3X_CLEAR_DEPTH = 0x7fff;
+    PbW2_G3SetWide(true);
+    PbW2_PicaSetOptions(gpu, false);
+    unsigned before = s_gpuFrames;
+    cmd(G3OP_POLYGON_ATTR, (31u << 16) | (3u << 6));
+    cmd(G3OP_COLOR, GX_RGB(31, 0, 0));
+    cmd(G3OP_BEGIN, GX_BEGIN_TRIANGLES);
+    vertex(-5080, -2048, 0);
+    vertex(-4120, -2048, 0);
+    vertex(-4608, 2048, 0);
+    cmd(G3OP_END, 0);
+    cmd(0x50, 0);
+    memset(pixels, 0, sizeof pixels);
+    bool wide = PbW2_G3RasterComposite(pixels, NULL, NULL, NULL, sides, 0);
+    PbW2_G3RasterCapture(pixels);
+    PbW2_G3SetWide(false);
+    for (unsigned i = 0; i < 256 * 192; ++i)
+        if (pixels[i] & 0x8000) return false;
+    return wide && sides[96 * 64 + 16] == 0xf800 && sides[96 * 64 + 48] == 0 &&
+           s_gpuFrames == before + gpu;
+}
+
 extern void gfxInitDefault(void);
 int main(void) {
     gfxInitDefault();
@@ -891,6 +918,8 @@ int main(void) {
             failure = "unexpected GPU frame count";
         fprintf(f, "PICA200 %s%s (%u GPU frames)\n", failure ? "FAIL " : "PASS", failure ? failure : "", s_gpuFrames);
         fprintf(f, "Optional GPU outlines %s\n", check_optional_edges() ? "PASS" : "FAIL");
+        fprintf(f, "Wide camera CPU %s\n", check_wide_frame(false) ? "PASS" : "FAIL");
+        fprintf(f, "Wide camera PICA200 %s\n", check_wide_frame(true) ? "PASS" : "FAIL");
         fclose(f);
     }
     for (;;)

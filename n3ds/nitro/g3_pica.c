@@ -7,7 +7,7 @@
 #include <citro3d.h>
 #include <string.h>
 
-enum { WIDTH = 256, HEIGHT = 192, TARGET_HEIGHT = 256, VERTICES = 24576, BATCHES = 1024, TEXTURES = 128 };
+enum { WIDTH = 320, HEIGHT = 192, TARGET_HEIGHT = 256, VERTICES = 24576, BATCHES = 1024, TEXTURES = 128 };
 enum { TEXTURE_CACHE_BYTES = 6 * 1024 * 1024 };
 
 extern const u8 _binary_g3_pass_shbin_start[], _binary_g3_pass_shbin_end[];
@@ -23,6 +23,11 @@ typedef struct {
 static DVLB_s *s_shader;
 static shaderProgram_s s_program;
 static C3D_RenderTarget *s_target;
+static unsigned s_renderWidth = 256;
+
+void PbW2_PicaSetFrameWidth(unsigned width) {
+    s_renderWidth = width;
+}
 static PicaVertex *s_vertices;
 static u32 *s_pixels;
 static struct {
@@ -198,7 +203,7 @@ bool PbW2_PicaFinish(uint32_t clearColor, float clearDepth, uint16_t *result) {
     GSPGPU_FlushDataCache(s_vertices, s_vertexCount * sizeof(*s_vertices));
     C3D_RenderTargetClear(s_target, C3D_CLEAR_ALL, clearColor, (unsigned)(0xffffff * clearDepth));
     C3D_FrameDrawOn(s_target);
-    C3D_SetViewport(0, 0, WIDTH, HEIGHT);
+    C3D_SetViewport(0, 0, s_renderWidth, HEIGHT);
     C3D_BindProgram(&s_program);
     C3D_AttrInfo *attrs = C3D_GetAttrInfo();
     AttrInfo_Init(attrs);
@@ -273,12 +278,15 @@ bool PbW2_PicaFinish(uint32_t clearColor, float clearDepth, uint16_t *result) {
     GSPGPU_InvalidateDataCache(s_pixels, WIDTH * HEIGHT * sizeof(*s_pixels));
     /* Prefetch the next ARM11 cache lines while converting this one.
      * The readback allocation includes the unused rows below the image. */
-    for (unsigned startPixel = 0; startPixel < WIDTH * HEIGHT; startPixel += 8) {
-        __builtin_prefetch(s_pixels + startPixel + 32, 0, 0);
-        for (unsigned j = 0; j < 8; ++j) {
-            u32 rgba = s_pixels[startPixel + j];
-            result[startPixel + j] = ((rgba >> 27) & 31) | ((rgba >> 14) & 0x3e0) | ((rgba >> 1) & 0x7c00)
-                                   | ((rgba & 255) > 3 ? 0x8000 : 0);
+    for (unsigned y = 0; y < HEIGHT; ++y) {
+        for (unsigned x = 0; x < s_renderWidth; x += 8) {
+            unsigned startPixel = y * WIDTH + x;
+            __builtin_prefetch(s_pixels + startPixel + 32, 0, 0);
+            for (unsigned j = 0; j < 8; ++j) {
+                u32 rgba = s_pixels[startPixel + j];
+                result[y * s_renderWidth + x + j] = ((rgba >> 27) & 31) | ((rgba >> 14) & 0x3e0) | ((rgba >> 1) & 0x7c00)
+                                       | ((rgba & 255) > 3 ? 0x8000 : 0);
+            }
         }
     }
     static bool reported;
