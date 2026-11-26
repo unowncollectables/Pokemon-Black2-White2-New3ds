@@ -276,6 +276,10 @@ Text baked into OBJ sprites remains open.
   was silent from ~320 s because the demo BGM 1102's notes were
   pre-fix garbage — the fix should have cured it, but no full
   playthrough to the field has been re-run on the fixed build yet.
+- With all permitted sequence voices occupied, a finished NDSP sample
+  can be reclaimed before its note deadline. New notes can replace
+  equal- or lower-priority voices, with ties decided by onset order
+  across all sequences. Direct wave channels are tried independently.
 - Pitch bend keeps all 64 steps per semitone. Sampled notes follow
   SSEQ bend and bend-range changes as well as the game's track pitch
   requests while playing. Synthesized voices use pitch at note-on.

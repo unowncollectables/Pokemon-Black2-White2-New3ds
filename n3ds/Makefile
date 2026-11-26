@@ -168,6 +168,16 @@ $(BUILD)/wave_out.elf: $(WAVE_TEST_SRC)
 $(BUILD)/wave_out.3dsx: $(BUILD)/wave_out.elf
 	3dsxtool $< $@
 
+.PHONY: test-seq-voices
+test-seq-voices: $(BUILD)/seq_voices.3dsx
+
+$(BUILD)/seq_voices.elf: tests/seq_voices.c nitro/seq_player.c
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -DPBW2_LINK_GAME -I$(CURDIR)/../lib/nnsys/include $< $(LDFLAGS) $(LIBPATHS) $(LIBS) -o $@
+
+$(BUILD)/seq_voices.3dsx: $(BUILD)/seq_voices.elf
+	3dsxtool $< $@
+
 all: check headers game-objects b2 w2
 
 check:

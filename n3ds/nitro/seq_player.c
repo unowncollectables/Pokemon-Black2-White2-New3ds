@@ -18,8 +18,7 @@
 /* Real NNS sequence playback on the NDSP path: BGM and every SE.
  *
  * The ARM7 sequence interpreter does not exist in this tree, so the
- * host runs it: NNS_SndMain (called once per game frame by
- * GFL_SndUpdate) advances each playing sequence's tick clock from
+ * host runs it: the audio worker advances each playing sequence's tick clock from
  * wall time, the event parser walks the SSEQ tracks, and NOTE-ONs
  * resolve program -> instrument (SBNK) -> wave (SWAR) -> a DS channel
  * through the wave player (wave_out.c). The sequence data is copied
@@ -76,7 +75,6 @@ typedef struct {
     u8 note;
     u8 velocity;
     u32 endTick;
-    int priority;
     int samplePitch;
     bool sampled;
     BOOL active;
@@ -137,11 +135,12 @@ typedef struct {
     BOOL inUse;
     int slot, track, noteIdx;
     int priority;
-    u32 startTick;
+    u64 order;
 } SeqChannel;
 
 static SeqSlot s_slots[SEQ_SLOTS];
 static SeqChannel s_channels[SEQ_DS_CHANNELS];
+static u64 s_channelOrder;
 static NNSSndHeapHandle s_heap; /* stashed by NNS_SndArcPlayerSetup */
 static int s_playerVolume[32];
 static int s_playableSeqCount[32];
@@ -368,65 +367,60 @@ static BOOL seq_resolve_wave(int bankNo, int program, int note, SeqWave *out) {
     }
 }
 
-/* Channel pool: DS channels 0-14 for sequences, 15 reserved for the
- * cry path. Steal the lowest-priority, then oldest, note among the
- * channels the player's allocChBitFlag allows. */
-static void seq_free_channel(int ch) {
-    SeqChannel *c = &s_channels[ch];
-    SeqSlot *slot;
-    SeqTrack *track;
-    if (!c->inUse) return;
-    slot = &s_slots[c->slot];
-    track = &slot->tracks[c->track];
-    if (c->noteIdx >= 0 && c->noteIdx < SEQ_TRACK_NOTES) {
-        SeqNote *note = &track->notes[c->noteIdx];
-        if (note->active && note->wave) {
-            NNS_SndWaveOutStop(note->wave);
-            NNS_SndWaveOutFreeChannel(note->wave);
-        }
-        note->active = FALSE;
-        note->wave = NULL;
-        note->dsCh = -1;
-    }
-    c->inUse = FALSE;
+/* DS channel 15 is reserved for the cry path. */
+static SeqNote *seq_channel_note(const SeqChannel *channel) {
+    return &s_slots[channel->slot].tracks[channel->track].notes[channel->noteIdx];
 }
 
-static int seq_alloc_channel(SeqSlot *slot, int trackIdx, int noteIdx, int priority, u32 tick) {
-    u32 allowed = s_allocChBitFlag[slot->playerNo] & ~(1u << SEQ_CRY_CHANNEL) & 0xffffu;
-    int ch, best = -1, bestPrio = 0x7fffffff;
-    u32 bestTick = 0xffffffffu;
-    for (ch = 0; ch < SEQ_DS_CHANNELS; ++ch) {
-        if (!(allowed & (1u << ch))) continue;
-        if (!s_channels[ch].inUse) {
-            s_channels[ch].inUse = TRUE;
-            s_channels[ch].slot = (int)(slot - s_slots);
-            s_channels[ch].track = trackIdx;
-            s_channels[ch].noteIdx = noteIdx;
-            s_channels[ch].priority = priority;
-            s_channels[ch].startTick = tick;
-            return ch;
-        }
+static void seq_free_channel(int ch) {
+    SeqChannel *channel = &s_channels[ch];
+    SeqNote *note = seq_channel_note(channel);
+    NNS_SndWaveOutFreeChannel(note->wave);
+    note->active = FALSE;
+    note->wave = NULL;
+    note->dsCh = -1;
+    channel->inUse = FALSE;
+}
+
+static NNSSndWaveOutHandle seq_claim_channel(SeqSlot *slot, int trackIdx, int noteIdx, int priority, int ch) {
+    NNSSndWaveOutHandle wave = WaveOut_AllocSequenceChannel(ch);
+    if (wave) {
+        s_channels[ch] = (SeqChannel){TRUE, (int)(slot - s_slots), trackIdx, noteIdx, priority, s_channelOrder++};
+        slot->tracks[trackIdx].notes[noteIdx].dsCh = ch;
     }
-    for (ch = 0; ch < SEQ_DS_CHANNELS; ++ch) {
-        SeqChannel *c;
-        if (!(allowed & (1u << ch))) continue;
-        c = &s_channels[ch];
-        if (!c->inUse) continue;
-        if (c->priority < bestPrio || (c->priority == bestPrio && c->startTick < bestTick)) {
-            best = ch;
-            bestPrio = c->priority;
-            bestTick = c->startTick;
-        }
+    return wave;
+}
+
+static NNSSndWaveOutHandle seq_alloc_channel(SeqSlot *slot, int trackIdx, int noteIdx, int priority) {
+    u32 allowed = s_allocChBitFlag[slot->playerNo] & ~(1u << SEQ_CRY_CHANNEL);
+    NNSSndWaveOutHandle wave;
+    int victim = -1;
+
+    for (int ch = 0; ch < SEQ_DS_CHANNELS; ++ch) {
+        if (!(allowed & (1u << ch)) || s_channels[ch].inUse) continue;
+        wave = seq_claim_channel(slot, trackIdx, noteIdx, priority, ch);
+        if (wave) return wave;
     }
-    if (best < 0) return -1;
-    seq_free_channel(best);
-    s_channels[best].inUse = TRUE;
-    s_channels[best].slot = (int)(slot - s_slots);
-    s_channels[best].track = trackIdx;
-    s_channels[best].noteIdx = noteIdx;
-    s_channels[best].priority = priority;
-    s_channels[best].startTick = tick;
-    return best;
+
+    for (int ch = 0; ch < SEQ_DS_CHANNELS; ++ch) {
+        SeqChannel *channel = &s_channels[ch];
+        if (!(allowed & (1u << ch)) || !channel->inUse) continue;
+        if (!NNS_SndWaveOutIsPlaying(seq_channel_note(channel)->wave)) {
+            seq_free_channel(ch);
+            wave = seq_claim_channel(slot, trackIdx, noteIdx, priority, ch);
+            if (wave) return wave;
+            continue;
+        }
+        if (channel->priority > priority) continue;
+        if (victim < 0 || channel->priority < s_channels[victim].priority ||
+            (channel->priority == s_channels[victim].priority && channel->order < s_channels[victim].order))
+            victim = ch;
+    }
+
+    if (victim < 0) return NULL;
+    /* Sequence ticks are local to each song. Compare global note onset order. */
+    seq_free_channel(victim);
+    return seq_claim_channel(slot, trackIdx, noteIdx, priority, victim);
 }
 
 static int seq_final_volume(SeqSlot *slot, SeqTrack *track, int velocity) {
@@ -455,11 +449,11 @@ static void seq_note_off(SeqSlot *slot, int trackIdx, int noteIdx) {
     SeqNote *note = &track->notes[noteIdx];
     if (!note->active) return;
     if (note->dsCh >= 0 && note->dsCh < SEQ_DS_CHANNELS && s_channels[note->dsCh].inUse &&
+        s_channels[note->dsCh].slot == (int)(slot - s_slots) &&
         s_channels[note->dsCh].noteIdx == noteIdx && s_channels[note->dsCh].track == trackIdx) {
         s_channels[note->dsCh].inUse = FALSE;
     }
     if (note->wave) {
-        NNS_SndWaveOutStop(note->wave);
         NNS_SndWaveOutFreeChannel(note->wave);
         note->wave = NULL;
     }
@@ -549,7 +543,7 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
     SeqWave wave;
     int i, freeIdx = -1, oldestIdx = -1;
     u32 oldestEnd = 0xffffffffu;
-    int finalVol, pan, ch;
+    int finalVol, pan;
     NNSSndWaveOutHandle waveOut;
     /* Resolved playback parameters (sampled or synthesized). */
     NNSSndWaveFormat format;
@@ -636,26 +630,20 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
         n->note = (u8)note;
         n->velocity = (u8)velocity;
         n->endTick = endTick;
-        n->priority = track->priority;
         return;
     }
-    ch = seq_alloc_channel(slot, trackIdx, freeIdx, (int)track->priority, slot->tick);
-    if (ch < 0) {
-        slot->channelUnavailable++;
-        slot->droppedNotes++;
-        return;
-    }
-    waveOut = WaveOut_AllocSequenceChannel(ch);
+    waveOut = seq_alloc_channel(slot, trackIdx, freeIdx, track->priority);
     if (!waveOut) {
-        s_channels[ch].inUse = FALSE;
         slot->channelUnavailable++;
         slot->droppedNotes++;
         return;
     }
+    int ch = track->notes[freeIdx].dsCh;
     if (!NNS_SndWaveOutStart(waveOut, format, data, loop, loopStart, samples, rate, finalVol,
                              speed, pan)) {
         NNS_SndWaveOutFreeChannel(waveOut);
         s_channels[ch].inUse = FALSE;
+        track->notes[freeIdx].dsCh = -1;
         slot->queueFailed++;
         slot->droppedNotes++;
         return;
@@ -666,11 +654,9 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
         n->wave = waveOut;
         n->sampled = wave.kind == 0;
         n->samplePitch = samplePitch;
-        n->dsCh = ch;
         n->note = (u8)note;
         n->velocity = (u8)velocity;
         n->endTick = endTick;
-        n->priority = track->priority;
     }
 }
 
