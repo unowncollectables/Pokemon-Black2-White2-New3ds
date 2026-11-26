@@ -409,6 +409,40 @@ Settings invalidates that reuse when it takes over the bottom LCD.
   display settings writer stages the complete record before replacing the
   old file and recovers the newer record after an interrupted replacement.
 
+### Music in tune — decimation fix (Nov 26, Ghost)
+
+- Nate's hardware report on the merged main (2616ee9a): music "outta
+  tune still and choppy like layers are missing". The gap problem was
+  already fixed (zero gap lines on hardware); this was pitch. The
+  wave player clamped every NDSP channel rate to 48 kHz, but the DS
+  raises a sampled note's pitch by playing its wave faster than its
+  native rate — high notes need up to ~93.5 kHz. Field BGM 1104 had
+  265 of 2,024 notes flat (13%, worst 11.55 semitones); seq 1086 had
+  58 of 835 flat (worst 4.38). Bass and harmony played in tune while
+  the lead went flat, which reads as the lead layer missing.
+- The clamp was not just lifted: a bare NDSP probe showed the DSP
+  honors 93 kHz in tune but 140 kHz comes out an octave flat, with an
+  erratic boundary (96k/104k/120k/131k at half or third pitch, 112k/
+  128k fine) — a Teakra resampler artifact that may or may not exist
+  on real Nintendo firmware. So the fix decimates: `NNS_SndWaveOutStart`
+  downsamples the decoded PCM by 2/4/8 while the raw rate exceeds
+  48 kHz (pitch-preserving by construction) and sets the NDSP rate to
+  raw/k. `SetSpeed` divides by the stored factor so pitch bends stay
+  in tune. Notes at or below 48 kHz are untouched; PSG never
+  decimates. Extreme notes lose the top octaves of the source
+  spectrum, but the pitch becomes exact. (Commit `a6fc0538b`, rebased
+  onto main 420ff9d98 as `7331892b3`, wave_out.c only.)
+- Verified in the emulator (300 s field-BGM run, 0 gaps, 0 exceptions):
+  loop-aligned spectrum shows the energy moved from the wrong pitches
+  to the right ones (note 92's in-tune 1661 Hz up, its clamped 852 Hz
+  down ~5x). The rebased build matches the first fixed build within
+  ~6% on every band. Hardware confirmation is still the final word
+  (real DSP behavior above 48 kHz is unknowable from Teakra).
+- The 64 dropped notes on seq 1086 are faithful, not a bug: drum note
+  71 sits outside the drum set's 68–70 range, so no instrument exists
+  and the real NNS would skip it too. Do not "fix" it by clamping to
+  note 70.
+
 ### Experimental PICA200 geometry
 
 - Enable **GPU geometry (experimental)** under L+R+Y. The default is
