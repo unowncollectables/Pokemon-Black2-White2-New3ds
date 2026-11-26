@@ -7,6 +7,7 @@
 #endif
 
 #include <3ds.h>
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -15,6 +16,7 @@ static unsigned s_row;
 static uint32_t s_display;
 static uint32_t s_persisted;
 static const char *s_path;
+static bool s_pending;
 static char s_tempPath[128];
 static const char s_configHeader[] = "PBW2-DISPLAY 1\n";
 static const char s_hex[] = "0123456789abcdef";
@@ -56,10 +58,12 @@ static bool load_display(const char *path, uint32_t *flags) {
 void Settings_Init(const char *path) {
     s_display = 0;
     s_path = NULL;
+    s_pending = false;
     int length = snprintf(s_tempPath, sizeof s_tempPath, "%s.tmp", path);
     if (length > 0 && (unsigned)length < sizeof s_tempPath) {
         s_path = path;
-        if (!load_display(s_path, &s_display)) load_display(s_tempPath, &s_display);
+        s_pending = load_display(s_tempPath, &s_display);
+        if (!s_pending) load_display(s_path, &s_display);
     }
     s_persisted = s_display;
 #ifdef PBW2_GPU_GEOMETRY
@@ -68,17 +72,33 @@ void Settings_Init(const char *path) {
 #endif
 }
 
+static bool commit_display(void) {
+    /* SDMC rename requires a vacant destination. A complete staged file
+     * remains recoverable if power is lost between removal and rename. */
+    if (remove(s_path) != 0 && errno != ENOENT) return false;
+    if (rename(s_tempPath, s_path) != 0) return false;
+    s_pending = false;
+    return true;
+}
+
 static void save_display(void) {
-    if (!s_path || s_display == s_persisted) return;
+    if (!s_path) return;
+    if (s_pending && !commit_display()) {
+        Log_Line("CFG", "could not finalize staged display preferences");
+        return;
+    }
+    if (s_display == s_persisted) return;
     FILE *file = fopen(s_tempPath, "wb");
     if (file) {
         bool written = fprintf(file, "%s%02lx\n", s_configHeader, (unsigned long)s_display) > 0;
         bool closed = fclose(file) == 0;
-        if (written && closed && rename(s_tempPath, s_path) == 0) {
+        if (written && closed) {
             s_persisted = s_display;
-            return;
+            s_pending = true;
+            if (commit_display()) return;
+        } else {
+            remove(s_tempPath);
         }
-        if (!written || !closed) remove(s_tempPath);
     }
     Log_Line("CFG", "could not save display preferences");
 }

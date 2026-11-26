@@ -77,10 +77,10 @@ static const char *check_preferences(void) {
 
     file = fopen(pending, "wb");
     if (!file) return "open staged preferences";
-    fputs("PBW2-DISPLAY 1\nf4\n", file);
+    fputs("PBW2-DISPLAY 1\ne4\n", file);
     if (fclose(file)) return "close staged preferences";
     Settings_Init(path);
-    if (Settings_DisplayFlags()) return "complete primary takes precedence over staged data";
+    if (Settings_DisplayFlags() != DISPLAY_SHARP_PIXELS) return "complete staged preferences supersede the old file";
     remove(path);
     Settings_Init(path);
     if (Settings_DisplayFlags() != DISPLAY_SHARP_PIXELS) return "recover staged data and mask unknown flags";

@@ -25,6 +25,10 @@
 #include "system/game_data.h"
 #include "system/wipe.h"
 
+#if defined(PBW2_N3DS)
+#include "vram_host_api.h"
+#endif
+
 // The summary screen's core: setting up and tearing down the screens, the main loop, the buttons of the bottom
 // screen, changing the page or the Pokémon behind a mosaic, and printing for the pages. The file's name is a guess
 
@@ -549,7 +553,11 @@ static void PStatus_InitText(PStatusWork *wk) {
     wk->msgData = GFL_MsgSysLoadData(FALSE, ARCID_SYSTEM_MESSAGE, TEXT_BANK_POKEMON_SUMMARY, wk->heapId);
     GFL_BGSysLoadNCLRDefault(ARCID_FONT, 5, 0, 0x1c0, 0x20, wk->heapId);
     GFL_BGSysLoadNCLRDefault(ARCID_FONT, 5, 4, 0x1c0, 0x20, wk->heapId);
+#if defined(PBW2_N3DS)
+    pltt = PbW2_VramMap((const void *)(HW_DB_BG_PLTT + 0x1c0));
+#else
     pltt = (GXRgb *)(HW_DB_BG_PLTT + 0x1c0);
+#endif
     pltt[9] = GX_RGB(25, 18, 19);
     pltt[10] = GX_RGB(18, 18, 26);
     wk->printQueue = PrintQueue_Create(0x1000, wk->heapId);

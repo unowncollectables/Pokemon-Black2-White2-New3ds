@@ -357,6 +357,18 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
   (B/X/A/START/SELECT all fail) — possible port bug, not
   investigated.
 
+### Hardware follow-up
+
+- The next Black 2 New 3DS run loads the first battle overlays, returns to
+  the field and reaches zone 435. It has no logged sequence update gaps
+  over 100 ms. Sequence 1086 still reports 64 dropped notes.
+- The log ends during Pokémon Summary initialization after overlay 207
+  loads. The Summary text setup now maps the sub-screen palette writes
+  through host VRAM. A new hardware run is needed to confirm the stop.
+- SDMC requires the destination of a file rename to be vacant. The
+  display settings writer stages the complete record before replacing the
+  old file and recovers the newer record after an interrupted replacement.
+
 ### Experimental PICA200 geometry
 
 - Enable **GPU geometry (experimental)** under L+R+Y. The default is
