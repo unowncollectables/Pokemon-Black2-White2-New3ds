@@ -48,8 +48,9 @@ multipliers and no encounter editor.
 ## Audio
 
 Title PCM16 runs on the core 2 NDSP worker, which joins before
-`ndspExit`. PCM cries play from the game's wave archives. A host player
-for the ARM7 sequenced music and effects remains open.
+`ndspExit`. PCM cries play from the game's wave archives. The host
+sequence player handles field music and effects. Timing and instrument
+envelopes still need comparison with the DS.
 
 ## Story
 

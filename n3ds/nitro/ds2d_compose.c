@@ -162,16 +162,6 @@ static void identity_affine(s16 *pa, s16 *pb, s16 *pc, s16 *pd, s32 *rx, s32 *ry
     *ry = 0;
 }
 
-static int affine_coeffs_sane(s16 pa, s16 pb, s16 pc, s16 pd) {
-    if (pa == (s16)0x0100 && pb == 0 && pc == 0 && pd == (s16)0x0100) {
-        return 1;
-    }
-    if ((u16)pa > 0x0400u || (u16)pd > 0x0400u || (u16)pb > 0x0400u || (u16)pc > 0x0400u) {
-        return 0;
-    }
-    return 1;
-}
-
 static void read_bg_affine(int is_sub, int bg, s16 *pa, s16 *pb, s16 *pc, s16 *pd, s32 *rx, s32 *ry) {
     u32 hw = 0x04000000u + (is_sub ? 0x1000u : 0u) + ((bg == 2) ? 0x20u : 0x30u);
 
@@ -185,9 +175,6 @@ static void read_bg_affine(int is_sub, int bg, s16 *pa, s16 *pb, s16 *pc, s16 *p
     *pd = (s16)PBW2_VU16(hw + 6u);
     *rx = affine_ref28(PBW2_VU32(hw + 8u));
     *ry = affine_ref28(PBW2_VU32(hw + 12u));
-    if (!affine_coeffs_sane(*pa, *pb, *pc, *pd)) {
-        identity_affine(pa, pb, pc, pd, rx, ry);
-    }
 }
 
 static void map_bitmap_uv(s16 pa, s16 pb, s16 pc, s16 pd, s32 rx, s32 ry, int x, int y, s32 *tx, s32 *ty) {
@@ -294,22 +281,37 @@ static void compose_text_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmo
             unsigned ty = (vofs & 7) ^ ((sc & 0x0800) ? 7 : 0);
             unsigned flip = (sc & 0x0400) ? 7 : 0;
             unsigned dst = y * 256 + x;
+            x += count;
             if (indexed256) {
                 const u8 *source = chars + tile * 64 + ty * 8;
-                for (unsigned i = 0; i < count; i++) {
-                    unsigned color = source[(begin + i) ^ flip];
-                    if (color) put_bg_pixel(out, blend, dst + i, plane, colors[color]);
+                u32 words[2];
+                memcpy(words, source, sizeof words);
+                if (!(words[0] | words[1])) continue;
+                unsigned tx = begin ^ flip;
+                int step = flip ? -1 : 1;
+                if (!blend) {
+                    for (unsigned i = 0; i < count; ++i, tx += step) {
+                        unsigned color = source[tx];
+                        if (color) out[dst + i] = colors[color];
+                    }
+                } else {
+                    for (unsigned i = 0; i < count; ++i, tx += step) {
+                        unsigned color = source[tx];
+                        if (color) put_bg_pixel(out, blend, dst + i, plane, colors[color]);
+                    }
                 }
             } else {
                 const u8 *source = chars + tile * 32 + ty * 4;
+                u32 nibbles;
+                memcpy(&nibbles, source, sizeof nibbles);
+                if (!nibbles) continue;
                 const u16 *palette = colors + (sc >> 12) * 16;
                 for (unsigned i = 0; i < count; i++) {
                     unsigned tx = (begin + i) ^ flip;
-                    unsigned color = (source[tx >> 1] >> ((tx & 1) * 4)) & 15;
+                    unsigned color = (nibbles >> (tx * 4)) & 15;
                     if (color) put_bg_pixel(out, blend, dst + i, plane, palette[color]);
                 }
             }
-            x += count;
         }
     }
 }
@@ -424,110 +426,43 @@ static void maybe_log_mode5(const u8 *regs, u32 dc, u32 bgmode, int bg, u16 cnt,
     log_mode5_bitmap(regs, 3, cnt3, addr3, 1, 256, 256, count_opaque16_at_base(cnt3, 256, 256), "+60");
 }
 
-static u16 sample_bitmap16(int is_sub, int bg, u16 cnt, int bw, int bh, int x, int y) {
-    s16 pa;
-    s16 pb;
-    s16 pc;
-    s16 pd;
-    s32 rx;
-    s32 ry;
-    s32 tx;
-    s32 ty;
-    u32 addr;
-    int wrap;
-    const u16 *p;
-    u16 c;
-
-    read_bg_affine(is_sub, bg, &pa, &pb, &pc, &pd, &rx, &ry);
-    map_bitmap_uv(pa, pb, pc, pd, rx, ry, x, y, &tx, &ty);
-    wrap = (cnt & (1u << REG_G2_BG2CNT_AREAOVER_SHIFT)) != 0;
-    if (wrap) {
-        tx &= (s32)(bw - 1);
-        ty &= (s32)(bh - 1);
-    } else if (tx < 0 || ty < 0 || tx >= bw || ty >= bh) {
-        return 0;
-    }
-    addr = bitmap_texel_addr(cnt, is_sub, bw, tx, ty, 2);
-    p = (const u16 *)(void *)vram_ptr(addr);
-    c = p[0];
-    return c;
-}
-
-static u16 sample_bitmap8(int is_sub, int bg, u16 cnt, int bw, int bh, int x, int y, const u16 *pltt) {
-    s16 pa;
-    s16 pb;
-    s16 pc;
-    s16 pd;
-    s32 rx;
-    s32 ry;
-    s32 tx;
-    s32 ty;
-    u32 addr;
-    int wrap;
-    const u8 *p;
-    u8 ci;
-
-    read_bg_affine(is_sub, bg, &pa, &pb, &pc, &pd, &rx, &ry);
-    map_bitmap_uv(pa, pb, pc, pd, rx, ry, x, y, &tx, &ty);
-    wrap = (cnt & (1u << REG_G2_BG2CNT_AREAOVER_SHIFT)) != 0;
-    if (wrap) {
-        tx &= (s32)(bw - 1);
-        ty &= (s32)(bh - 1);
-    } else if (tx < 0 || ty < 0 || tx >= bw || ty >= bh) {
-        return 0;
-    }
-    addr = bitmap_texel_addr(cnt, is_sub, bw, tx, ty, 1);
-    p = vram_ptr(addr);
-    ci = p[0];
-    if (ci == 0) {
-        return 0;
-    }
-    return pltt[ci] | 0x8000u;
-}
-
 static void compose_bitmap_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmode, u16 *out, BgBlend *blend) {
     u16 cnt = reg_u16(regs, 8 + bg * 2);
-    const u16 *pltt;
-    u32 bmp_addr;
-    int bw;
-    int bh;
-    int is16;
-    int y;
-    int x;
+    unsigned plane = 1u << bg;
+    bool direct = (cnt & 0x0004u) != 0;
+    bool wrap = (cnt & (1u << REG_G2_BG2CNT_AREAOVER_SHIFT)) != 0;
+    u32 address = engine_bg_vram_base(is_sub) + bitmap_vram_base_byte(cnt);
+    const u8 *bitmap = vram_ptr(address);
+    const u16 *palette = bg_layer_pltt(dc, cnt, is_sub, bg);
+    int width, height;
+    s16 pa, pb, pc, pd;
+    s32 rx, ry;
+    bitmap_dims(cnt, &width, &height);
+    maybe_log_mode5(regs, dc, bgmode, bg, cnt, address, direct, width, height);
+    read_bg_affine(is_sub, bg, &pa, &pb, &pc, &pd, &rx, &ry);
 
-    if ((dc & (0x100u << bg)) == 0) {
-        return;
-    }
-    if ((cnt & REG_G2_BG0CNT_COLORMODE_MASK) == 0) {
-        return;
-    }
-    /* bit7=1 bitmap; bit2=1 direct color 16bpp (ABGR1555, bit15 opaque). */
-    is16 = (cnt & 0x0004u) != 0;
-    bmp_addr = bg_screen_addr(dc, cnt, is_sub, bgmode, bg);
-    pltt = bg_layer_pltt(dc, cnt, is_sub, bg);
-    bitmap_dims(cnt, &bw, &bh);
-
-    maybe_log_mode5(regs, dc, bgmode, bg, cnt, bmp_addr, is16, bw, bh);
-
-    if (is16) {
-        for (y = 0; y < 192; y++) {
-            for (x = 0; x < 256; x++) {
-                u16 pix = sample_bitmap16(is_sub, bg, cnt, bw, bh, x, y);
-
-                if (pix & 0x8000u) {
-                    put_bg_pixel(out, blend, y * 256 + x, 1u << bg, rgb555_to_565(pix));
-                }
+    /* The signed 28-bit origin plus 256 steps of either 8.8 coefficient fits in s32. */
+    for (unsigned y = 0; y < 192; ++y, rx += pb, ry += pd) {
+        s32 sx = rx, sy = ry;
+        for (unsigned x = 0; x < 256; ++x, sx += pa, sy += pc) {
+            unsigned tx = (unsigned)(sx >> 8), ty = (unsigned)(sy >> 8);
+            if (wrap) {
+                tx &= width - 1;
+                ty &= height - 1;
+            } else if (tx >= (unsigned)width || ty >= (unsigned)height) {
+                continue;
             }
-        }
-    } else {
-        for (y = 0; y < 192; y++) {
-            for (x = 0; x < 256; x++) {
-                u16 pix = sample_bitmap8(is_sub, bg, cnt, bw, bh, x, y, pltt);
-
-                if (pix & 0x8000u) {
-                    put_bg_pixel(out, blend, y * 256 + x, 1u << bg, rgb555_to_565(pix));
-                }
+            unsigned index = ty * width + tx;
+            u16 color;
+            if (direct) {
+                color = ((const u16 *)(const void *)bitmap)[index];
+                if (!(color & 0x8000)) continue;
+            } else {
+                unsigned entry = bitmap[index];
+                if (!entry) continue;
+                color = palette[entry];
             }
+            put_bg_pixel(out, blend, y * 256 + x, plane, rgb555_to_565(color));
         }
     }
 }

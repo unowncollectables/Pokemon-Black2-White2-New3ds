@@ -23,8 +23,8 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
   Nitro thread that never started. New 3DS runs both archive-load steps
   synchronously through the existing sound backend. Black 2 proceeds
   through the scripted transition from zone 427 to zone 428. After the
-  dialogue, Azahar verifies movement in all four directions. The backend
-  still uses the silent sequence backend.
+  dialogue, Azahar verifies movement in all four directions. Field music
+  and effects now use the sequence player described below.
 - A fresh Black 2 Azahar run with GPU geometry enabled reaches Aspertia
   and renders the player during the opening cutscene. That replay ended
   before free movement. Field actor resource loading now waits for a
@@ -408,6 +408,26 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
   With the current texture and clip optimizations, the same Striaton
   Continue replay reaches about 17 completed 3D frames per second in
   Azahar. The previous run sustained about 14.9.
+- The LCD compositor skips transparent text-tile rows in both color
+  depths. Bitmap backgrounds resolve VRAM and the signed affine transform
+  once per layer, then step through texels in fixed point. In a Black 2
+  ARM11 benchmark, direct-color and indexed bitmap composition took 69%
+  and 65% fewer emulated ticks. Text layers took 13–65% fewer ticks
+  across sparse and filled maps. All six framebuffer hashes matched the
+  prior compositor. The graphics fixture also checks negative scale,
+  shear, wrapping, clipping, palette-zero transparency and opaque black.
+- PICA200 reuses the palette span of a compressed texture while its
+  descriptor bank, address, length and descriptor-page revision match.
+  It still checks revisions for the texels and the actual palette colors
+  every frame. An ARM11 benchmark drawing a 512×512 compressed texture
+  for 36 frames after warm-up used 34.5% fewer ticks in Azahar with the
+  same framebuffer hash. The fixture moves a palette to another page
+  and changes its color there to check cache invalidation.
+- With **GPU 3D without outlines**, the Black 2 R4 Continue replay in
+  Striaton now presents 30 LCD frames per second in Azahar, up from
+  19 on the prior build. Settled LCD update and composition fell from
+  36.1 ms to 19.1 ms. The field still produces about 17 distinct 3D
+  frames per second. Physical New 3DS timing is pending.
 
 ### Audio follow-up — LLE unlock, title stream verified, wave player built (Nov 24–25, Ghost)
 
@@ -991,7 +1011,7 @@ PXI FS callback, **no** CARD worker thread).
 
 ### Remaining compatibility work
 
-- SDAT sequence playback for field music, fanfares, and sequenced effects.
+- Timing and instrument-envelope parity for SDAT music and effects.
 - DS 3D dual-layer coverage and exact display capture blending.
 - DSi/TWL and the two DSP firmware images (`rom/dsp/*.inc`, ROM-backed,
   not in git).
@@ -1014,9 +1034,10 @@ Two game files have a `PBW2_N3DS` branch so GCC can compile them:
 
 Useful Azahar / host lines when debugging 2D: `vram upload BG2/3`,
 `vramcnt on/+60`, `mode5-on/+60`. Mode-5 16bpp DC bitmap: `BGxCNT` bit 7
-set = bitmap, bit 2 set = 16bpp direct (bit 15 opaque). Zero RGB is
-treated as transparent (not bit 15) in the compose path. Affine sampling
-uses BGx PA–PD and BGxX/Y (20.8); PA/PD default `0x100`.
+set = bitmap, bit 2 set = 16bpp direct (bit 15 opaque). Direct-color
+black with bit 15 set is visible. Indexed bitmaps use palette index zero
+for transparency. Affine sampling uses BGx PA–PD and BGxX/Y (20.8).
+PA/PD default to `0x100` until the game writes the transform.
 
 CDEMO `boot_proc` queues overlay 264 twice (GF logo `demo=0`, then
 opening `demo=2`). An immediate return usually means the script hit

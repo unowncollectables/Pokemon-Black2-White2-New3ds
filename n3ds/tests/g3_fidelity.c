@@ -275,6 +275,20 @@ static const char *checks(void) {
     if (pixels[center] != 0x001f)
         return "4x4 opaque descriptor";
 
+    /* Move the palette to a different VRAM page, then edit just its color. */
+    for (unsigned i = 0; i < 4; ++i) descriptors[i] = (2u << 14) | 64;
+    PbW2_VramNoteLcdcWrite(HW_LCDC_VRAM_B, 8);
+    cmd(G3OP_TEXIMAGE_PARAM, GX_TEXFMT_COMP4x4 << 26);
+    for (unsigned i = 0; i < 2; ++i) {
+        palette[128 + 3] = i ? GX_RGB(0, 31, 0) : GX_RGB(31, 0, 0);
+        PbW2_VramNoteLcdcWrite(HW_LCDC_VRAM_E + 262, 2);
+        triangle(0x7fff, 0);
+        cmd(0x50, 0);
+        PbW2_G3RasterCapture(pixels);
+        if (pixels[center] != (0x8000 | palette[128 + 3]))
+            return "4x4 palette writes after a descriptor moves the palette span";
+    }
+
     const u32 opaque = (31u << 16) | (3u << 6);
     const u32 decal = opaque | (GX_POLYGONMODE_DECAL << 4);
     cmd(0x22, 0);
@@ -762,6 +776,31 @@ static const char *checks(void) {
     if (pixels[0] || pixels[1] != 0x001f || pixels[2] != 0x001f || pixels[3] || pixels[258] != 0x001f)
         return "scrolled 8bpp text tiles use the full palette across screen blocks";
 
+    /* Sample a flipped bitmap, then cross the left edge with and without wrap. */
+    reg_GX_DISPCNT = (1u << 16) | 0x400 | GX_BGMODE_5;
+    PBW2_VU16(0x0400000c) = 0x84;
+    PBW2_VU16(0x04000020) = (u16)-256;
+    PBW2_VU16(0x04000022) = 1280;
+    PBW2_VU16(0x04000024) = 0;
+    PBW2_VU16(0x04000026) = 256;
+    PBW2_VU32(0x04000028) = 384;
+    PBW2_VU32(0x0400002c) = 0;
+    PbW2_NoteBgAffineWrite((u32)(uintptr_t)(pbw2_io + 0x20));
+    u16 *direct = (u16 *)(void *)bgVram;
+    bgPalette[0] = GX_RGB(0, 31, 0);
+    direct[0] = 0x8000;
+    direct[1] = 0x801f;
+    direct[127] = direct[128 + 6] = 0xfc00;
+    PbW2_ComposeScreens(pixels, NULL);
+    if (pixels[0] != 0xf800 || pixels[1] || pixels[2] != 0x07c0 || pixels[256] != 0x001f)
+        return "signed bitmap transform, opaque black and clipped left edge";
+    PBW2_VU16(0x0400000c) = 0x80 | (1u << REG_G2_BG2CNT_AREAOVER_SHIFT);
+    bgVram[0] = 0;
+    bgVram[1] = bgVram[127] = bgVram[128 + 6] = 200;
+    PbW2_ComposeScreens(pixels, NULL);
+    if (pixels[0] != 0x001f || pixels[1] != 0x07c0 || pixels[2] != 0x001f || pixels[256] != 0x001f)
+        return "indexed bitmap transform preserves palette zero and wraps at bitmap width";
+
     PbW2_G3InterceptInit();
     reg_GX_VRAMCNT_A = GX_VRAMCNT(3, 0);
     reg_GX_VRAMCNT_E = GX_VRAMCNT(3, 0);
@@ -848,7 +887,7 @@ int main(void) {
 
         PbW2_PicaSetOptions(true, false);
         failure = PbW2_PicaEnabled() ? checks() : "GPU initialization";
-        if (!failure && s_gpuFrames != 32)
+        if (!failure && s_gpuFrames != 34)
             failure = "unexpected GPU frame count";
         fprintf(f, "PICA200 %s%s (%u GPU frames)\n", failure ? "FAIL " : "PASS", failure ? failure : "", s_gpuFrames);
         fprintf(f, "Optional GPU outlines %s\n", check_optional_edges() ? "PASS" : "FAIL");

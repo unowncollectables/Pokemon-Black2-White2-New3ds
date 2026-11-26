@@ -303,6 +303,10 @@ static int texture_coord(float coord, int size, unsigned repeat, unsigned flip) 
     return n & (size - 1);
 }
 
+static unsigned descriptor_address(unsigned block) {
+    return 0x20000 + ((block & 0x1ffff) >> 1) + ((block & 0x40000) ? 0x10000 : 0);
+}
+
 static u16 texture_pixel(const Texture *t, unsigned x, unsigned y, unsigned *alpha) {
     *alpha = 31;
     if (!t->format) return 0x7fff;
@@ -317,7 +321,7 @@ static u16 texture_pixel(const Texture *t, unsigned x, unsigned y, unsigned *alp
     }
     case GX_TEXFMT_COMP4x4: {
         unsigned block = t->address + ((y / 4) * (t->width / 4) + x / 4) * 4;
-        unsigned info = 0x20000 + ((block & 0x1ffff) >> 1) + ((block & 0x40000) ? 0x10000 : 0);
+        unsigned info = descriptor_address(block);
         unsigned descriptor = texture_byte(t, info) | (texture_byte(t, info + 1) << 8);
         unsigned addr = t->paletteAddress + (descriptor & 0x3fff) * 4;
         unsigned mode = descriptor >> 14;
@@ -614,7 +618,19 @@ static u32 range_revision(const u8 *const *banks, unsigned bankSize, unsigned co
     return latest;
 }
 
-static PicaTextureKey texture_cache_key(const Texture *tex) {
+/* The game often submits field materials in the same order on the next
+ * frame. Only the descriptor table determines a compressed texture's
+ * palette span. Palette colors and texel indices have separate revisions. */
+typedef struct {
+    const u8 *descriptorBank;
+    unsigned address, bytes;
+    u32 revision;
+    unsigned paletteOffset, paletteBytes;
+} CompressedPaletteSpan;
+
+static CompressedPaletteSpan s_paletteSpans[GPU_TEXTURES_MAX];
+
+static PicaTextureKey texture_cache_key(const Texture *tex, unsigned material) {
     PicaTextureKey key = tex->key;
     memset(key.revision, 0, sizeof key.revision);
     unsigned count = tex->width * tex->height;
@@ -632,23 +648,29 @@ static PicaTextureKey texture_cache_key(const Texture *tex) {
     if (tex->format == GX_TEXFMT_COMP4x4) {
         /* Each compressed block names its own palette. Track the referenced
          * interval and the descriptor table as well as the texel indices. */
-        unsigned minPalette = 0x10000, maxPalette = 0;
-        for (unsigned block = tex->address; block < tex->address + bytes; block += 4) {
-            unsigned descriptor = 0x20000 + ((block & 0x1ffff) >> 1) + ((block & 0x40000) ? 0x10000 : 0);
-            unsigned base = (texture_byte(tex, descriptor) | texture_byte(tex, descriptor + 1) << 8) & 0x3fff;
-            if (4 * base < minPalette) minPalette = 4 * base;
-            if (4 * base + 8 > maxPalette) maxPalette = 4 * base + 8;
-        }
-        palette += minPalette;
-        paletteBytes = maxPalette - minPalette;
         for (unsigned block = tex->address; block < tex->address + bytes;) {
             unsigned chunk = 0x20000 - (block & 0x1ffff);
             if (chunk > tex->address + bytes - block) chunk = tex->address + bytes - block;
-            unsigned descriptor = 0x20000 + ((block & 0x1ffff) >> 1) + ((block & 0x40000) ? 0x10000 : 0);
+            unsigned descriptor = descriptor_address(block);
             u32 revision = range_revision(tex->tiles, 0x20000, 4, descriptor, chunk / 2);
             if (revision > key.revision[1]) key.revision[1] = revision;
             block += chunk;
         }
+        CompressedPaletteSpan *span = &s_paletteSpans[material];
+        if (span->descriptorBank != tex->tiles[1] || span->address != tex->address ||
+            span->bytes != bytes || span->revision != key.revision[1]) {
+            unsigned minPalette = 0x10000, maxPalette = 0;
+            for (unsigned block = tex->address; block < tex->address + bytes; block += 4) {
+                unsigned descriptor = descriptor_address(block);
+                unsigned base = (texture_byte(tex, descriptor) | texture_byte(tex, descriptor + 1) << 8) & 0x3fff;
+                if (4 * base < minPalette) minPalette = 4 * base;
+                if (4 * base + 8 > maxPalette) maxPalette = 4 * base + 8;
+            }
+            *span = (CompressedPaletteSpan){tex->tiles[1], tex->address, bytes, key.revision[1],
+                                            minPalette, maxPalette - minPalette};
+        }
+        palette += span->paletteOffset;
+        paletteBytes = span->paletteBytes;
     }
     key.revision[2] = range_revision(tex->palette, 0x4000, 6, palette, paletteBytes);
     return key;
@@ -695,7 +717,7 @@ static bool render_with_pica(void) {
                 if ((tex->key.banks & (4u << (4 * bank)))
                     && tex->key.revision[bank] != PbW2_VramBankRevision(bank)) return false;
             }
-            PicaTexture image = {tex->width, tex->height, tex->param, tex, gpu_texel, texture_cache_key(tex)};
+            PicaTexture image = {tex->width, tex->height, tex->param, tex, gpu_texel, texture_cache_key(tex, i)};
             gpuSlots[i] = PbW2_PicaUpload(&image);
             if (gpuSlots[i] < 0) return false;
         }
