@@ -21,6 +21,9 @@ presentation and keeps DS window data intact. Glyph pixels with transparent
 backgrounds, incompatible effects or clipping use the existing sampling path.
 Text baked into OBJ sprites remains open.
 
+Ordinary PICA200 frames use a 256-column render target and readback.
+Widescreen and wide capture share a separate 400-column allocation.
+
 The LCD presenter retains an unchanged bottom image after both physical
 buffers have received it. It skips the bottom redraw and data-cache flush
 while the composed pixels, text metadata, and scaling options match.

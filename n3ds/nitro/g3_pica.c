@@ -7,7 +7,7 @@
 #include <citro3d.h>
 #include <string.h>
 
-enum { WIDTH = 320, HEIGHT = 192, TARGET_HEIGHT = 256, VERTICES = 24576, BATCHES = 1024, TEXTURES = 128 };
+enum { WIDTH = 256, LCD_WIDTH = 400, HEIGHT = 192, TARGET_HEIGHT = 256, VERTICES = 24576, BATCHES = 1024, TEXTURES = 128 };
 enum { TEXTURE_CACHE_BYTES = 6 * 1024 * 1024 };
 
 extern const u8 _binary_g3_pass_shbin_start[], _binary_g3_pass_shbin_end[];
@@ -23,10 +23,10 @@ typedef struct {
 static DVLB_s *s_shader;
 static shaderProgram_s s_program;
 static C3D_RenderTarget *s_target;
-static unsigned s_renderWidth = 256;
+static unsigned s_renderWidth = WIDTH;
 static u16 *s_native;
-static C3D_RenderTarget *s_nativeTarget;
-static u32 *s_nativePixels;
+static C3D_RenderTarget *s_wideTarget;
+static u32 *s_widePixels;
 
 void PbW2_PicaSetFrameWidth(unsigned width, u16 *native) {
     s_renderWidth = width;
@@ -79,8 +79,8 @@ void PbW2_PicaExit(void) {
         if (s_program.vertexShader) shaderProgramFree(&s_program);
         DVLB_Free(s_shader);
     }
-    if (s_nativePixels) linearFree(s_nativePixels);
-    if (s_nativeTarget) C3D_RenderTargetDelete(s_nativeTarget);
+    if (s_widePixels) linearFree(s_widePixels);
+    if (s_wideTarget) C3D_RenderTargetDelete(s_wideTarget);
     if (s_pixels) linearFree(s_pixels);
     if (s_vertices) linearFree(s_vertices);
     if (s_target) C3D_RenderTargetDelete(s_target);
@@ -206,25 +206,28 @@ bool PbW2_PicaTriangle(const PicaVertex vertex[3], int texture, PicaAlphaTest te
 bool PbW2_PicaFinish(uint32_t clearColor, float clearDepth, uint16_t *result) {
     u64 start = svcGetSystemTick();
     if (!s_batchCount) return false;
-    if (s_native && !s_nativeTarget) {
-        s_nativePixels = linearAlloc(400 * TARGET_HEIGHT * sizeof(*s_nativePixels));
-        if (!s_nativePixels) return false;
-        s_nativeTarget = C3D_RenderTargetCreate(400, TARGET_HEIGHT, GPU_RB_RGBA8, GPU_RB_DEPTH24_STENCIL8);
-        if (!s_nativeTarget) {
-            linearFree(s_nativePixels);
-            s_nativePixels = NULL;
+    /* The ordinary DS viewport has its own smaller target. Wide capture
+     * uses a 320-wide viewport in the same allocation as native widescreen. */
+    bool wide = s_renderWidth > WIDTH;
+    if (wide && !s_wideTarget) {
+        s_widePixels = linearAlloc(LCD_WIDTH * TARGET_HEIGHT * sizeof(*s_widePixels));
+        if (!s_widePixels) return false;
+        s_wideTarget = C3D_RenderTargetCreate(LCD_WIDTH, TARGET_HEIGHT, GPU_RB_RGBA8, GPU_RB_DEPTH24_STENCIL8);
+        if (!s_wideTarget) {
+            linearFree(s_widePixels);
+            s_widePixels = NULL;
             return false;
         }
     }
     if (!C3D_FrameBegin(0)) return false;
-    C3D_RenderTarget *target = s_native ? s_nativeTarget : s_target;
-    u32 *pixels = s_native ? s_nativePixels : s_pixels;
-    unsigned stride = s_native ? 400 : WIDTH;
+    C3D_RenderTarget *target = wide ? s_wideTarget : s_target;
+    u32 *pixels = wide ? s_widePixels : s_pixels;
+    unsigned stride = wide ? LCD_WIDTH : WIDTH;
     unsigned height = s_native ? 240 : HEIGHT;
     GSPGPU_FlushDataCache(s_vertices, s_vertexCount * sizeof(*s_vertices));
     C3D_RenderTargetClear(target, C3D_CLEAR_ALL, clearColor, (unsigned)(0xffffff * clearDepth));
     C3D_FrameDrawOn(target);
-    C3D_SetViewport(0, 0, s_native ? 400 : s_renderWidth, height);
+    C3D_SetViewport(0, 0, s_native ? LCD_WIDTH : s_renderWidth, height);
     C3D_BindProgram(&s_program);
     C3D_AttrInfo *attrs = C3D_GetAttrInfo();
     AttrInfo_Init(attrs);
@@ -298,7 +301,7 @@ bool PbW2_PicaFinish(uint32_t clearColor, float clearDepth, uint16_t *result) {
     C3D_FrameEnd(GX_CMDLIST_FLUSH);
     GSPGPU_InvalidateDataCache(pixels, stride * height * sizeof(*pixels));
     u16 *output = s_native ? s_native : result;
-    unsigned outputWidth = s_native ? 400 : s_renderWidth;
+    unsigned outputWidth = s_native ? LCD_WIDTH : s_renderWidth;
     /* Prefetch the next ARM11 cache lines while converting this one.
      * The readback allocation includes the unused rows below the image. */
     for (unsigned y = 0; y < height; ++y) {
@@ -315,7 +318,7 @@ bool PbW2_PicaFinish(uint32_t clearColor, float clearDepth, uint16_t *result) {
     if (s_native) {
         /* Map DS pixel centers to the nearest native sample for legacy capture. */
         for (unsigned y = 0; y < HEIGHT; ++y) {
-            const u16 *row = s_native + ((10 * y + 5) / 8) * 400;
+            const u16 *row = s_native + ((10 * y + 5) / 8) * LCD_WIDTH;
             for (unsigned x = 0; x < s_renderWidth; ++x)
                 result[y * s_renderWidth + x] = row[(10 * x + 5) / 8];
         }

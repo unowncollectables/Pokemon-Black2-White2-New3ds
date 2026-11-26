@@ -874,7 +874,7 @@ static bool check_optional_edges(void) {
     return false;
 }
 
-static bool check_wide_frame(bool gpu) {
+static bool check_wide_frame(bool gpu, bool capture) {
     static u16 sides[64 * 192];
     static u16 native[PBW2_NATIVE_TOP_WIDTH * PBW2_NATIVE_TOP_HEIGHT];
     memset(pbw2_io, 0, sizeof pbw2_io);
@@ -883,6 +883,7 @@ static bool check_wide_frame(bool gpu) {
     reg_G3X_CLEAR_DEPTH = 0x7fff;
     PbW2_G3SetWide(true);
     PbW2_PicaSetOptions(gpu, false);
+    if (capture) reg_GX_DISPCAPCNT = REG_GX_DISPCAPCNT_E_MASK;
     unsigned before = s_gpuFrames;
     cmd(G3OP_POLYGON_ATTR, (31u << 16) | (3u << 6));
     cmd(G3OP_COLOR, GX_RGB(31, 0, 0));
@@ -895,11 +896,17 @@ static bool check_wide_frame(bool gpu) {
     memset(pixels, 0, sizeof pixels);
     bool haveNative;
     bool wide = PbW2_G3RasterComposite(pixels, NULL, NULL, NULL, sides, 0, native, &haveNative, NULL);
-    if (haveNative != gpu || (gpu && native[120 * 400 + 20] != (0x8000 | GX_RGB(31, 0, 0))))
+    if (haveNative != (gpu && !capture) || (haveNative && native[120 * 400 + 20] != (0x8000 | GX_RGB(31, 0, 0))))
         return false;
     PbW2_G3RasterCapture(pixels);
     for (unsigned i = 0; i < 256 * 192; ++i)
         if (pixels[i] & 0x8000) return false;
+
+    if (capture) {
+        reg_GX_DISPCAPCNT = 0;
+        PbW2_G3SetWide(false);
+        return wide && sides[96 * 64 + 16] == 0xf800 && !sides[96 * 64 + 48] && s_gpuFrames == before + 1;
+    }
 
     reg_GX_DISPCNT = (1u << REG_GX_DISPCNT_MODE_SHIFT) | REG_GX_DISPCNT_BG02D3D_MASK | 0x100u;
     u16 *palette = PbW2_VramMap((void *)HW_BG_PLTT);
@@ -996,8 +1003,9 @@ int main(void) {
             failure = "unexpected GPU frame count";
         fprintf(f, "PICA200 %s%s (%u GPU frames)\n", failure ? "FAIL " : "PASS", failure ? failure : "", s_gpuFrames);
         fprintf(f, "Optional GPU outlines %s\n", check_optional_edges() ? "PASS" : "FAIL");
-        fprintf(f, "Wide camera CPU %s\n", check_wide_frame(false) ? "PASS" : "FAIL");
-        fprintf(f, "Wide camera PICA200 %s\n", check_wide_frame(true) ? "PASS" : "FAIL");
+        fprintf(f, "Wide camera CPU %s\n", check_wide_frame(false, false) ? "PASS" : "FAIL");
+        fprintf(f, "Wide camera PICA200 %s\n", check_wide_frame(true, false) ? "PASS" : "FAIL");
+        fprintf(f, "Wide camera capture %s\n", check_wide_frame(true, true) ? "PASS" : "FAIL");
         fprintf(f, "Sharp text tiles %s\n", check_sharp_text() ? "PASS" : "FAIL");
         fclose(f);
     }
