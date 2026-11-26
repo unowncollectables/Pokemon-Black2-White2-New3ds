@@ -29,6 +29,7 @@ static const struct {
     {"LCD fit (4:3)", DISPLAY_LCD_FIT},
     {"Top screen fit (4:3)", DISPLAY_TOP_FIT},
     {"Sharp scaling", DISPLAY_SHARP_PIXELS},
+    {"Sharp game text", DISPLAY_SHARP_TEXT},
 #ifdef PBW2_GPU_GEOMETRY
     {"GPU geometry (experimental)", DISPLAY_PICA_GEOMETRY},
     {"GPU 3D without outlines", DISPLAY_PICA_NO_EDGES},
@@ -38,8 +39,8 @@ static const struct {
 
 enum {
     ROWS = sizeof s_options / sizeof s_options[0],
-    DISPLAY_MASK = DISPLAY_WIDE_FIELD | DISPLAY_LCD_FIT | DISPLAY_TOP_FIT | DISPLAY_SHARP_PIXELS | DISPLAY_PICA_GEOMETRY | DISPLAY_PICA_NO_EDGES,
-    ROW_X = 20, ROW_WIDTH = 280, ROW_Y = 49, ROW_HEIGHT = 23, ROW_SPACING = 26,
+    DISPLAY_MASK = DISPLAY_SHARP_TEXT | DISPLAY_WIDE_FIELD | DISPLAY_LCD_FIT | DISPLAY_TOP_FIT | DISPLAY_SHARP_PIXELS | DISPLAY_PICA_GEOMETRY | DISPLAY_PICA_NO_EDGES,
+    ROW_X = 20, ROW_WIDTH = 280, ROW_Y = 49, ROW_HEIGHT = 20, ROW_SPACING = 22,
 };
 
 static bool load_display(const char *path, uint32_t *flags) {
@@ -184,8 +185,8 @@ void Settings_Draw(void) {
     }
     draw_text(fb, stride, 24, 25, "Display settings", 0xffff);
     for (unsigned i = 0; i < ROWS; ++i) {
-        draw_text(fb, stride, 26, ROW_Y + 9 + ROW_SPACING * i, s_options[i].label, 0xffff);
-        draw_text(fb, stride, 265, ROW_Y + 9 + ROW_SPACING * i, s_display & s_options[i].flag ? "On" : "Off", 0xffdf);
+        draw_text(fb, stride, 26, ROW_Y + 6 + ROW_SPACING * i, s_options[i].label, 0xffff);
+        draw_text(fb, stride, 265, ROW_Y + 6 + ROW_SPACING * i, s_display & s_options[i].flag ? "On" : "Off", 0xffdf);
     }
     draw_text(fb, stride, 24, 208, "D-pad  Select   A  Toggle   B  Close", 0xffff);
 #else

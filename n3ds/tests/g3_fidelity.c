@@ -3,6 +3,7 @@
 #include "g3_intercept.h"
 #include "g3_pica.h"
 #include "g3_raster.h"
+#include "game_text.h"
 #include "nitro/gx.h"
 #include "vram_dma.h"
 #include "vram_host.h"
@@ -893,7 +894,7 @@ static bool check_wide_frame(bool gpu) {
     cmd(0x50, 0);
     memset(pixels, 0, sizeof pixels);
     bool haveNative;
-    bool wide = PbW2_G3RasterComposite(pixels, NULL, NULL, NULL, sides, 0, native, &haveNative);
+    bool wide = PbW2_G3RasterComposite(pixels, NULL, NULL, NULL, sides, 0, native, &haveNative, NULL);
     if (haveNative != gpu || (gpu && native[120 * 400 + 20] != (0x8000 | GX_RGB(31, 0, 0))))
         return false;
     PbW2_G3RasterCapture(pixels);
@@ -942,6 +943,41 @@ static bool check_wide_frame(bool gpu) {
     return true;
 }
 
+static bool check_sharp_text(void) {
+    static u32 ink[256 * 192];
+    u8 glyphPixels[32] = { 0x01 };
+    u8 windowPixels[32] = { 0x22 };
+    GFLBitmap glyph = { glyphPixels, 8, 8, 32, GFL_BITMAP_WRAPPED };
+    GFLBitmap window = { windowPixels, 8, 8, 32, GFL_BITMAP_WRAPPED };
+    memset(pbw2_io, 0, sizeof pbw2_io);
+    reg_GX_VRAMCNT_A = GX_VRAMCNT(1, 0);
+    PBW2_VU16(0x04000304) = 0x8000;
+    reg_GX_DISPCNT = (1u << REG_GX_DISPCNT_MODE_SHIFT) | 0x100u;
+    PBW2_VU16(0x04000008) = 2u << REG_G2_BG0CNT_SCREENBASE_SHIFT;
+    u8 *vram = PbW2_VramMap((void *)HW_BG_VRAM);
+    u16 *map = (u16 *)(vram + 0x1000);
+    u16 *palette = PbW2_VramMap((void *)HW_BG_PLTT);
+    memset(vram, 0, 64);
+    memset(map, 0, 0x800);
+    map[0] = 1;
+    palette[1] = GX_RGB(31, 0, 0);
+    palette[2] = GX_RGB(0, 31, 0);
+    PbW2_TextMarkGlyph(&window, &glyph, 0, 0, 8, 8);
+    windowPixels[0] = 0x21;
+    memcpy(vram + 32, windowPixels, sizeof windowPixels);
+    PbW2_TextUpload(&window, vram, 1, sizeof windowPixels);
+    PbW2_ComposeScreensWithText(pixels, NULL, ink, NULL);
+    if (ink[0] != (PBW2_TEXT_NATIVE | PBW2_TEXT_INK | 0x07c0u) || ink[1] || pixels[0] != 0xf800 || pixels[1] != 0x07c0) return false;
+    vram[32] = 0x22;
+    PbW2_ComposeScreensWithText(pixels, NULL, ink, NULL);
+    if (ink[0] || pixels[0] != 0x07c0) return false;
+    windowPixels[0] = 0x22;
+    PbW2_TextUpload(&window, vram, 1, sizeof windowPixels);
+    PbW2_ComposeScreensWithText(pixels, NULL, ink, NULL);
+    PbW2_TextForgetBitmap(&window);
+    return ink[0] == 0;
+}
+
 extern void gfxInitDefault(void);
 int main(void) {
     gfxInitDefault();
@@ -962,6 +998,7 @@ int main(void) {
         fprintf(f, "Optional GPU outlines %s\n", check_optional_edges() ? "PASS" : "FAIL");
         fprintf(f, "Wide camera CPU %s\n", check_wide_frame(false) ? "PASS" : "FAIL");
         fprintf(f, "Wide camera PICA200 %s\n", check_wide_frame(true) ? "PASS" : "FAIL");
+        fprintf(f, "Sharp text tiles %s\n", check_sharp_text() ? "PASS" : "FAIL");
         fclose(f);
     }
     for (;;)

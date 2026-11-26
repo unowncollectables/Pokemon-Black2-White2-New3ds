@@ -1,3 +1,6 @@
+#ifdef PBW2_N3DS
+#include "game_text.h"
+#endif
 #include "types.h"
 #include "gfl/areaman.h"
 #include "gfl/bg_sys.h"
@@ -122,6 +125,9 @@ void BmpWin_FlushChar(BmpWin *window) {
     u32 size = window->sizeX * window->sizeY * GFL_BGSysGetBGBytesPerTile(window->bg);
 
     GFL_BGSysLoadChar(window->bg, GFL_BitmapGetPixelData(window->bitmap), size, window->charPos);
+#ifdef PBW2_N3DS
+    PbW2_TextUpload(window->bitmap, GFL_BGSysGetBGCharAddress(window->bg), window->charPos, size);
+#endif
 }
 
 void BmpWin_FlushMap(BmpWin *window) {
