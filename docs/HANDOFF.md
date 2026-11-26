@@ -15,7 +15,7 @@ Scenes using DS windows, layer blending or capture currently use centered
 4:3 presentation. Sharp scaling applies to the composed picture. Independent
 native-resolution game glyphs and native 400x240 rasterization remain open.
 
-## 0. Nov 24 follow-up â€” New 3DS boot and map loading
+## 0. Nov 24 follow-up — New 3DS boot and map loading
 
 - Black 2 passes `FieldRoutine_Open` and `FieldRoutine_MapLoad` in Azahar
   and reaches `FieldRoutine_Run` in Aspertia City (zone 427, area 210).
@@ -114,7 +114,7 @@ native-resolution game glyphs and native 400x240 rasterization remain open.
   and matrix readback. A playthrough with the model path enabled reaches
   the house and verifies D-pad movement in all four directions.
 - The ARM11 rasterizer assembles and clips primitives, samples DS texture
-  and palette banks, and publishes a 256Ã—192 layer at the GX buffer swap.
+  and palette banks, and publishes a 256×192 layer at the GX buffer swap.
   The compositor resolves main BG0 and display capture into VRAM D.
   Azahar shows Kyurem and the blue title scene on the lower screen.
 - Intro and battle MCSS sprites and their shadows send packed texture
@@ -168,10 +168,10 @@ native-resolution game glyphs and native 400x240 rasterization remain open.
   `display.cfg` on SD. The next launch restores them.
   The Circle Pad cannot move the player while the menu is open. A held
   stick stays blocked after the menu closes until it returns to neutral.
-  LCD fit scales to 320Ã—240 at 4:3 and maps bottom touches back to DS
+  LCD fit scales to 320×240 at 4:3 and maps bottom touches back to DS
   coordinates. Top screen fit uses the same 4:3 rectangle and leaves the
   bottom screen at 1:1 unless LCD fit is enabled. Sharp scaling applies
-  the equivalent of a nearest-neighbor 2Ã— pass followed by linear scaling.
+  the equivalent of a nearest-neighbor 2× pass followed by linear scaling.
   This follows the filtering in SoulSilver's `gpuscale.c` without a
   separate intermediate framebuffer.
 - Azahar verifies the menu toggles and the ARM11 fixture checks the
@@ -204,24 +204,24 @@ native-resolution game glyphs and native 400x240 rasterization remain open.
   Azahar NDSP telemetry verifies the sustain buffer wraps. The host
   sequence player uses the same sample playback path.
 
-### Sequence player â€” BGM + SEs sounding (Nov 25, Ghost)
+### Sequence player — BGM + SEs sounding (Nov 25, Ghost)
 
 - Title cry verdict: **fixed, no fix needed.** Verified in the real
   waveform (`runs/b2w2-audio-cry-verify2/capture.wav`, 137.5 s): guest
   log `WaveOutIsPlaying ch=15 ended status=3 samplePos=21576 after
-  2111 ms` â€” all 21,576 samples consumed (old broken runs: samplePos=0
+  2111 ms` — all 21,576 samples consumed (old broken runs: samplePos=0
   after 198 ms). Waveform burst onset ~41.3 s, ends ~43.5 s. The cry
   only plays when A/Start is pressed on the title screen
-  (`src/demo/title/title.c:47,363`) â€” a verify run that presses nothing
+  (`src/demo/title/title.c:47,363`) — a verify run that presses nothing
   hears no cry at all. `audio_capture` call shape: lotus_debug takes
-  `{"session": â€¦, "command": {"operation": "audio_capture", "enabled":
-  bool}}` (the bare `{"operation": â€¦}` form fails deserialization);
+  `{"session": …, "command": {"operation": "audio_capture", "enabled":
+  bool}}` (the bare `{"operation": …}` form fails deserialization);
   `cry-capture.py` in the Lotus driver was fixed and gained `--press`.
 - New host NNS sequence player (`n3ds/nitro/seq_player.c`, ~1,100
   lines), driven by `NNS_SndMain` once per game frame: SSEQ
   interpreter (tempo/tracks, NOTE/REST, BANKPROG, CALL/RETURN, JUMP
-  loops, D4/FC loops, 1- and 2-byte controls), program â†’ SBNK
-  instrument â†’ SWAR wave â†’ DS channel via the wave player. Real
+  loops, D4/FC loops, 1- and 2-byte controls), program → SBNK
+  instrument → SWAR wave → DS channel via the wave player. Real
   StartSeq/StopSeq/Pause/volume/fade/CountPlaying/GetTick/
   ReadDriverTrackInfo replace the silent stubs; `SndArc_GetPlayerInfo`
   added; the regen script's skip set was updated. Build needs
@@ -230,45 +230,45 @@ native-resolution game glyphs and native 400x240 rasterization remain open.
   `f2ac00f823296da92f254a009a6d5bd9b5e3e7d4` (9,098,984 bytes, reloc
   OK).
 - Verification (all LLE, `--audio-emulation 1 --card b2w2-dsp`,
-  `audio_capture`): SE run (620 s playthrough) â€” 129 notes played, 34
+  `audio_capture`): SE run (620 s playthrough) — 129 notes played, 34
   dropped, then the drops were fixed: 1351 MESSAGE 34 plays / 68 notes
   / 0 dropped, 1356 DECIDE 10 plays / 20 notes / 0 dropped, 1352
   SELECT, 1357, 1365, 1382, 2036 all 0 dropped; intro plays through to
   the field with no regression; cries Black Kyurem 2,098 ms + Cinccino
-  1,401 ms, both full length. BGM run (180 s, START at 130 s) â€” 1171 GF
+  1,401 ms, both full length. BGM run (180 s, START at 130 s) — 1171 GF
   logo 18 notes / 0 dropped (was 0/4); TITLE01 1,067 notes / 0 dropped
   / 4,825 ticks (was 18/20), stopped correctly by the START press;
-  waveform shows continuous music 5â€“95 s, no cliff at 65 s â€” TITLE01
+  waveform shows continuous music 5–95 s, no cliff at 65 s — TITLE01
   carries the title after the stream ends. Cry at ~105 s, intro BGM
-  1009 from ~110 s. PSG run (360 s) â€” 1387 KON 5 notes / 0 dropped,
+  1009 from ~110 s. PSG run (360 s) — 1387 KON 5 notes / 0 dropped,
   1383 BOWA2 6 notes / 0 dropped (were 0/4 and 0/6); 12 fmt=1 PCM16
-  synth starts, 0.35â€“0.45 s each, volumes 10â€“70; intro mix continuously
+  synth starts, 0.35–0.45 s each, volumes 10–70; intro mix continuously
   audible.
 - Three bugs found by testing, all fixed: (1) wave total length is
   `loopStart + loopLen` words, not loopLen alone (verified on 8
   looping waves: `(loopStart+loopLen)*4 == data length` exactly);
   loopLen alone put the loop point past the buffer end for every
   looping wave. (2) SBNK drum-set (16) / key-split (17) entries are
-  12-byte `SNDInstData` â€” the wave fields sit 2 bytes further in than
+  12-byte `SNDInstData` — the wave fields sit 2 bytes further in than
   first read, so every regional/range program resolved to a bogus wave
   and dropped (TITLE01's 20 drops). Entry type now dispatches
-  PCM/PSG/NOISE per note. (3) Wave cap 64 KiB â†’ 512 KiB per channel
+  PCM/PSG/NOISE per note. (3) Wave cap 64 KiB → 512 KiB per channel
   (`wave_out.c`): largest SDAT wave decodes to 451 KiB; 51 waves exceed
   64 KiB. Bonus: PSG (square, duty `(wave[0]+1)/8`) and NOISE are now
-  synthesized in software with an ADSR envelope â€” the 3DS has no DS PSG
+  synthesized in software with an ADSR envelope — the 3DS has no DS PSG
   hardware. This covers 1387/1383, whose SWARs are empty (0 samples)
   because they are PSG, not sampled.
 - Open question answered: the stream is a ~24 s one-shot intro piece;
   SEQ_BGM_TITLE01 is the looping title music. Both are requested at the
   title; the sequence is the one that carries it.
-- Remaining, sized not built: arithmetic opcodes 0xA0â€“0xBF (none in any
+- Remaining, sized not built: arithmetic opcodes 0xA0–0xBF (none in any
   inventoried sequence; a track hitting one stops instead of
   desyncing); ADSR on sampled notes (constant volume per note now; the
   synth does apply ADSR); modulation and portamento; DIRECTPCM
   instruments (fRecord 4, none in inventoried
   banks). **One re-check still open:** the 620 s run's field section
   was silent from ~320 s because the demo BGM 1102's notes were
-  pre-fix garbage â€” the fix should have cured it, but no full
+  pre-fix garbage — the fix should have cured it, but no full
   playthrough to the field has been re-run on the fixed build yet.
 - Pitch bend keeps all 64 steps per semitone. Sampled notes follow
   SSEQ bend and bend-range changes as well as the game's track pitch
@@ -277,10 +277,10 @@ native-resolution game glyphs and native 400x240 rasterization remain open.
   sample-boundary scheduling is a reference for improving note timing.
   That is the natural next job.
 
-### Hardware crash â€” SOLVED in the emulator (Nov 25â€“26, Ghost)
+### Hardware crash — SOLVED in the emulator (Nov 25–26, Ghost)
 
 - Nate's hardware test on f33a37eea crashed after Bianca walks into
-  the house â€” Luma shut the 3DS down. His hardware log (4,142 lines)
+  the house — Luma shut the 3DS down. His hardware log (4,142 lines)
   ends abruptly after `FieldmapProc_End` + `GFL_OvlLoad id=337 ok`
   (no error line anywhere); the field ran 20,215 frames in zone 427
   Aspertia City, then the proc exits and overlay 337 loads. His Luma
@@ -288,24 +288,24 @@ native-resolution game glyphs and native 400x240 rasterization remain open.
   DFSR 5 (translation fault, read), faulting instruction `ldr r3,
   [r3]` in `EventMapChangeCore_Callback` state 3 (CORE_RUN_CHECKS),
   right after loading the literal `0x02fffc3c`. That address is
-  `HW_VBLANK_COUNT_BUF` â€” the VBlank counter in the DSi mirror of main
+  `HW_VBLANK_COUNT_BUF` — the VBlank counter in the DSi mirror of main
   RAM. The DSProt check macro reads it raw, bypassing the host's
-  `pbw2_vblank_count()`, and on the 3DS that address is unmapped â†’ data
-  abort on the first map change (Bianca's house warp, 427 â†’ 428).
+  `pbw2_vblank_count()`, and on the 3DS that address is unmapped → data
+  abort on the first map change (Bianca's house warp, 427 → 428).
   Siblings checked and clear (`SCFG_EXT_COPY` already excluded on
   N3DS; `MB_TIME_SEED` dead code via `mb_stub`).
 - Fix (commit `121a1ec84`, 2 files): under `PBW2_N3DS`,
   `HW_VBLANK_COUNT_BUF` now names the host word
   `PbW2_VBlankCountBuf`, incremented every VBlank by `pbw2_vblank()`
-  â€” the same pattern as the existing `PbW2_RomHeaderBuf`.
+  — the same pattern as the existing `PbW2_RomHeaderBuf`.
   Binary-verified: the literal is now `0x00a99fe0` (.bss), and
   `0x02fffc3c` occurs zero times in `.text`.
 - Verification: 1800 s emulator run on the fixed build (`62d763a1`)
   drove straight through the exact hardware crash point:
-  `FieldmapProc_End` â†’ ov337 loaded a second time â†’ **no crash** â†’
+  `FieldmapProc_End` → ov337 loaded a second time → **no crash** →
   `Field_Create enter zone=428`, `Field_Create done zone=428 area=348`,
   `FieldRoutine_Open enter zone=428`, and the new field ran its routines
-  to the end of the run. The final frame is the bedroom interior â€” bed,
+  to the end of the run. The final frame is the bedroom interior — bed,
   dresser, TV, player sprite standing in the room. **Zero exceptions in
   49,887 log lines.** The DSProt check took the func path, not tamper,
   so the port's ov337 code matches the expected checksum
@@ -314,10 +314,10 @@ native-resolution game glyphs and native 400x240 rasterization remain open.
   notes through the long field section). The first ov337 load was
   `DSProt_Init` only, same as the hardware log's line 659.
 - **Still needs a real-hardware test** (via patch-builder with this
-  branch) before calling the crash closed â€” the emulator proves the code
+  branch) before calling the crash closed — the emulator proves the code
   path works end to end, not that the hardware fault is gone.
 - Frame rate, separate and still open: field 4.1 fps, house interior
-  7.3 fps (both 0 GPU â€” PICA200 covers neither field scene; LCD 29
+  7.3 fps (both 0 GPU — PICA200 covers neither field scene; LCD 29
   fps). On hardware the title/intro ran ~59.5 fps GX swaps; the field
   3D is CPU-rasterized at ~4.5 fps. The fps job is the next big one
   after the crash is confirmed on hardware.
@@ -325,8 +325,8 @@ native-resolution game glyphs and native 400x240 rasterization remain open.
 ### First-battle crash + choppy music (Nov 26, Ghost)
 
 - Nate's hardware test on 6df15a5ea (Nov 26 morning): the VBlank
-  crash fix held â€” he got past Bianca's house warp all the way to the
-  first battle, chose a PokÃ©mon, saw the battle animations (slow but
+  crash fix held — he got past Bianca's house warp all the way to the
+  first battle, chose a Pokémon, saw the battle animations (slow but
   there). New crash right as the first battle starts (log 2,423
   lines + Luma dump; the log ends after overlay 147 load/unload, the
   screen mid-darken, mbright=0x4010). The dump, parsed by hand:
@@ -334,28 +334,28 @@ native-resolution game glyphs and native 400x240 rasterization remain open.
   fault, section, READ), faulting instruction `ldrh r3, [r3]` =
   `u16 color = *vram;` (fld3d_ci.c:1523) in
   `EventFieldEffect_DimCaptureColor`. The battle transition's
-  screen-darkening dims the 256Ã—192 captured frame (0xc000 u16s) at
+  screen-darkening dims the 256×192 captured frame (0xc000 u16s) at
   raw DS address `0x06860000` = VRAM bank D (LCDC view), right after
   `GX_SetBankForBG(GX_VRAM_BG_128_D)`. On the 3DS that address is
-  unmapped â†’ data abort on the very first pixel.
+  unmapped → data abort on the very first pixel.
 - Fix (commit `7bc16dbd1`): under `PBW2_N3DS` resolve the pointer
-  through `PbW2_VramMap((const void *)0x06860000)` â€” the capture
-  already lands in the right host buffer (s_lcdc + 0x60000) â€” then
+  through `PbW2_VramMap((const void *)0x06860000)` — the capture
+  already lands in the right host buffer (s_lcdc + 0x60000) — then
   `MI_CpuCopy16` the dimmed 0x18000 bytes to
   `PbW2_VramMap((const void *)0x06000000)` so the bitmap BG displays
   it (the display side reads from s_bg + 0, a different buffer; on a
   real DS the two views are the same RAM). DS build untouched.
   Disassembly confirms the fixed build calls `PbW2_VramMap` instead
   of loading the raw literal.
-- Verification â€” NOT closed in the emulator: 0 exceptions across
+- Verification — NOT closed in the emulator: 0 exceptions across
   every run (continue-test 1,424 lines, battle-verify 2,401, live
   steering, audio-verify 922), but the battle transition was never
-  reached â€” Hugh's event loops identically (one line, walks off,
+  reached — Hugh's event loops identically (one line, walks off,
   re-triggers) and the starter scene (overlay 316) never fires in the
   emulator, even though it fired on Nate's hardware from the same
   save. That is a separate event/script-chain issue; a hardware test
   is the verification that matters for this fix.
-- Choppy music â€” FIXED and verified: `SeqPlayer_Tick` ran once per
+- Choppy music — FIXED and verified: `SeqPlayer_Tick` ran once per
   game frame via `NNS_SndMain` with a 0.1 s dt cap, so a game-thread
   stall skipped seconds of music (worst gap 4,036 ms on hardware).
   Fix (commit `cf005a744`): the core-2 audio thread drives
@@ -363,12 +363,12 @@ native-resolution game glyphs and native 400x240 rasterization remain open.
   no-op while the audio thread owns the tick, with fallback to the
   game thread if NDSP never starts. Threading: one static LightLock
   in seq_player.c (tick + public entry points; the delegators don't
-  take it â€” LightLock is non-recursive) and its own LightLock in
-  wave_out.c, lock order seqâ†’wave. 600 s audio verify: ZERO
+  take it — LightLock is non-recursive) and its own LightLock in
+  wave_out.c, lock order seq→wave. 600 s audio verify: ZERO
   sequence-update gaps over 100 ms, 0 exceptions, field BGM
   continuous while GX dipped to 7.5 fps with 53 overlay loads.
 - Side finding: once the Trainer Card is open, no button closes it
-  (B/X/A/START/SELECT all fail) â€” possible port bug, not
+  (B/X/A/START/SELECT all fail) — possible port bug, not
   investigated.
 
 ### Hardware follow-up
@@ -384,7 +384,7 @@ native-resolution game glyphs and native 400x240 rasterization remain open.
 - The next Black 2 New 3DS run loads the first battle overlays, returns to
   the field and reaches zone 435. It has no logged sequence update gaps
   over 100 ms. Sequence 1086 still reports 64 dropped notes.
-- The log ends during PokÃ©mon Summary initialization after overlay 207
+- The log ends during Pokémon Summary initialization after overlay 207
   loads. The Summary text setup now maps the sub-screen palette writes
   through host VRAM. A new hardware run is needed to confirm the stop.
 - SDMC requires the destination of a file rename to be vacant. The
@@ -396,7 +396,7 @@ native-resolution game glyphs and native 400x240 rasterization remain open.
 - Enable **GPU geometry (experimental)** under L+R+Y. The default is
   the CPU rasterizer. The host batches projected triangles and draws on
   a PICA200 color/depth target. It queues the transfer back to the
-  256Ã—192 layer so existing BG0 composition and title VRAM capture can
+  256×192 layer so existing BG0 composition and title VRAM capture can
   consume it. The DS compositor and LCD scaling still run on ARM11.
 - A bounded texture cache keeps PICA textures across frames. LCDC DMA,
   CPU transfers and display capture update VRAM page revisions. Cache
@@ -410,7 +410,7 @@ native-resolution game glyphs and native 400x240 rasterization remain open.
 - PICA uploads reverse the tiled row order to retain DS texture
   orientation. Negative repeating UVs shift by a whole repeat period,
   including the two-period mirror case. The fixture checks an
-  asymmetric texture on both axes and an updated 4Ã—4 descriptor.
+  asymmetric texture on both axes and an updated 4×4 descriptor.
 - The GX interpreter generates signed, fixed-point texture coordinates on
   TEXCOORD, NORMAL, or vertex submission, according to the material's
   mode. Both renderers consume these coordinates. The fixture checks
@@ -472,14 +472,14 @@ native-resolution game glyphs and native 400x240 rasterization remain open.
   frames drawn by the GPU. If another effect needs the CPU renderer,
   that frame still draws its outlines. The graphics fixture checks
   both cases. With the option enabled, the Black 2 R4 Continue replay
-  shows the player, NPC, and scenery in Striaton at 14.6â€“14.9 completed
+  shows the player, NPC, and scenery in Striaton at 14.6–14.9 completed
   3D frames per second in Azahar. All settled samples used the GPU.
   Physical New 3DS timing is pending.
 - Sequence note channels skip the per-wave diagnostics and synchronous
   log flushes. Sequence summaries and the game-facing WaveOut
   diagnostics remain available. The wave fixture verifies note playback
   through the quiet channel. In Striaton, the field music previously
-  wrote 212â€“301 WaveOut lines per four-second sample. The repeat replay
+  wrote 212–301 WaveOut lines per four-second sample. The repeat replay
   records zero per-note lines while the sequence player remains active.
 - PICA200 vertex submission computes the reciprocal texture dimensions
   once per material. GX textures have power-of-two dimensions, so the
@@ -495,14 +495,14 @@ native-resolution game glyphs and native 400x240 rasterization remain open.
   depths. Bitmap backgrounds resolve VRAM and the signed affine transform
   once per layer, then step through texels in fixed point. In a Black 2
   ARM11 benchmark, direct-color and indexed bitmap composition took 69%
-  and 65% fewer emulated ticks. Text layers took 13â€“65% fewer ticks
+  and 65% fewer emulated ticks. Text layers took 13–65% fewer ticks
   across sparse and filled maps. All six framebuffer hashes matched the
   prior compositor. The graphics fixture also checks negative scale,
   shear, wrapping, clipping, palette-zero transparency and opaque black.
 - PICA200 reuses the palette span of a compressed texture while its
   descriptor bank, address, length and descriptor-page revision match.
   It still checks revisions for the texels and the actual palette colors
-  every frame. An ARM11 benchmark drawing a 512Ã—512 compressed texture
+  every frame. An ARM11 benchmark drawing a 512×512 compressed texture
   for 36 frames after warm-up used 34.5% fewer ticks in Azahar with the
   same framebuffer hash. The fixture moves a palette to another page
   and changes its color there to check cache invalidation.
@@ -530,7 +530,7 @@ sequence updates exceeding the 100 ms timing cap. NDSP note submission
 still happens during game updates; independent scheduling and sampled
 instrument envelopes remain open.
 
-### Audio follow-up â€” LLE unlock, title stream verified, wave player built (Nov 24â€“25, Ghost)
+### Audio follow-up — LLE unlock, title stream verified, wave player built (Nov 24–25, Ghost)
 
 Observations from the cloud Azahar setup. The workstation captures used
 the Windows Lotus worker and recorded the PCM waveform:
@@ -542,8 +542,8 @@ the Windows Lotus worker and recorded the PCM waveform:
   game. No ARM11 stream fixture exists anywhere in the repo (grep: zero
   hits), so that claim cannot be traced to an artifact on disk.
 - "Silence after Start fades the stream" did **not** reproduce either:
-  samples kept climbing after the START press (2.99M â†’ 3.13M â†’ 3.62M).
-  The title music plays through title â†’ start menu.
+  samples kept climbing after the START press (2.99M → 3.13M → 3.62M).
+  The title music plays through title → start menu.
 - What unlocks audio is **LLE DSP with real firmware**: the session
   creation check demands `sdmc/3ds/dspfirm.cdc`. It fires before any
   prestage can happen, so the working setup is a persistent Lotus card
@@ -551,20 +551,20 @@ the Windows Lotus worker and recorded the PCM waveform:
   firmware at `cards/b2w2-dsp/sdmc/3ds/dspfirm.cdc`) and runs pass
   `--audio-emulation 1 --card b2w2-dsp` explicitly; the global stays at 0
   (HLE default). Correct prestage path is `--prestage
-  ~/workspace/pbw2-sd/3ds` (the `â€¦/pbw2-sd` form lands the file one level
-  too deep). The firmware is Nate's own DSP1 dump â€” it stays in the
+  ~/workspace/pbw2-sd/3ds` (the `…/pbw2-sd` form lands the file one level
+  too deep). The firmware is Nate's own DSP1 dump — it stays in the
   workspace and the Lotus card only, **never in the repo**.
 - Verified sounding: stream 0 = `STRM_TITLE`, 32,728 Hz, 3,619,310
   samples over a 120 s title run, 0 dropped. A 620 s playthrough (Test B)
   reached Aspertia City mid-dialogue with Bianca, 17,957,086 samples, 0
-  dropped, zero exceptions â€” and the title stream is the **only** audio
+  dropped, zero exceptions — and the title stream is the **only** audio
   that sounds in the whole run.
 - Named inventory from the SDAT SYMB block (Test B, 167 AUDIO log
-  lines): BGM sequences requested but silent â€” SEQ 1171
+  lines): BGM sequences requested but silent — SEQ 1171
   `SEQ_BGM_GF_LOGO`, SEQ 1004 `SEQ_BGM_TITLE01`, SEQ 1327 `SEQ_ME_CALL`,
   SEQ 1104 `SEQ_BGM_SW_C_12`, SEQ 1102 `SEQ_BGM_SW_DEMO_OPENING`, SEQ
   1009 `SEQ_BGM_STARTING2` (SEQ 1008 `SEQ_BGM_STARTING` loaded, never
-  started). SE sequences requested but silent â€” SEQ 1351
+  started). SE sequences requested but silent — SEQ 1351
   `SEQ_SE_MESSAGE` x43 (the dialogue text blip, the dominant SE), SEQ
   1356 `SEQ_SE_DECIDE1` x9, SEQ 1357 `SEQ_SE_DECIDE2` x3, SEQ 1352
   `SEQ_SE_SELECT1` x2, SEQ 1387 `SEQ_SE_KON` x2, SEQ 1383 `SEQ_SE_BOWA2`
@@ -572,11 +572,11 @@ the Windows Lotus worker and recorded the PCM waveform:
   `SEQ_SE_TOUJOU_INTRO` x1, SEQ 1656 `SEQ_SE_FLD_07` x1. Waves
   attempted: WaveArc 687 `WAVE_ARC_PV653_BLACK` (title cry, Black
   Kyurem), WaveArc 573 `WAVE_ARC_PMWB_534` (Cinccino cry in the opening).
-- Wave player is built (`n3ds/nitro/snd_arc.c` â€” real SDAT INFO/FAT
-  parsing; `n3ds/nitro/wave_out.c` â€” `NNS_SndWaveOut*` on NDSP, DS ch N
-  â†’ NDSP ch N+1, stream owns 0, PCM8/PCM16 one-shots, volume 0..127 +
+- Wave player is built (`n3ds/nitro/snd_arc.c` — real SDAT INFO/FAT
+  parsing; `n3ds/nitro/wave_out.c` — `NNS_SndWaveOut*` on NDSP, DS ch N
+  → NDSP ch N+1, stream owns 0, PCM8/PCM16 one-shots, volume 0..127 +
   pan 0..127). The full chain runs end to end: SDAT parses (2290 wave
-  arcs, 5197 files), waveArc 687 â†’ fileId 3936, 21,652 bytes read,
+  arcs, 5197 files), waveArc 687 → fileId 3936, 21,652 bytes read,
   `WaveOutStart` PCM8 21,576 samples @ 11,025 Hz, NDSP ch 16, buffer
   reaches DONE, menu reached clean, zero Azahar errors. **But the cry's
   audible duration is UNVERIFIED**: the buffer completes in ~198 ms
@@ -595,14 +595,14 @@ the Windows Lotus worker and recorded the PCM waveform:
   covers all eight WaveOut symbols.
 - **Next job: the sequence player.** It is the whole of BGM + every SE.
   Open question unchanged: both `SEQ_BGM_TITLE01` and `STRM_TITLE` are
-  requested at the title and only the stream sounds â€” whether the
+  requested at the title and only the stream sounds — whether the
   sequence is the same melody layered, a fallback, or something else
   still needs the sequence player to answer. ALSA capture is a dead end
   for Lotus sessions (the worker forces the bounded sink); verify sound
-  via session telemetry (`audio_samples > 0`, `audio_rate â‰ˆ 32728`,
+  via session telemetry (`audio_samples > 0`, `audio_rate ≈ 32728`,
   `audio_hash_fnv1a64` moving off the empty basis) or `audio_capture`.
 
-### Muse handoff â€” Nov 24, 2026
+### Muse handoff — Nov 24, 2026
 
 Nate handed this job to GPT/Codex on a big model, working from GitHub main.
 This snapshot pushes the local `ghost/b2w2-working` tip (4692909fd + this
@@ -612,11 +612,11 @@ local branch.
 #### Original field checkpoint
 - Branch tip: `ghost/b2w2-working` @ 4692909fd ("Slice 2j: finer logging
   around GFL_G3DSysCreate"), tree clean. The 2j change is diagnostic
-  logging only â€” no behaviour change.
+  logging only — no behaviour change.
 - Slice 2j build VERIFIED GOOD: 8,881,396 bytes, SHA1
   69e339f43f500e353946f2fa515727a2a2a713b0, reloc check OK.
-- Boots â†’ title â†’ intro â†’ boy/girl pick â†’ both name entries â†’ field proc
-  START (CallCreateGameEntryPointEvent) â†’ FieldmapProc_Init COMPLETES
+- Boots → title → intro → boy/girl pick → both name entries → field proc
+  START (CallCreateGameEntryPointEvent) → FieldmapProc_Init COMPLETES
   (Field_Create done, zone 427 = Aspertia City, area 210) at 60 fps,
   0 Undefined Instruction exceptions.
 - Field Slice 1 VERIFIED: six GameData field subsystems (EventData,
@@ -649,7 +649,7 @@ out runs/b2w2-slice2j-verify. The 2j [field] lines pinpoint the hang
 inside FieldRoutine_Open. Read the guest log at
 session-scratch/sdmc/3ds/black2_3ds/log.txt; status.jsonl is the
 reliable progress source (driver log is buffered). Continuous mode
-captures ONLY once, at the end â€” the end frame of a 620 s run is the
+captures ONLY once, at the end — the end frame of a 620 s run is the
 white fade; use short runs for title captures.
 
 #### Pickup notes
@@ -662,10 +662,10 @@ white fade; use short runs for title captures.
   blindly (rewrites link_stubs.c, destroys hand-written comments and
   typed void-stubs).
 - Emulator: Lotus run-game.py (Azahar backend; is_new_3ds=true;
-  Citra button order â€” START is 1024, not 8; lotus_input needs owner
+  Citra button order — START is 1024, not 8; lotus_input needs owner
   "live"). Lotus aborts B2W2 on both backends at the New 3DS speedup
-  request (ThreadManager assertion) â€” use Azahar. Chunk mode reaches
-  the title slower than continuous mode at the same frame count â€” do
+  request (ThreadManager assertion) — use Azahar. Chunk mode reaches
+  the title slower than continuous mode at the same frame count — do
   not mix frame counts.
 - Hard rules: never commit ROMs/assets/saves/builds/logs; save format
   unchanged, only the game writes .sav; every new gameplay feature
@@ -685,7 +685,7 @@ white fade; use short runs for title captures.
 
 ## 1. Goal and rules
 
-A native New 3DS port of PokÃ©mon Black 2 and White 2 (US/EU). The decompiled
+A native New 3DS port of Pokémon Black 2 and White 2 (US/EU). The decompiled
 C runs on the ARM11. A platform layer owns the 3DS GPU, input, audio, and
 where the save file lives. Personal, experimental, GPL-3.0. Owner: GitHub
 `unowncollectables`. The repo is **public** (since Nov 23, 2026).
@@ -709,7 +709,7 @@ Hard rules (do not break these):
   fast-forward. The game does not reset or relaunch itself.
 - Credit reused GPL work in `n3ds/THIRD_PARTY.md`.
 - Do not build or commit a CIA. The user builds installers with their own
-  Builder (see Â§11).
+  Builder (see §11).
 - Do not force-push. Merges need the user's yes. Branch
   `cursor/<name>-5254` for this agent's work; open a PR to `main`.
 - New 3DS only. CIA/RSF metadata requests 804 MHz, the L2 cache, and
@@ -746,10 +746,10 @@ under `port/`):
 
 Smoke helpers (box, not all of them are in the repo):
 
-- `/workspace/b2w2-3ds/scripts/azahar-smoke-wide.sh` â€” 90s Black 2 layout
+- `/workspace/b2w2-3ds/scripts/azahar-smoke-wide.sh` — 90s Black 2 layout
   shots. Typical times: `3 6 9 12 15 18 20 25 30 35 40 45 50 55 60 65 70
   75 80 85 90`. Log filter: `*:Info HW.Memory:Critical`. Crops:
-  TOP=(272,240,528,432), BOT=(272,480,528,672); stack to 256Ã—384, then 3Ã—
+  TOP=(272,240,528,432), BOT=(272,480,528,672); stack to 256×384, then 3×
   nearest-neighbor for a readable still.
 - In-repo: `tools/box/azahar-smoke.sh`, `tools/box/build-matching.sh`.
   Set `NITROFS_SRC` to the staged `nitrofs` directory and `SD_SUBDIR` to
@@ -763,7 +763,7 @@ not devkitARM's. Leave it unset on a normal devkitPro install.
 The user already has a dump, or they place one. Do not fetch a ROM from
 the network or from another repo.
 
-1. Confirm SHA1 against `upstream.lock` (`e51e6dfbâ€¦` / `b5d7490bâ€¦`).
+1. Confirm SHA1 against `upstream.lock` (`e51e6dfb…` / `b5d7490b…`).
 2. Extract NitroFS locally (the matching `pokebw2` tree can do this when
    `orig/baserom_b2_us.nds` / `orig/baserom_w2_us.nds` are present).
 3. Stage, writing **outside** this git repo:
@@ -831,11 +831,11 @@ before you compare golden SHAs.
 
 ### Ifdef rules
 
-- `PBW2_N3DS` â€” 3DS/GCC-only branches in `src/` and `lib/` so the decomp
+- `PBW2_N3DS` — 3DS/GCC-only branches in `src/` and `lib/` so the decomp
   compiles with devkitARM. The matching MWCC build does **not** define it.
   The DS `#else` path must stay byte-identical to pokebw2. Audit that
   whenever you touch a shared file.
-- `PBW2_LINK_GAME` â€” set only on the experimental game link. Host VRAM
+- `PBW2_LINK_GAME` — set only on the experimental game link. Host VRAM
   window, real `MI_UncompressLZ8`, compositor present path, and related
   runtime stay behind this flag so default shells remain golden.
 - Do not change shared non-n3ds code unless the DS `#else` is untouched
@@ -867,7 +867,7 @@ Important host files under `n3ds/nitro/` and `n3ds/source/`:
 | `vram_host.c` | Host BG/OBJ/PLTT/LCDC/OAM; `PbW2_VramMap` / `PbW2_VramResolveArm` |
 | `vram_dma.c` | DMA into host VRAM |
 | `mi_host.c` | MI, including `MI_UncompressLZ8` (LZ10/LZ11) under `PBW2_LINK_GAME` |
-| `affine_track.c` | Affine PAâ€“PD / ref tracking for mode-5 bitmaps |
+| `affine_track.c` | Affine PA–PD / ref tracking for mode-5 bitmaps |
 | `gx_host.c` | GX shims, DISPCNT/POWCNT, present hook |
 | `g3_intercept.c` | 3D command intercept |
 | `g3_gecom_host.c` | Real `NNS_G3dGeBufferOP_N` / flush / `NNS_G3dInit`; FIFO capture |
@@ -883,8 +883,8 @@ Important host files under `n3ds/nitro/` and `n3ds/source/`:
 Display / POWCNT (keep this polarity):
 
 - Official NDS and this port: `GX_DISP_SELECT_MAIN_SUB` (bit 15 set,
-  `pow & 0x8000`) â†’ main engine on the **top** 3DS LCD.
-- `GX_DISP_SELECT_SUB_MAIN` (bit 15 clear) â†’ sub engine on top, main on
+  `pow & 0x8000`) → main engine on the **top** 3DS LCD.
+- `GX_DISP_SELECT_SUB_MAIN` (bit 15 clear) → sub engine on top, main on
   the bottom.
 - Compose: `main_upper = (pow & 0x8000) != 0`.
 - Copyright and CDEMO use `MAIN_SUB`. `Title_Init` uses `SUB_MAIN` (2D
@@ -892,30 +892,30 @@ Display / POWCNT (keep this polarity):
   switches to `MAIN_SUB` to put 3D on top.
 
 Host BG window under `PBW2_LINK_GAME` is `PBW2_BG_SIZE=0x00680000`
-(`0x06000000`â€“`0x06800000`), which includes sub BG `0x06200000` and sub
+(`0x06000000`–`0x06800000`), which includes sub BG `0x06200000` and sub
 OBJ `0x06600000`, stopping just before LCDC. `PbW2_VramMap` returns the
-raw ARM pointer if unmapped â€” that is silent data loss, not a crash.
+raw ARM pointer if unmapped — that is silent data loss, not a crash.
 
 `PbW2_VramResolveArm` must not compare a host `s_bg` pointer to the
 literal `0x06000000` in a way that folds into a `R_ARM_ABS32` reloc
 subtype 15. The compare uses a split `arm_base` (`0x05000000+0x01000000`).
 Always run `scripts/n3ds_check_3dsx_reloc.py` after 3dsxtool.
 
-CDEMO (overlay 264): display mode 5, BG2/BG3 16bpp DC bitmaps 256Ã—256.
+CDEMO (overlay 264): display mode 5, BG2/BG3 16bpp DC bitmaps 256×256.
 BG2 base `0x00000`, BG3 `0x20000`. Frames are LZ11 (type `0x11`),
 uncompressed `0x20000`; `CDemo_LoadMovieFrame` DMAs the first `0x18000`
-(256Ã—192) at offset 0. Double-buffer via BG priority. Archives:
+(256×192) at offset 0. Double-buffer via BG priority. Archives:
 `ARCID_CDEMO_GFLOGO` 220 = `a/2/2/0` (151 frames); opening `a/2/2/2`.
 `MI_UncompressLZ8` is a C translation of
 `lib/nitro/src/mi/mi_uncompress.c` (LZ10 + LZ11), LINK_GAME only.
 
-Title 2D: sub BG3 (`a/0/2/6` files 0/1/2) is the PokÃ©mon Black 2 logo +
+Title 2D: sub BG3 (`a/0/2/6` files 0/1/2) is the Pokémon Black 2 logo +
 ice; sub BG2 (file 3) is scrolling ice; sub OBJ should be PRESS START;
 main BG3 (files 8/9/10) is "Developed by GAME FREAK inc." Main display
 mode is `GX_DISPMODE_VRAM_D` with `GX_SetCapture` of 2D3D+VRAM to bank D
 for motion blur. Both geometry backends feed that capture in Azahar.
 
-## 6. Milestone history (r18â€“r29)
+## 6. Milestone history (r18–r29)
 
 Smoke-round numbers, with the commit that landed the work:
 
@@ -923,16 +923,16 @@ Smoke-round numbers, with the commit that landed the work:
 | --- | --- | --- |
 | r18 | `3f11efe38e` | Present blit gated on `GameDisplayReady`. (Commit message says r17.) |
 | r19 | `2807fdc71d` | Bitmap modes and engine routing. Copyright appeared on the **bottom** while `pow=0x8000`. |
-| r20 | `521d12ce94` | **POWCNT polarity** inverted to the official mapping: bit 15 set â†’ main on top. Copyright moved to the top LCD. **Keep this polarity.** |
+| r20 | `521d12ce94` | **POWCNT polarity** inverted to the official mapping: bit 15 set → main on top. Copyright moved to the top LCD. **Keep this polarity.** |
 | r21 | `29ea55d348` | Restored mode-5 16bpp (r20 had forced 8bpp; CDEMO went black). Format nits. |
 | r22 | `d643f3f2a4` | Affine starfield work. VRAMCNT OFS was unmasked and could map `0x0620xxxx`. |
-| r23 | `2e1ce9efb5` | Azahar load Error 1: typo in `PbW2_VramResolveArm` plus a **3dsx reloc subtype trap** â€” comparing host `s_bg` to `0x06000000` folded as `R_ARM_ABS32` subtype 15; `Load3DSXFile` failed. |
+| r23 | `2e1ce9efb5` | Azahar load Error 1: typo in `PbW2_VramResolveArm` plus a **3dsx reloc subtype trap** — comparing host `s_bg` to `0x06000000` folded as `R_ARM_ABS32` subtype 15; `Load3DSXFile` failed. |
 | r24 | `de9a8c168b` | Fixed the compare / split `arm_base`. Added `scripts/n3ds_check_3dsx_reloc.py`. Fixed VRAMCNT OFS decode. |
 | r25 | `da0e30d98b` | Present / 1:1 shortcut still idle when PA was not identity. |
 | r26 | `6e65130e41` | Identity-until-write for affine; title 2D and G3D scaffold. First LINK_GAME build failed on a missing `#include <string.h>` in `affine_track.c` (landed in r27). |
-| r27 | `da31f5521e` | Mode-5 **512 B stride**; screen-base Ã— `0x4000` (drop the upload-slot heuristic); CNT VRAM base; `g3_gecom_host.c` real GeBuffer / flush / `G3dInit`; `CpuSend32` to GXFIFO. CDEMO still looked like scanline garbage â€” the real bug was the LZ stub. |
+| r27 | `da31f5521e` | Mode-5 **512 B stride**; screen-base × `0x4000` (drop the upload-slot heuristic); CNT VRAM base; `g3_gecom_host.c` real GeBuffer / flush / `G3dInit`; `CpuSend32` to GXFIFO. CDEMO still looked like scanline garbage — the real bug was the LZ stub. |
 | r28 | `8929ea2742` | **`MI_UncompressLZ8`** implemented (LINK_GAME only). CDEMO became a recognizable Game Freak logo and Black 2 opening. `Title_Init` reached. Unused `byte_off` warning removed. Top title LCD was still black. |
-| r29 | `df983ab569` | **Sub VRAM window**: `PBW2_BG_SIZE` `0x00100000` â†’ `0x00680000` so sub BG/OBJ map. Title 2D logo + scrolling ice on top, GAME FREAK line on the bottom. |
+| r29 | `df983ab569` | **Sub VRAM window**: `PBW2_BG_SIZE` `0x00100000` → `0x00680000` so sub BG/OBJ map. Title 2D logo + scrolling ice on top, GAME FREAK line on the bottom. |
 
 Default shells stayed 146976 / `b7c59f88` / `fd82c634` through r29.
 LINK_GAME Black 2 at r29 is 1250620 bytes, SHA
@@ -993,7 +993,7 @@ so a swap cannot reveal an older boot framebuffer.
 5. **Field**, then **battle**, then **save** (game is the only writer;
    cartridge format), then **comms**.
 6. **Quality-of-life features**, each a default-off Settings toggle.
-   Port ideas from the sister New 3DS repos first (see Â§12).
+   Port ideas from the sister New 3DS repos first (see §12).
 
 Do not start a randomizer, fast-forward, or any self-reset path.
 
@@ -1001,15 +1001,15 @@ Do not start a randomizer, fast-forward, or any self-reset path.
 
 Workflows:
 
-- `.github/workflows/compile.yml` â€” "Compile src/ and lib/". No ROM.
+- `.github/workflows/compile.yml` — "Compile src/ and lib/". No ROM.
   Must pass.
-- `.github/workflows/standards.yml` â€” "Code standards". clang-format
+- `.github/workflows/standards.yml` — "Code standards". clang-format
   **23.1.1** on C/H files changed versus the PR base under `src/`,
   `lib/`, and `include/` only (not `n3ds/`). Then `check_style.py`,
   skill-copy diffs, `apply_names.py --dry-run`, and
   `check_nonmatching_rows.py`. Must pass. `n3ds/` is not formatted by
   this job.
-- `.github/workflows/build.yml` â€” "Build b2_us", "Build w2_us", "Build
+- `.github/workflows/build.yml` — "Build b2_us", "Build w2_us", "Build
   both ROMs on macOS". These check out the private
   `fuddlesworth/pokebw2-roms` repo with `ROMS_DEPLOY_KEY`. They fail
   with **Not Found** in this environment. That is expected. Do not
@@ -1068,11 +1068,11 @@ reason.
 Quality features and 3D/2D host code should be mined from the New 3DS
 sister ports **first**, then adapted:
 
-- `unowncollectables/3ds-platinum` â€” `widecomp.c` (already the parent of
-  `ds2d_compose.c`); G3 FIFO â†’ GPU; movie overlays; followers as an
+- `unowncollectables/3ds-platinum` — `widecomp.c` (already the parent of
+  `ds2d_compose.c`); G3 FIFO → GPU; movie overlays; followers as an
   idea only (Gen 5 data is different).
 - `unowncollectables/Pokemon-HeartGold-SoulSilver-New3ds` at `4d4d2cb`
-  â€” Citro3D setup, `g3packet.c`, geometry queue, texture upload from DS
+  — Citro3D setup, `g3packet.c`, geometry queue, texture upload from DS
   VRAM keys, present integration, thread and save-file lessons.
 
 Jules / estyseesghosts **kohjoh / sinjoh** are Old-3DS-only and
@@ -1094,7 +1094,7 @@ on one tree; a change that compiles only one of them is not done.
 `python3 scripts/n3ds_link_closure.py` builds a boot/title
 `game_objects.rsp` (~259 objects; includes `lib/nnsys/src/fnd/*`;
 wifi/field/app trees excluded; `lib/nitro/src/spi/pm.c` and
-`lib/nitro/src/pxi/*` excluded â€” host `pm_host.c` / `pxi_host.c`
+`lib/nitro/src/pxi/*` excluded — host `pm_host.c` / `pxi_host.c`
 instead). Stage overlays at `sdmc:/3ds/<game>_3ds/overlays/`. After
 `SystemInit` expect `GFLAppInit enter`, working Fnd heaps (no
 `0x02000000` writes from `OS_CreateExtraHeap`), then `GameInit enter`,
@@ -1137,12 +1137,12 @@ Useful Azahar / host lines when debugging 2D: `vram upload BG2/3`,
 `vramcnt on/+60`, `mode5-on/+60`. Mode-5 16bpp DC bitmap: `BGxCNT` bit 7
 set = bitmap, bit 2 set = 16bpp direct (bit 15 opaque). Direct-color
 black with bit 15 set is visible. Indexed bitmaps use palette index zero
-for transparency. Affine sampling uses BGx PAâ€“PD and BGxX/Y (20.8).
+for transparency. Affine sampling uses BGx PA–PD and BGxX/Y (20.8).
 PA/PD default to `0x100` until the game writes the transform.
 
 CDEMO `boot_proc` queues overlay 264 twice (GF logo `demo=0`, then
 opening `demo=2`). An immediate return usually means the script hit
-`CDEMO_CMD_END`, not a missing overlay â€” check
+`CDEMO_CMD_END`, not a missing overlay — check
 `[overlay] GFL_OvlUnload id=264` spacing and `[GX] disp trace` for VRAM
 growth during `CDemo_LoadMovieFrame`.
 
@@ -1157,7 +1157,7 @@ saves, or keys.
 - [tools/box/build-matching.sh](../tools/box/build-matching.sh)
 - [tools/box/azahar-smoke.sh](../tools/box/azahar-smoke.sh)
 - [tools/box/patches/pokebw2-345b790-delinks-rename.patch](../tools/box/patches/pokebw2-345b790-delinks-rename.patch)
-  â€” the 66 delink renames, already applied in this tree
+  — the 66 delink renames, already applied in this tree
 
 `scripts/check_delinks.py` reports 0 missing. Both arm9 `delinks.txt`
 files name real sources (66 paths each under `src/system/savedata/`,
