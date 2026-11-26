@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "present.h"
+#include "game_text.h"
 #include "settings.h"
 
 #include <3ds.h>
@@ -56,12 +57,31 @@ static bool check_game_fit(void) {
     return true;
 }
 
+static bool check_native_text(void) {
+    static u32 ink[256 * 192];
+    const u16 background = 0x07c0;
+    for (unsigned i = 0; i < 256 * 192; ++i) picture[i] = background;
+    for (unsigned x = 0; x < 4; ++x) {
+        unsigned i = 16 * 256 + 8 + x;
+        picture[i] = 0xf800;
+        ink[i] = PBW2_TEXT_NATIVE | PBW2_TEXT_INK | (x << 16) | background;
+    }
+    Present_DrawGameWithText(GFX_TOP, picture, DISPLAY_TOP_FIT | DISPLAY_SHARP_TEXT, ink);
+    for (unsigned y = 18; y < 24; ++y) {
+        for (unsigned x = 46; x < 57; ++x) {
+            u16 expected = y == 20 && x >= 50 && x < 54 ? 0xf800 : background;
+            if (framebuffer[x * LCD_HEIGHT + LCD_HEIGHT - 1 - y] != expected) return false;
+        }
+    }
+    return true;
+}
+
 int main(void) {
     archiveMountSdmc();
     memset(framebuffer, 0xff, sizeof framebuffer);
     bool passed = check_blit(GFX_TOP, 320, 240) &&
                   check_blit(GFX_TOP, 256, 192) &&
-                  check_blit(GFX_BOTTOM, 255, 191) && check_game_fit();
+                  check_blit(GFX_BOTTOM, 255, 191) && check_game_fit() && check_native_text();
     FILE *out = fopen("sdmc:/present-blit-test.txt", "w");
     if (out) {
         fprintf(out, "%s\n", passed ? "PASS" : "FAIL");

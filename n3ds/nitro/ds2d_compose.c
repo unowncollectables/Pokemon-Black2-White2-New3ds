@@ -214,7 +214,8 @@ typedef struct {
     u8 planes[256 * 192];
     const u8 *window;
     bool track;
-    u8 *ink;
+    u32 *ink;
+    bool nativeText;
     u16 first;
     u16 second;
     u16 eva;
@@ -248,9 +249,12 @@ static inline void put_bg_pixel(u16 *out, BgBlend *blend, unsigned i, unsigned p
     if (blend && blend->ink) blend->ink[i] = 0;
 }
 
-static void put_text_pixel(u16 *out, BgBlend *blend, unsigned i, unsigned plane, u16 color, bool ink) {
+static void put_text_pixel(u16 *out, BgBlend *blend, unsigned i, unsigned plane, u16 color, u32 ink, const u16 *palette) {
     put_bg_pixel(out, blend, i, plane, color);
-    if (blend && blend->ink && (!blend->window || (blend->window[i] & plane))) blend->ink[i] = ink;
+    if (!ink || !blend || !blend->ink || (blend->window && !(blend->window[i] & plane))) return;
+    blend->ink[i] = PBW2_TEXT_INK;
+    if (blend->nativeText && (ink & PBW2_TEXT_NATIVE))
+        blend->ink[i] = (ink & ~0xffu) | PBW2_TEXT_INK | palette[ink & 255];
 }
 
 static void compose_text_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmode, u16 *out, BgBlend *blend) {
@@ -295,7 +299,9 @@ static void compose_text_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmo
                 u32 words[2];
                 memcpy(words, source, sizeof words);
                 if (!(words[0] | words[1])) continue;
-                u8 ink = blend && blend->ink ? PbW2_TextTileRow(source - ty * 8, 64, ty) : 0;
+                u32 details[8];
+                u8 ink = blend && blend->ink ? PbW2_TextTileRow(source - ty * 8, 64, ty, details) : 0;
+                bool unflipped = (sc & 0x0c00) == 0;
                 unsigned tx = begin ^ flip;
                 int step = flip ? -1 : 1;
                 if (!blend) {
@@ -306,7 +312,9 @@ static void compose_text_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmo
                 } else {
                     for (unsigned i = 0; i < count; ++i, tx += step) {
                         unsigned color = source[tx];
-                        if (color) put_text_pixel(out, blend, dst + i, plane, colors[color], (ink >> tx) & 1);
+                        if (color) put_text_pixel(out, blend, dst + i, plane, colors[color],
+                                                      (ink & (1u << tx)) ? (unflipped ? details[tx] | PBW2_TEXT_INK : PBW2_TEXT_INK) : 0,
+                                                      colors);
                     }
                 }
             } else {
@@ -314,12 +322,16 @@ static void compose_text_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmo
                 u32 nibbles;
                 memcpy(&nibbles, source, sizeof nibbles);
                 if (!nibbles) continue;
-                u8 ink = blend && blend->ink ? PbW2_TextTileRow(source - ty * 4, 32, ty) : 0;
+                u32 details[8];
+                u8 ink = blend && blend->ink ? PbW2_TextTileRow(source - ty * 4, 32, ty, details) : 0;
+                bool unflipped = (sc & 0x0c00) == 0;
                 const u16 *palette = colors + (sc >> 12) * 16;
                 for (unsigned i = 0; i < count; i++) {
                     unsigned tx = (begin + i) ^ flip;
                     unsigned color = (nibbles >> (tx * 4)) & 15;
-                    if (color) put_text_pixel(out, blend, dst + i, plane, palette[color], (ink >> tx) & 1);
+                    if (color) put_text_pixel(out, blend, dst + i, plane, palette[color],
+                                              (ink & (1u << tx)) ? (unflipped ? details[tx] | PBW2_TEXT_INK : PBW2_TEXT_INK) : 0,
+                                              palette);
                 }
             }
         }
@@ -777,7 +789,7 @@ const u16 *PbW2_TopSides(void) {
     return s_haveSides ? s_sides : NULL;
 }
 
-static void compose_engine(const u8 *regs, int is_sub, u16 *out, u8 *ink) {
+static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
     static BgBlend bg_blend;
     static u16 underGeometry[256 * 192];
     BgBlend *blend = NULL;
@@ -807,6 +819,9 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u8 *ink) {
     bg_blend.track = layerAlpha || layerBrightness;
     bg_blend.first = 0;
     bg_blend.ink = ((dc >> REG_GX_DISPCNT_MODE_SHIFT) & 3) == 1 ? ink : NULL;
+    bg_blend.nativeText = bg_blend.ink && !window && !layerAlpha && !layerBrightness &&
+                          !reg_u16(regs, 0x6c) && (is_sub || !(reg_GX_DISPCAPCNT & REG_GX_DISPCAPCNT_E_MASK));
+    bg_blend.track |= bg_blend.nativeText;
     if (window || bg_blend.track || bg_blend.ink) blend = &bg_blend;
     if (bg_blend.track) memset(bg_blend.planes, 1u << 5, sizeof(bg_blend.planes));
     if (layerAlpha) {
@@ -871,20 +886,31 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u8 *ink) {
         }
         apply_master_bright(s_nativeTop, PBW2_NATIVE_TOP_WIDTH * PBW2_NATIVE_TOP_HEIGHT, reg_u16(regs, 0x6cu));
     }
+    if (bg_blend.ink) {
+        for (unsigned i = 0; i < 256 * 192; ++i) {
+            u32 info = ink[i];
+            if (!(info & PBW2_TEXT_NATIVE)) continue;
+            int x = PbW2_TextNativeCoordinate(i % 256, (info >> 16) & 31);
+            int y = PbW2_TextNativeCoordinate(i / 256, (info >> 21) & 31);
+            if (!bg_blend.nativeText || !bg_blend.planes[i] || (unsigned)x >= 320 || (unsigned)y >= 240 ||
+                bg_blend.planes[i] != bg_blend.planes[PbW2_TextSourceCoordinate(y) * 256 + PbW2_TextSourceCoordinate(x)])
+                ink[i] = PBW2_TEXT_INK;
+        }
+    }
     if (layerBrightness) apply_layer_brightness(out, blend, bldcnt, factor);
     if (!is_sub) capture_main(out, dc);
     if (!is_sub && s_haveSides) apply_master_bright(s_sides, 64 * 192, reg_u16(regs, 0x6cu));
     apply_master_bright(out, 256 * 192, reg_u16(regs, 0x6cu));
 }
 
-void PbW2_ComposeScreensWithText(u16 *top_rgb565, u16 *bottom_rgb565, u8 *topInk, u8 *bottomInk) {
+void PbW2_ComposeScreensWithText(u16 *top_rgb565, u16 *bottom_rgb565, u32 *topInk, u32 *bottomInk) {
     int main_upper = (*(const u16 *)(pbw2_io + 0x304) & 0x8000u) != 0;
     u16 *main_fb;
     u16 *sub_fb;
 
     s_haveSides = s_haveNativeTop = false;
-    if (topInk) memset(topInk, 0, 256 * 192);
-    if (bottomInk) memset(bottomInk, 0, 256 * 192);
+    if (topInk) memset(topInk, 0, 256 * 192 * sizeof(*topInk));
+    if (bottomInk) memset(bottomInk, 0, 256 * 192 * sizeof(*bottomInk));
     s_mode5_diag.compose_frames++;
     if (main_upper) {
         main_fb = top_rgb565;

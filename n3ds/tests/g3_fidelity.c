@@ -944,9 +944,9 @@ static bool check_wide_frame(bool gpu) {
 }
 
 static bool check_sharp_text(void) {
-    static u8 ink[256 * 192];
+    static u32 ink[256 * 192];
     u8 glyphPixels[32] = { 0x01 };
-    u8 windowPixels[32] = { 0x21 };
+    u8 windowPixels[32] = { 0x22 };
     GFLBitmap glyph = { glyphPixels, 8, 8, 32, GFL_BITMAP_WRAPPED };
     GFLBitmap window = { windowPixels, 8, 8, 32, GFL_BITMAP_WRAPPED };
     memset(pbw2_io, 0, sizeof pbw2_io);
@@ -962,11 +962,12 @@ static bool check_sharp_text(void) {
     map[0] = 1;
     palette[1] = GX_RGB(31, 0, 0);
     palette[2] = GX_RGB(0, 31, 0);
-    memcpy(vram + 32, windowPixels, sizeof windowPixels);
     PbW2_TextMarkGlyph(&window, &glyph, 0, 0, 8, 8);
+    windowPixels[0] = 0x21;
+    memcpy(vram + 32, windowPixels, sizeof windowPixels);
     PbW2_TextUpload(&window, vram, 1, sizeof windowPixels);
     PbW2_ComposeScreensWithText(pixels, NULL, ink, NULL);
-    if (ink[0] != 1 || ink[1] || pixels[0] != 0xf800 || pixels[1] != 0x07c0) return false;
+    if (ink[0] != (PBW2_TEXT_NATIVE | PBW2_TEXT_INK | 0x07c0u) || ink[1] || pixels[0] != 0xf800 || pixels[1] != 0x07c0) return false;
     vram[32] = 0x22;
     PbW2_ComposeScreensWithText(pixels, NULL, ink, NULL);
     if (ink[0] || pixels[0] != 0x07c0) return false;

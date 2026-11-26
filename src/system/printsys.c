@@ -479,19 +479,19 @@ static const u16 *GFL_TextRndDrawString(TextRenderer *renderer, const u16 *str, 
 
 static void GFL_TextRndDrawCharProc_IDX4(GFLBitmap *bitmap, int x, int y, Font *font, u16 c, GlyphInfo *info) {
     GFL_FontGetGlyph(font, c, GFL_BitmapGetPixelData(g_TextRendererTempBitmap), info);
-    GFL_BitmapCopyArea(g_TextRendererTempBitmap, bitmap, 0, 0, x + info->x, y, info->width, info->height, 0);
 #ifdef PBW2_N3DS
     PbW2_TextMarkGlyph(bitmap, g_TextRendererTempBitmap, x + info->x, y, info->width, info->height);
 #endif
+    GFL_BitmapCopyArea(g_TextRendererTempBitmap, bitmap, 0, 0, x + info->x, y, info->width, info->height, 0);
 }
 
 static void GFL_TextRndDrawCharProc_IDX8(GFLBitmap *bitmap, int x, int y, Font *font, u16 c, GlyphInfo *info) {
     GFL_FontGetGlyph(font, c, GFL_BitmapGetPixelData(g_TextRendererTempBitmap), info);
-    GFL_BitmapCopyAreaRebased(g_TextRendererTempBitmap, bitmap, 0, 0, x + info->x, y, info->width, info->height, 0xf,
-                              0);
 #ifdef PBW2_N3DS
     PbW2_TextMarkGlyph(bitmap, g_TextRendererTempBitmap, x + info->x, y, info->width, info->height);
 #endif
+    GFL_BitmapCopyAreaRebased(g_TextRendererTempBitmap, bitmap, 0, 0, x + info->x, y, info->width, info->height, 0xf,
+                              0);
 }
 
 static const u16 *GFL_TextRndExecLayoutCmd(TextRenderer *renderer, const u16 *cmd) {

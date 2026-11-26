@@ -1131,7 +1131,7 @@ void PbW2_G3RasterCommand(u32 op, const u32 *p, const MtxFx44 *clip,
 }
 
 bool PbW2_G3RasterComposite(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawColors, u16 *sides, u16 backdrop,
-                            u16 *native, bool *haveNative, u8 *ink) {
+                            u16 *native, bool *haveNative, u32 *ink) {
     lock_display();
     if (haveNative) *haveNative = false;
 #ifdef PBW2_GPU_GEOMETRY
