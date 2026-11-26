@@ -9,11 +9,12 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
 L+R+Y opens Display settings. Widescreen 3D defaults off. For a full top-screen
 viewport it expands the horizontal clip volume by 25 percent. The CPU and
 PICA200 renderers can draw 32 extra columns on each side. The compositor keeps
-the original 256 columns for HUD placement and DS display capture. It shows
-the expanded 320x192 picture at 400x240 with equal scaling on both axes.
-Scenes using DS windows, layer blending or capture currently use centered
-4:3 presentation. Sharp scaling applies to the composed picture. Independent
-native-resolution game glyphs and native 400x240 rasterization remain open.
+the original 256 columns for HUD placement and DS display capture. Eligible
+PICA200 frames rasterize the world at the LCD's 400x240 resolution. The
+compositor preserves foreground 2D layers over that geometry. The software
+fallback scales a 320x192 picture with equal scaling on both axes.
+Scenes using DS windows, layer blending or capture use centered 4:3
+presentation. Independent native-resolution game glyphs remain open.
 
 ## 0. Nov 24 follow-up — New 3DS boot and map loading
 

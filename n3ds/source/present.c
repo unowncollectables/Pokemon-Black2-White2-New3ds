@@ -13,6 +13,7 @@ void Pbw2_GspVblank(void) {
 #if defined(PBW2_LINK_GAME)
 #include "ds2d_compose.h"
 #include "game_present.h"
+#include "g3_raster.h"
 #include "vram_host.h"
 #endif
 
@@ -64,7 +65,10 @@ void GxShim_Present(uint32_t flags) {
             uint32_t options = Settings_DisplayFlags();
             if (top) {
                 const u16 *sides = PbW2_TopSides();
-                if (sides && (options & DISPLAY_WIDE_FIELD)) {
+                const u16 *native = PbW2_NativeTop();
+                if (native && (options & DISPLAY_WIDE_FIELD)) {
+                    Present_BlitRGB565(GFX_TOP, native, PBW2_NATIVE_TOP_WIDTH, PBW2_NATIVE_TOP_HEIGHT);
+                } else if (sides && (options & DISPLAY_WIDE_FIELD)) {
                     static u16 wide[320 * GAME_HEIGHT];
                     for (unsigned y = 0; y < GAME_HEIGHT; ++y) {
                         memcpy(wide + y * 320, sides + y * 64, 32 * sizeof(u16));

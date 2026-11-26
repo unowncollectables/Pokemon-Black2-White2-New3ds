@@ -213,7 +213,7 @@ int G3X_GetVectorMtx(MtxFx33 *dest) {
 }
 
 void PbW2_G3Compose(int is_main, u16 *fb_rgb565) {
-    if (is_main && fb_rgb565 != NULL) PbW2_G3RasterComposite(fb_rgb565, NULL, NULL, NULL, NULL, 0);
+    if (is_main && fb_rgb565 != NULL) PbW2_G3RasterComposite(fb_rgb565, NULL, NULL, NULL, NULL, 0, NULL, NULL);
 }
 
 #endif

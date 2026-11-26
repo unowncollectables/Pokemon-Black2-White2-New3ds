@@ -24,9 +24,13 @@ static DVLB_s *s_shader;
 static shaderProgram_s s_program;
 static C3D_RenderTarget *s_target;
 static unsigned s_renderWidth = 256;
+static u16 *s_native;
+static C3D_RenderTarget *s_nativeTarget;
+static u32 *s_nativePixels;
 
-void PbW2_PicaSetFrameWidth(unsigned width) {
+void PbW2_PicaSetFrameWidth(unsigned width, u16 *native) {
     s_renderWidth = width;
+    s_native = native;
 }
 static PicaVertex *s_vertices;
 static u32 *s_pixels;
@@ -75,6 +79,8 @@ void PbW2_PicaExit(void) {
         if (s_program.vertexShader) shaderProgramFree(&s_program);
         DVLB_Free(s_shader);
     }
+    if (s_nativePixels) linearFree(s_nativePixels);
+    if (s_nativeTarget) C3D_RenderTargetDelete(s_nativeTarget);
     if (s_pixels) linearFree(s_pixels);
     if (s_vertices) linearFree(s_vertices);
     if (s_target) C3D_RenderTargetDelete(s_target);
@@ -199,11 +205,26 @@ bool PbW2_PicaTriangle(const PicaVertex vertex[3], int texture, PicaAlphaTest te
 
 bool PbW2_PicaFinish(uint32_t clearColor, float clearDepth, uint16_t *result) {
     u64 start = svcGetSystemTick();
-    if (!s_batchCount || !C3D_FrameBegin(0)) return false;
+    if (!s_batchCount) return false;
+    if (s_native && !s_nativeTarget) {
+        s_nativePixels = linearAlloc(400 * TARGET_HEIGHT * sizeof(*s_nativePixels));
+        if (!s_nativePixels) return false;
+        s_nativeTarget = C3D_RenderTargetCreate(400, TARGET_HEIGHT, GPU_RB_RGBA8, GPU_RB_DEPTH24_STENCIL8);
+        if (!s_nativeTarget) {
+            linearFree(s_nativePixels);
+            s_nativePixels = NULL;
+            return false;
+        }
+    }
+    if (!C3D_FrameBegin(0)) return false;
+    C3D_RenderTarget *target = s_native ? s_nativeTarget : s_target;
+    u32 *pixels = s_native ? s_nativePixels : s_pixels;
+    unsigned stride = s_native ? 400 : WIDTH;
+    unsigned height = s_native ? 240 : HEIGHT;
     GSPGPU_FlushDataCache(s_vertices, s_vertexCount * sizeof(*s_vertices));
-    C3D_RenderTargetClear(s_target, C3D_CLEAR_ALL, clearColor, (unsigned)(0xffffff * clearDepth));
-    C3D_FrameDrawOn(s_target);
-    C3D_SetViewport(0, 0, s_renderWidth, HEIGHT);
+    C3D_RenderTargetClear(target, C3D_CLEAR_ALL, clearColor, (unsigned)(0xffffff * clearDepth));
+    C3D_FrameDrawOn(target);
+    C3D_SetViewport(0, 0, s_native ? 400 : s_renderWidth, height);
     C3D_BindProgram(&s_program);
     C3D_AttrInfo *attrs = C3D_GetAttrInfo();
     AttrInfo_Init(attrs);
@@ -264,29 +285,39 @@ bool PbW2_PicaFinish(uint32_t clearColor, float clearDepth, uint16_t *result) {
         C3D_DrawArrays(GPU_TRIANGLES, batch->first, batch->count);
         previous = batch;
     }
-    u32 dims = GX_BUFFER_DIM(WIDTH, TARGET_HEIGHT);
+    u32 dims = GX_BUFFER_DIM(stride, TARGET_HEIGHT);
     u32 flags = GX_TRANSFER_FLIP_VERT(1) | GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8)
                 | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGBA8);
     /* Vertex and texture writes are flushed where they are made. Flush
      * only the command list here, then enqueue the readback after it. */
     C3D_FrameSplit(GX_CMDLIST_FLUSH);
-    GX_DisplayTransfer(s_target->frameBuf.colorBuf, dims, s_pixels, dims, flags);
+    GX_DisplayTransfer(target->frameBuf.colorBuf, dims, pixels, dims, flags);
     C3D_FrameEnd(GX_CMDLIST_FLUSH);
     /* Beginning the next frame waits for its predecessor, including the transfer. */
     if (!C3D_FrameBegin(0)) return false;
     C3D_FrameEnd(GX_CMDLIST_FLUSH);
-    GSPGPU_InvalidateDataCache(s_pixels, WIDTH * HEIGHT * sizeof(*s_pixels));
+    GSPGPU_InvalidateDataCache(pixels, stride * height * sizeof(*pixels));
+    u16 *output = s_native ? s_native : result;
+    unsigned outputWidth = s_native ? 400 : s_renderWidth;
     /* Prefetch the next ARM11 cache lines while converting this one.
      * The readback allocation includes the unused rows below the image. */
-    for (unsigned y = 0; y < HEIGHT; ++y) {
-        for (unsigned x = 0; x < s_renderWidth; x += 8) {
-            unsigned startPixel = y * WIDTH + x;
-            __builtin_prefetch(s_pixels + startPixel + 32, 0, 0);
+    for (unsigned y = 0; y < height; ++y) {
+        for (unsigned x = 0; x < outputWidth; x += 8) {
+            unsigned startPixel = y * stride + x;
+            __builtin_prefetch(pixels + startPixel + 32, 0, 0);
             for (unsigned j = 0; j < 8; ++j) {
-                u32 rgba = s_pixels[startPixel + j];
-                result[y * s_renderWidth + x + j] = ((rgba >> 27) & 31) | ((rgba >> 14) & 0x3e0) | ((rgba >> 1) & 0x7c00)
+                u32 rgba = pixels[startPixel + j];
+                output[y * outputWidth + x + j] = ((rgba >> 27) & 31) | ((rgba >> 14) & 0x3e0) | ((rgba >> 1) & 0x7c00)
                                        | ((rgba & 255) > 3 ? 0x8000 : 0);
             }
+        }
+    }
+    if (s_native) {
+        /* Map DS pixel centers to the nearest native sample for legacy capture. */
+        for (unsigned y = 0; y < HEIGHT; ++y) {
+            const u16 *row = s_native + ((10 * y + 5) / 8) * 400;
+            for (unsigned x = 0; x < s_renderWidth; ++x)
+                result[y * s_renderWidth + x] = row[(10 * x + 5) / 8];
         }
     }
     static bool reported;

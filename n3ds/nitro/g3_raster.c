@@ -42,6 +42,11 @@ typedef struct {
     u32 fogDepthW[MAX_PIXELS];
 } Frame;
 
+#ifdef PBW2_GPU_GEOMETRY
+static u16 s_nativeFrames[2][PBW2_NATIVE_TOP_WIDTH * PBW2_NATIVE_TOP_HEIGHT];
+static unsigned s_nativeDisplayed;
+static bool s_nativeFrame, s_haveNative;
+#endif
 static unsigned s_width = WIDTH, s_displayWidth = WIDTH;
 static unsigned char s_wideEnabled;
 static bool s_widePrimitive;
@@ -153,6 +158,9 @@ void PbW2_G3RasterReset(void) {
     lock_display();
     memset(s_display, 0, sizeof s_display);
     s_displayWidth = WIDTH;
+#ifdef PBW2_GPU_GEOMETRY
+    s_haveNative = false;
+#endif
     unlock_display();
     s_frameStarted = s_inPrimitive = 0;
 #ifdef PBW2_GPU_GEOMETRY
@@ -801,7 +809,8 @@ static bool render_with_pica(void) {
     u32 clear = s_clearColor;
     u32 color = ((clear & 31) * 255 / 31) << 24 | (((clear >> 5) & 31) * 255 / 31) << 16
                 | (((clear >> 10) & 31) * 255 / 31) << 8 | ((clear >> 16) & 31) * 255 / 31;
-    PbW2_PicaSetFrameWidth(s_width);
+    s_nativeFrame = s_width == WIDE_WIDTH && !(reg_GX_DISPCAPCNT & REG_GX_DISPCAPCNT_E_MASK);
+    PbW2_PicaSetFrameWidth(s_width, s_nativeFrame ? s_nativeFrames[s_nativeDisplayed ^ 1] : NULL);
     return PbW2_PicaFinish(color, s_clearDepth / 32767.0f, s_drawing.color);
 }
 #endif
@@ -1106,6 +1115,10 @@ void PbW2_G3RasterCommand(u32 op, const u32 *p, const MtxFx44 *clip,
         report_geometry_rate(s_gpuFrame);
 #endif
         lock_display();
+#ifdef PBW2_GPU_GEOMETRY
+        s_haveNative = s_gpuFrame && s_nativeFrame;
+        if (s_haveNative) s_nativeDisplayed ^= 1;
+#endif
         s_displayWidth = s_width;
         memcpy(s_display, s_drawing.color, s_width * HEIGHT * sizeof(*s_display));
         unlock_display();
@@ -1117,8 +1130,16 @@ void PbW2_G3RasterCommand(u32 op, const u32 *p, const MtxFx44 *clip,
     emit_vertex(clip, texture);
 }
 
-bool PbW2_G3RasterComposite(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawColors, u16 *sides, u16 backdrop) {
+bool PbW2_G3RasterComposite(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawColors, u16 *sides, u16 backdrop,
+                            u16 *native, bool *haveNative) {
     lock_display();
+    if (haveNative) *haveNative = false;
+#ifdef PBW2_GPU_GEOMETRY
+    if (native && haveNative && s_haveNative) {
+        memcpy(native, s_nativeFrames[s_nativeDisplayed], sizeof s_nativeFrames[0]);
+        *haveNative = true;
+    }
+#endif
     for (unsigned y = 0; y < HEIGHT; ++y) {
         const u16 *row = s_display + y * s_displayWidth + (s_displayWidth - WIDTH) / 2;
         if (sides && s_displayWidth == WIDE_WIDTH) {
