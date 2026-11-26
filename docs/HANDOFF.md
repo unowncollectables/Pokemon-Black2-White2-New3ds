@@ -260,6 +260,51 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
   playthrough to the field has been re-run on the fixed build yet.
   That is the natural next job.
 
+### Hardware crash — SOLVED in the emulator (Nov 25–26, Ghost)
+
+- Nate's hardware test on f33a37eea crashed after Bianca walks into
+  the house — Luma shut the 3DS down. His hardware log (4,142 lines)
+  ends abruptly after `FieldmapProc_End` + `GFL_OvlLoad id=337 ok`
+  (no error line anywhere); the field ran 20,215 frames in zone 427
+  Aspertia City, then the proc exits and overlay 337 loads. His Luma
+  dump, parsed by hand: PC `0x005da3a4`, `r3 = FAR = 0x02fffc3c`,
+  DFSR 5 (translation fault, read), faulting instruction `ldr r3,
+  [r3]` in `EventMapChangeCore_Callback` state 3 (CORE_RUN_CHECKS),
+  right after loading the literal `0x02fffc3c`. That address is
+  `HW_VBLANK_COUNT_BUF` — the VBlank counter in the DSi mirror of main
+  RAM. The DSProt check macro reads it raw, bypassing the host's
+  `pbw2_vblank_count()`, and on the 3DS that address is unmapped → data
+  abort on the first map change (Bianca's house warp, 427 → 428).
+  Siblings checked and clear (`SCFG_EXT_COPY` already excluded on
+  N3DS; `MB_TIME_SEED` dead code via `mb_stub`).
+- Fix (commit `121a1ec84`, 2 files): under `PBW2_N3DS`,
+  `HW_VBLANK_COUNT_BUF` now names the host word
+  `PbW2_VBlankCountBuf`, incremented every VBlank by `pbw2_vblank()`
+  — the same pattern as the existing `PbW2_RomHeaderBuf`.
+  Binary-verified: the literal is now `0x00a99fe0` (.bss), and
+  `0x02fffc3c` occurs zero times in `.text`.
+- Verification: 1800 s emulator run on the fixed build (`62d763a1`)
+  drove straight through the exact hardware crash point:
+  `FieldmapProc_End` → ov337 loaded a second time → **no crash** →
+  `Field_Create enter zone=428`, `Field_Create done zone=428 area=348`,
+  `FieldRoutine_Open enter zone=428`, and the new field ran its routines
+  to the end of the run. The final frame is the bedroom interior — bed,
+  dresser, TV, player sprite standing in the room. **Zero exceptions in
+  49,887 log lines.** The DSProt check took the func path, not tamper,
+  so the port's ov337 code matches the expected checksum
+  (`0x9f75a8d6`). Audio stayed alive the whole run (512.6 s capture, 0
+  silent windows, 1,019 notes / 0 dropped; demo BGM 1102 played 785
+  notes through the long field section). The first ov337 load was
+  `DSProt_Init` only, same as the hardware log's line 659.
+- **Still needs a real-hardware test** (via patch-builder with this
+  branch) before calling the crash closed — the emulator proves the code
+  path works end to end, not that the hardware fault is gone.
+- Frame rate, separate and still open: field 4.1 fps, house interior
+  7.3 fps (both 0 GPU — PICA200 covers neither field scene; LCD 29
+  fps). On hardware the title/intro ran ~59.5 fps GX swaps; the field
+  3D is CPU-rasterized at ~4.5 fps. The fps job is the next big one
+  after the crash is confirmed on hardware.
+
 ### Experimental PICA200 geometry
 
 - Enable **GPU geometry (experimental)** under L+R+Y. The default is

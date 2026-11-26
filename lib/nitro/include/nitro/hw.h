@@ -142,8 +142,20 @@
 #define HW_MAIN_MEM 0x02000000
 #define HW_DTCM_SIZE 0x4000
 
-// VBlank counter in shared memory, from the DSi mirror of main memory
+// VBlank counter in shared memory, from the DSi mirror of main memory.
+// On the 3DS port the DSi mirror is not mapped: 0x02fffc3c sits outside the
+// game's memory, so a raw read there data-aborts (translation fault). That
+// is what killed the first map change on hardware: the DSProt check macro
+// reads this address directly (lib/dsprot/include/dsprot/dsprot.h), bypassing
+// pbw2_vblank_count(). The host therefore backs the counter in a normal
+// global, updated every VBlank by pbw2_vblank(), the same pattern as
+// PbW2_RomHeaderBuf below.
+#ifdef PBW2_N3DS
+extern u32 PbW2_VBlankCountBuf;
+#define HW_VBLANK_COUNT_BUF ((u32)&PbW2_VBlankCountBuf)
+#else
 #define HW_VBLANK_COUNT_BUF 0x02fffc3c
+#endif
 // The end of the instruction TCM, and where the DS's cartridge slot is mapped
 #define HW_ITCM_END 0x02000000
 #define HW_CTRDG_ROM 0x08000000

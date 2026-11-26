@@ -15,7 +15,10 @@
 u8 pbw2_io[PBW2_IO_SIZE] ATTRIBUTE_ALIGN(32);
 
 static OSSystemWork s_work;
-static u32 s_vblanks;
+/* The VBlank counter. Backs HW_VBLANK_COUNT_BUF (see nitro/hw.h): the DSProt
+ * check macro reads that address raw, so it must be a mapped word the host
+ * increments every VBlank, not the unmapped DSi mirror address. */
+u32 PbW2_VBlankCountBuf = 0;
 static u32 s_irq_check;
 static u32 s_irq_mask;
 static OSIrqFunction s_irq[32];
@@ -36,7 +39,7 @@ OSSystemWork *pbw2_system_work(void) {
 }
 
 u32 pbw2_vblank_count(void) {
-    return __atomic_load_n(&s_vblanks, __ATOMIC_ACQUIRE);
+    return __atomic_load_n(&PbW2_VBlankCountBuf, __ATOMIC_ACQUIRE);
 }
 
 void pbw2_irq_check_or(u32 mask) {
@@ -51,7 +54,7 @@ void pbw2_vblank(void) {
     if (handler) {
         handler();
     }
-    __atomic_fetch_add(&s_vblanks, 1, __ATOMIC_RELEASE);
+    __atomic_fetch_add(&PbW2_VBlankCountBuf, 1, __ATOMIC_RELEASE);
 }
 
 u64 OS_GetTick(void) {
