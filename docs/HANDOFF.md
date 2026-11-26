@@ -401,6 +401,13 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
 - PICA200 vertex submission computes the reciprocal texture dimensions
   once per material. GX textures have power-of-two dimensions, so the
   same scaled coordinates reach the GPU without two divides per vertex.
+- Shared quad and strip vertices carry their clip-plane mask from
+  emission to triangle submission. A synthetic ARM11 benchmark in
+  Azahar records 8.9% fewer ticks for quad strips and 4.9% fewer for
+  independent triangles. Before-and-after framebuffer hashes match.
+  With the current texture and clip optimizations, the same Striaton
+  Continue replay reaches about 17 completed 3D frames per second in
+  Azahar. The previous run sustained about 14.9.
 
 ### Audio follow-up — LLE unlock, title stream verified, wave player built (Nov 24–25, Ghost)
 

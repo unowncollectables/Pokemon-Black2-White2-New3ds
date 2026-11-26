@@ -19,6 +19,11 @@ typedef struct {
 } Vertex;
 
 typedef struct {
+    Vertex vertex;
+    unsigned outside;
+} ClipVertex;
+
+typedef struct {
     const u8 *tiles[4];
     const u8 *palette[6];
     unsigned param, format, width, height, address, paletteAddress;
@@ -44,7 +49,7 @@ static unsigned char s_displayLock;
 static int s_frameStarted;
 static unsigned s_primitive, s_count;
 static int s_inPrimitive;
-static Vertex s_strip[4];
+static ClipVertex s_strip[4];
 static s16 s_xyz[3];
 /* GX texture coordinates use signed 12.4 fixed point. */
 static s16 s_rawTexcoord[2], s_texcoord[2];
@@ -795,17 +800,11 @@ static void draw_triangle(Vertex a, Vertex b, Vertex c, const Texture *texture) 
     raster_triangle(a, b, c, texture, s_polygon);
 }
 
-static void submit_triangle(Vertex a, Vertex b, Vertex c) {
-    Vertex input[12] = { a, b, c };
+static void submit_triangle(const ClipVertex *a, const ClipVertex *b, const ClipVertex *c) {
+    if (a->outside & b->outside & c->outside) return;
+    Vertex input[12] = { a->vertex, b->vertex, c->vertex };
     unsigned count = 3;
-    unsigned outside = 0;
-    for (unsigned plane = 0; plane < 6; ++plane) {
-        unsigned vertices = (plane_distance(&a, plane) < 0) + (plane_distance(&b, plane) < 0)
-                          + (plane_distance(&c, plane) < 0);
-        if (vertices == 3) return;
-        outside |= vertices;
-    }
-    if (outside) {
+    if (a->outside | b->outside | c->outside) {
         Vertex output[12];
         for (unsigned plane = 0; plane < 6; ++plane) {
             unsigned clipped = 0;
@@ -865,31 +864,38 @@ static void emit_vertex(const MtxFx44 *clip, const MtxFx44 *tex) {
     }
     Vertex v = {c[0], c[1], c[2], c[3], uv[0] / 16.0f, uv[1] / 16.0f,
                 s_vertexColor & 31, (s_vertexColor >> 5) & 31, (s_vertexColor >> 10) & 31};
-    s_strip[s_count & 3] = v;
+    /* A strip or quad can submit a vertex more than once. Its clip
+     * coordinates are already fixed at emission, so classify it once. */
+    unsigned outside = (v.x < -v.w) | ((v.x > v.w) << 1)
+                     | ((v.y < -v.w) << 2) | ((v.y > v.w) << 3)
+                     | ((v.z < -v.w) << 4) | ((v.z > v.w) << 5);
+    ClipVertex *current = &s_strip[s_count & 3];
+    *current = (ClipVertex){v, outside};
     ++s_count;
     switch (s_primitive) {
     case GX_BEGIN_TRIANGLES:
-        if (s_count == 3) { submit_triangle(s_strip[0], s_strip[1], v); s_count = 0; }
+        if (s_count == 3) { submit_triangle(&s_strip[0], &s_strip[1], current); s_count = 0; }
         break;
     case GX_BEGIN_QUADS:
         if (s_count == 4) {
-            submit_triangle(s_strip[0], s_strip[1], s_strip[2]);
-            submit_triangle(s_strip[0], s_strip[2], v);
+            submit_triangle(&s_strip[0], &s_strip[1], &s_strip[2]);
+            submit_triangle(&s_strip[0], &s_strip[2], current);
             s_count = 0;
         }
         break;
     case GX_BEGIN_TRIANGLE_STRIP:
         if (s_count >= 3) {
-            Vertex a = s_strip[(s_count - 3) & 3], b = s_strip[(s_count - 2) & 3];
-            if (s_count & 1) submit_triangle(a, b, v);
-            else submit_triangle(b, a, v);
+            const ClipVertex *a = &s_strip[(s_count - 3) & 3], *b = &s_strip[(s_count - 2) & 3];
+            if (s_count & 1) submit_triangle(a, b, current);
+            else submit_triangle(b, a, current);
         }
         break;
     case GX_BEGIN_QUAD_STRIP:
         if (s_count >= 4 && !(s_count & 1)) {
-            Vertex a = s_strip[(s_count - 4) & 3], b = s_strip[(s_count - 3) & 3], c = s_strip[(s_count - 2) & 3];
-            submit_triangle(a, b, v);
-            submit_triangle(a, v, c);
+            const ClipVertex *a = &s_strip[(s_count - 4) & 3], *b = &s_strip[(s_count - 3) & 3];
+            const ClipVertex *c = &s_strip[(s_count - 2) & 3];
+            submit_triangle(a, b, current);
+            submit_triangle(a, current, c);
         }
         break;
     }
