@@ -95,6 +95,7 @@ typedef struct {
     u8 bendRange;  /* 0xC5, default 2 */
     u8 program;    /* 0x81 */
     u8 priority;   /* 0xC6, default 64 */
+    BOOL noteWait;   /* 0xC7, advance by note length when enabled */
     BOOL tie;      /* 0xC8 */
     u8 attack, decay, sustain, release; /* 0xD0-0xD3, stored */
     u8 modDepth, modSpeed, modType, modRange; /* 0xCA-0xCD, stored */
@@ -668,12 +669,14 @@ static void seq_process_events(SeqSlot *slot, int trackIdx) {
             u32 adv = 0, dur = seq_rd_varlen(p + 2, &adv);
             track->pos += 2 + adv;
             seq_note_on(slot, trackIdx, note, vel, dur);
+            if (!track->noteWait || !dur) continue;
             track->wait = dur;
             return;
         }
         if (op == 0x80) {
             u32 adv = 0, dur = seq_rd_varlen(p + 1, &adv);
             track->pos += 1 + adv;
+            if (!dur) continue;
             track->wait = dur;
             return;
         }
@@ -764,7 +767,7 @@ static void seq_process_events(SeqSlot *slot, int trackIdx) {
                 seq_update_track_pitch(track);
                 break;
             case 0xC6: track->priority = v; break;
-            case 0xC7: break; /* mono/poly */
+            case 0xC7: track->noteWait = v != 0; break;
             case 0xC8: track->tie = v ? TRUE : FALSE; break;
             case 0xC9: break; /* portamento control */
             case 0xCA: track->modDepth = v; break;
@@ -848,27 +851,35 @@ static void seq_advance(SeqSlot *slot, float ticks) {
     whole = (u32)slot->tickAcc;
     if (whole == 0) return;
     slot->tickAcc -= (float)whole;
-    slot->tick += whole;
-    for (t = 0; t < SEQ_TRACKS; ++t) {
-        SeqTrack *track = &slot->tracks[t];
-        u32 left;
-        if (!track->active) continue;
-        left = whole;
-        while (left > 0 && track->active) {
-            if (track->wait > left) {
-                track->wait -= left;
-                left = 0;
-            } else {
-                left -= track->wait;
-                track->wait = 0;
-                seq_process_events(slot, t);
+    /* Visit event deadlines in sequence order even when a slow game frame
+     * spans several notes. A new note takes its length from its own onset. */
+    while (whole) {
+        u32 step = whole;
+        for (t = 0; t < SEQ_TRACKS; ++t) {
+            SeqTrack *track = &slot->tracks[t];
+            if (track->active && track->wait < step) step = track->wait;
+            for (n = 0; n < SEQ_TRACK_NOTES; ++n) {
+                SeqNote *note = &track->notes[n];
+                if (note->active) {
+                    u32 remaining = note->endTick > slot->tick ? note->endTick - slot->tick : 0;
+                    if (remaining < step) step = remaining;
+                }
             }
         }
-        if (track->active && track->wait == 0) seq_process_events(slot, t);
-        for (n = 0; n < SEQ_TRACK_NOTES; ++n) {
-            if (track->notes[n].active && slot->tick >= track->notes[n].endTick) {
-                seq_note_off(slot, t, n);
+        slot->tick += step;
+        whole -= step;
+        for (t = 0; t < SEQ_TRACKS; ++t) {
+            SeqTrack *track = &slot->tracks[t];
+            for (n = 0; n < SEQ_TRACK_NOTES; ++n) {
+                if (track->notes[n].active && slot->tick >= track->notes[n].endTick)
+                    seq_note_off(slot, t, n);
             }
+        }
+        for (t = 0; t < SEQ_TRACKS; ++t) {
+            SeqTrack *track = &slot->tracks[t];
+            if (!track->active) continue;
+            track->wait -= step;
+            if (!track->wait) seq_process_events(slot, t);
         }
     }
 }
@@ -910,12 +921,15 @@ static void seq_start_fade(SeqSlot *slot, int target, int frames, BOOL stopAtEnd
 }
 
 void SeqPlayer_Tick(void) {
+    static u64 windowStart, longestGap;
+    static unsigned cappedUpdates;
     u64 now = svcGetSystemTick();
+    u64 gap = s_lastTick ? now - s_lastTick : 0;
     float dt = 0.0f;
+    bool playing = false;
     int i;
     if (s_lastTick) {
-        u64 d = now - s_lastTick;
-        dt = (float)d / (float)SYSCLOCK_ARM11;
+        dt = (float)gap / (float)SYSCLOCK_ARM11;
         if (dt > 0.1f) dt = 0.1f;
         if (dt < 0.0f) dt = 0.0f;
     }
@@ -927,9 +941,22 @@ void SeqPlayer_Tick(void) {
         seq_fade_step(slot);
         if (!slot->inUse) continue;
         if (slot->paused) continue;
+        playing = true;
         ticks = dt * (float)slot->tempo * 0.8f * ((float)slot->tempoRatio / 256.0f);
         seq_advance(slot, ticks);
         if (slot->inUse && !seq_slot_has_tracks(slot)) seq_finish_slot(i);
+    }
+    if (playing && windowStart) {
+        if (gap > longestGap) longestGap = gap;
+        if (gap > SYSCLOCK_ARM11 / 10) ++cappedUpdates;
+    }
+    if (!playing || !windowStart || now - windowStart >= 5ull * SYSCLOCK_ARM11) {
+        if (cappedUpdates)
+            Log_Line("AUDIO", "sequence updates over 100 ms: %u, longest gap %llu ms",
+                     cappedUpdates, (unsigned long long)(longestGap / (SYSCLOCK_ARM11 / 1000)));
+        windowStart = playing ? now : 0;
+        longestGap = 0;
+        cappedUpdates = 0;
     }
 }
 
@@ -1046,6 +1073,7 @@ BOOL NNS_SndArcPlayerStartSeqEx(NNSSndHandle *handle, int playerNo, int bankNo, 
     for (i = 0; i < SEQ_TRACKS; ++i) {
         SeqTrack *tr = &slot->tracks[i];
         int n;
+        tr->noteWait = TRUE;
         tr->volume = 127;
         tr->expression = 127;
         tr->pan = 64;

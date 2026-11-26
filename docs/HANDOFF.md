@@ -437,7 +437,15 @@ also recorded a display preference write failure.
 The rasterizer alternates clipping buffers and prefetches GPU readback cache
 lines. Hardware timing for these changes is pending. Sequence volume and
 expression commands update held notes using their original velocity.
-Instrument envelopes and finer event timing remain open.
+Black 2's title sequence (1004) disables note-wait on all eleven
+tracks. The host now honors SSEQ command 0xC7: when disabled, note lengths
+set voice lifetimes and explicit rests advance the track. Late updates
+walk note and track deadlines in chronological order. An ARM11 parser
+fixture records a chord at tick 0 and subsequent notes at ticks 3 and 5
+when a single update spans nine ticks. Hardware logs summarize active
+sequence updates exceeding the 100 ms timing cap. NDSP note submission
+still happens during game updates; independent scheduling and sampled
+instrument envelopes remain open.
 
 ### Audio follow-up — LLE unlock, title stream verified, wave player built (Nov 24–25, Ghost)
 
