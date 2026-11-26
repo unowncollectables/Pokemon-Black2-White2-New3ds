@@ -824,10 +824,14 @@ static void draw_triangle(Vertex a, Vertex b, Vertex c, const Texture *texture) 
 
 static void submit_triangle(const ClipVertex *a, const ClipVertex *b, const ClipVertex *c) {
     if (a->outside & b->outside & c->outside) return;
-    Vertex input[12] = { a->vertex, b->vertex, c->vertex };
+    Vertex vertices[12], scratch[12];
+    Vertex *input = vertices;
+    input[0] = a->vertex;
+    input[1] = b->vertex;
+    input[2] = c->vertex;
     unsigned count = 3;
     if (a->outside | b->outside | c->outside) {
-        Vertex output[12];
+        Vertex *output = scratch;
         for (unsigned plane = 0; plane < 6; ++plane) {
             unsigned clipped = 0;
             Vertex prev = input[count - 1];
@@ -842,7 +846,9 @@ static void submit_triangle(const ClipVertex *a, const ClipVertex *b, const Clip
             }
             count = clipped;
             if (count < 3) return;
-            memcpy(input, output, count * sizeof(Vertex));
+            Vertex *previous = input;
+            input = output;
+            output = previous;
         }
     }
     unsigned x0 = s_viewport & 255, y0 = (s_viewport >> 8) & 255;

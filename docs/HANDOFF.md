@@ -429,6 +429,16 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
   36.1 ms to 19.1 ms. The field still produces about 17 distinct 3D
   frames per second. Physical New 3DS timing is pending.
 
+The opening hardware replay reached Aspertia, entered the house and returned
+outside. With GPU outlines disabled, sustained outdoor samples presented
+56-58 LCD frames and roughly 19-22 geometry frames per second. The log
+also recorded a display preference write failure.
+
+The rasterizer alternates clipping buffers and prefetches GPU readback cache
+lines. Hardware timing for these changes is pending. Sequence volume and
+expression commands update held notes using their original velocity.
+Instrument envelopes and finer event timing remain open.
+
 ### Audio follow-up — LLE unlock, title stream verified, wave player built (Nov 24–25, Ghost)
 
 Observations from the cloud Azahar setup. The workstation captures used

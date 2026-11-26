@@ -270,11 +270,16 @@ bool PbW2_PicaFinish(uint32_t clearColor, float clearDepth, uint16_t *result) {
     /* Beginning the next frame waits for its predecessor, including the transfer. */
     if (!C3D_FrameBegin(0)) return false;
     C3D_FrameEnd(GX_CMDLIST_FLUSH);
-    GSPGPU_InvalidateDataCache(s_pixels, WIDTH * TARGET_HEIGHT * sizeof(*s_pixels));
-    for (unsigned i = 0; i < WIDTH * HEIGHT; ++i) {
-        u32 rgba = s_pixels[i];
-        result[i] = ((rgba >> 27) & 31) | ((rgba >> 14) & 0x3e0) | ((rgba >> 1) & 0x7c00)
-                    | ((rgba & 255) > 3 ? 0x8000 : 0);
+    GSPGPU_InvalidateDataCache(s_pixels, WIDTH * HEIGHT * sizeof(*s_pixels));
+    /* Prefetch the next ARM11 cache lines while converting this one.
+     * The readback allocation includes the unused rows below the image. */
+    for (unsigned startPixel = 0; startPixel < WIDTH * HEIGHT; startPixel += 8) {
+        __builtin_prefetch(s_pixels + startPixel + 32, 0, 0);
+        for (unsigned j = 0; j < 8; ++j) {
+            u32 rgba = s_pixels[startPixel + j];
+            result[startPixel + j] = ((rgba >> 27) & 31) | ((rgba >> 14) & 0x3e0) | ((rgba >> 1) & 0x7c00)
+                                   | ((rgba & 255) > 3 ? 0x8000 : 0);
+        }
     }
     static bool reported;
     static u64 totalTicks;

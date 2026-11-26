@@ -39,9 +39,9 @@
  * then the param). SWAVINFO is 12 bytes: type/loop/rate/time/
  * loopStart u16 (words)/loopLen u32 (words); the wave's total
  * length is loopStart + loopLen words. PSG (square, duty from
- * wave[0]) and noise are synthesized — the 3DS has no DS PSG
+ * wave[0]) and noise are synthesized â€” the 3DS has no DS PSG
  * hardware. The 0x81 BANKPROG event carries only a program in
- * every real sequence (bank field always 0) — the track's bank is
+ * every real sequence (bank field always 0) â€” the track's bank is
  * the sequence's bank from its SDAT param.
  *
  * Honest degradation: with NDSP down, sequences still advance their
@@ -49,12 +49,12 @@
  * skipped, never waited on), so the game never hangs on a sound.
  * A sequence the game waits on reports its real tick and count, and
  * reaches EOT on time. Channel 15 is reserved for the PokeVoice cry
- * path (wave_out.c allocs it directly) — sequences never take it.
+ * path (wave_out.c allocs it directly) â€” sequences never take it.
  * The wave player's linear PCM buffer is 512 KiB per channel: the
  * largest SDAT wave decodes to 451 KiB.
  *
  * Slice A limits (see work-log.md for the sized remainder): no
- * arithmetic opcodes (0xA0-0xBF — none appear in any inventoried
+ * arithmetic opcodes (0xA0-0xBF â€” none appear in any inventoried
  * sequence; a track that hits one stops instead of desyncing), no
  * ADSR envelope on sampled notes (notes play at constant volume
  * for their duration; the PSG/noise synth does apply an ADSR),
@@ -74,7 +74,7 @@ typedef struct {
     NNSSndWaveOutHandle wave;
     int dsCh; /* -1 when the note is timed but not sounding (NDSP down) */
     u8 note;
-    u8 baseVol; /* vel * trackVol * expr / 127^2 at note-on */
+    u8 velocity;
     u32 endTick;
     int priority;
     int samplePitch;
@@ -191,10 +191,10 @@ static int seq_count_seq(int seqNo) {
 }
 
 /* Resolve one note to a playable wave. Returns FALSE when the note has
- * no instrument (empty program, unloaded bank, oversize sample) — the
+ * no instrument (empty program, unloaded bank, oversize sample) â€” the
  * caller skips it. The result is either a sampled wave (PCM/ADPCM
  * from a SWAR) or a synthesized one (PSG square / noise, generated
- * at note-on time — the 3DS has no DS PSG hardware).
+ * at note-on time â€” the 3DS has no DS PSG hardware).
  *
  * SBNK instrument types (SNDInstData / SNDInstParam, lib/nitro):
  *   1 PCM, 2 PSG, 3 NOISE, 4 DIRECTPCM, 5 NULL, 16 drum set,
@@ -204,7 +204,7 @@ static int seq_count_seq(int seqNo) {
  *   fields sit 2 bytes further in.
  * SWAVINFO is 12 bytes: type/loop/rate/time/loopStart u16 (words)/
  * loopLen u32 (words). The wave's total length is
- * loopStart + loopLen words — loopLen alone is only the loop
+ * loopStart + loopLen words â€” loopLen alone is only the loop
  * section, and using it as the total breaks every looping wave
  * (loopStart lands past the end of the buffer). */
 typedef struct {
@@ -408,11 +408,25 @@ static int seq_alloc_channel(SeqSlot *slot, int trackIdx, int noteIdx, int prior
     return best;
 }
 
-static int seq_final_volume(SeqSlot *slot, int baseVol) {
-    int v = baseVol * slot->volume / 127;
+static int seq_final_volume(SeqSlot *slot, SeqTrack *track, int velocity) {
+    int v = velocity * track->volume / 127;
+    v = v * track->expression / 127;
+    v = v * slot->volume / 127;
     v = v * s_playerVolume[slot->playerNo] / 127;
     v = v * slot->fadeVol / 127;
     return v < 0 ? 0 : v > 127 ? 127 : v;
+}
+
+static void seq_update_volume(SeqSlot *slot, unsigned trackMask) {
+    for (unsigned t = 0; t < SEQ_TRACKS; ++t) {
+        if (!(trackMask & (1u << t))) continue;
+        SeqTrack *track = &slot->tracks[t];
+        for (unsigned n = 0; n < SEQ_TRACK_NOTES; ++n) {
+            SeqNote *note = &track->notes[n];
+            if (note->active && note->wave)
+                NNS_SndWaveOutSetVolume(note->wave, seq_final_volume(slot, track, note->velocity));
+        }
+    }
 }
 
 static void seq_note_off(SeqSlot *slot, int trackIdx, int noteIdx) {
@@ -514,7 +528,7 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
     SeqWave wave;
     int i, freeIdx = -1, oldestIdx = -1;
     u32 oldestEnd = 0xffffffffu;
-    int baseVol, finalVol, pan, ch;
+    int finalVol, pan, ch;
     NNSSndWaveOutHandle waveOut;
     /* Resolved playback parameters (sampled or synthesized). */
     NNSSndWaveFormat format;
@@ -548,9 +562,7 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
         slot->droppedNotes++;
         return;
     }
-    baseVol = velocity * track->volume / 127;
-    baseVol = baseVol * track->expression / 127;
-    finalVol = seq_final_volume(slot, baseVol);
+    finalVol = seq_final_volume(slot, track, velocity);
     pan = (int)track->pan + (int)wave.pan - 64;
     if (pan < 0) pan = 0;
     if (pan > 127) pan = 127;
@@ -599,7 +611,7 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
         n->wave = NULL;
         n->dsCh = -1;
         n->note = (u8)note;
-        n->baseVol = (u8)baseVol;
+        n->velocity = (u8)velocity;
         n->endTick = endTick;
         n->priority = track->priority;
         return;
@@ -630,7 +642,7 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
         n->samplePitch = samplePitch;
         n->dsCh = ch;
         n->note = (u8)note;
-        n->baseVol = (u8)baseVol;
+        n->velocity = (u8)velocity;
         n->endTick = endTick;
         n->priority = track->priority;
     }
@@ -734,8 +746,14 @@ static void seq_process_events(SeqSlot *slot, int trackIdx) {
             track->pos += 2;
             switch (op) {
             case 0xC0: track->pan = (s8)v; break;
-            case 0xC1: track->volume = v; break;
-            case 0xC2: slot->volume = (int)v; break;
+            case 0xC1:
+                track->volume = v;
+                seq_update_volume(slot, 1u << trackIdx);
+                break;
+            case 0xC2:
+                slot->volume = (int)v;
+                seq_update_volume(slot, 0xffff);
+                break;
             case 0xC3: track->transpose = (s8)v; break;
             case 0xC4:
                 track->bend = (s8)v;
@@ -768,7 +786,10 @@ static void seq_process_events(SeqSlot *slot, int trackIdx) {
                     track->loopDepth++;
                 }
                 break;
-            case 0xD5: track->expression = v; break;
+            case 0xD5:
+                track->expression = v;
+                seq_update_volume(slot, 1u << trackIdx);
+                break;
             case 0xD6: break; /* print variable */
             default: break;
             }
@@ -853,7 +874,6 @@ static void seq_advance(SeqSlot *slot, float ticks) {
 }
 
 static void seq_fade_step(SeqSlot *slot) {
-    int t, n;
     if (slot->fadeTarget < 0 || slot->fadeFramesLeft <= 0) return;
     slot->fadeFramesLeft--;
     if (slot->fadeFramesTotal > 0) {
@@ -865,14 +885,7 @@ static void seq_fade_step(SeqSlot *slot) {
     }
     if (slot->fadeVol < 0) slot->fadeVol = 0;
     if (slot->fadeVol > 127) slot->fadeVol = 127;
-    for (t = 0; t < SEQ_TRACKS; ++t) {
-        for (n = 0; n < SEQ_TRACK_NOTES; ++n) {
-            SeqNote *note = &slot->tracks[t].notes[n];
-            if (note->active && note->wave) {
-                NNS_SndWaveOutSetVolume(note->wave, seq_final_volume(slot, note->baseVol));
-            }
-        }
-    }
+    seq_update_volume(slot, 0xffff);
     if (slot->fadeFramesLeft == 0) {
         slot->fadeVol = slot->fadeTarget;
         slot->fadeTarget = -1;
@@ -883,6 +896,7 @@ static void seq_fade_step(SeqSlot *slot) {
 static void seq_start_fade(SeqSlot *slot, int target, int frames, BOOL stopAtEnd) {
     if (frames <= 0) {
         slot->fadeVol = target;
+        seq_update_volume(slot, 0xffff);
         slot->fadeTarget = -1;
         slot->fadeFramesLeft = 0;
         if (stopAtEnd && target == 0) seq_finish_slot((int)(slot - s_slots));
@@ -1040,7 +1054,7 @@ BOOL NNS_SndArcPlayerStartSeqEx(NNSSndHandle *handle, int playerNo, int bankNo, 
         for (n = 0; n < SEQ_TRACK_NOTES; ++n) tr->notes[n].dsCh = -1;
     }
     /* Rebind the handle (the old sequence on it, if any, keeps playing
-     * unbound — same as NNS_SndHandleReleaseSeq). */
+     * unbound â€” same as NNS_SndHandleReleaseSeq). */
     if (handle->player) {
         SeqSlot *old = seq_slot_from_handle(handle);
         if (old) old->handle = NULL;
@@ -1084,17 +1098,9 @@ void NNS_SndPlayerPause(NNSSndHandle *handle, BOOL flag) {
 
 void NNS_SndPlayerSetVolume(NNSSndHandle *handle, int volume) {
     SeqSlot *slot = seq_slot_from_handle(handle);
-    int t, n;
     if (!slot) return;
     slot->volume = volume < 0 ? 0 : volume > 127 ? 127 : volume;
-    for (t = 0; t < SEQ_TRACKS; ++t) {
-        for (n = 0; n < SEQ_TRACK_NOTES; ++n) {
-            SeqNote *note = &slot->tracks[t].notes[n];
-            if (note->active && note->wave) {
-                NNS_SndWaveOutSetVolume(note->wave, seq_final_volume(slot, note->baseVol));
-            }
-        }
-    }
+    seq_update_volume(slot, 0xffff);
 }
 
 void NNS_SndPlayerSetInitialVolume(NNSSndHandle *handle, int volume) {
@@ -1112,6 +1118,9 @@ void NNS_SndPlayerMoveVolume(NNSSndHandle *handle, int targetVolume, int frames)
 void NNS_SndPlayerSetPlayerVolume(int playerNo, int volume) {
     if (playerNo < 0 || playerNo >= 32) return;
     s_playerVolume[playerNo] = volume < 0 ? 0 : volume > 127 ? 127 : volume;
+    for (int i = 0; i < SEQ_SLOTS; ++i) {
+        if (s_slots[i].inUse && s_slots[i].playerNo == playerNo) seq_update_volume(&s_slots[i], 0xffff);
+    }
 }
 
 void NNS_SndPlayerSetPlayableSeqCount(int playerNo, int seqCount) {
@@ -1154,6 +1163,7 @@ void NNS_SndPlayerSetTrackVolume(NNSSndHandle *handle, u16 trackBitMask, int vol
     for (t = 0; t < SEQ_TRACKS; ++t) {
         if (trackBitMask & (1u << t)) slot->tracks[t].volume = volume < 0 ? 0 : volume > 127 ? 127 : volume;
     }
+    seq_update_volume(slot, trackBitMask);
 }
 
 void NNS_SndPlayerSetTrackPan(NNSSndHandle *handle, u16 trackBitMask, int pan) {
