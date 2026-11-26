@@ -803,23 +803,55 @@ bool __wrap_PbW2_PicaFinish(uint32_t clear, float depth, uint16_t *pixels) {
     return complete;
 }
 
+static bool check_optional_edges(void) {
+    PbW2_PicaSetOptions(true, true);
+    PbW2_G3InterceptInit();
+    reg_G3X_DISP3DCNT = REG_G3X_DISP3DCNT_EME_MASK;
+    reg_G3X_CLEAR_COLOR = 0;
+    reg_G3X_CLEAR_DEPTH = 0x7fff;
+    PBW2_VU16(0x04000332) = GX_RGB(0, 31, 0);
+    u32 opaque = (31u << 16) | (3u << 6) | (8u << 24);
+    unsigned before = s_gpuFrames;
+    cmd(G3OP_POLYGON_ATTR, opaque);
+    triangle(GX_RGB(31, 0, 0), 0);
+    cmd(0x50, 0);
+    if (s_gpuFrames != before + 1) return false;
+    PbW2_G3RasterCapture(pixels);
+    if (pixels[96 * 256 + 128] != (0x8000 | GX_RGB(31, 0, 0))) return false;
+    for (unsigned i = 0; i < 256 * 192; ++i) {
+        if (pixels[i] == (0x8000 | GX_RGB(0, 31, 0))) return false;
+    }
+
+    /* A feature that needs software rendering still gets its outlines. */
+    cmd(G3OP_POLYGON_ATTR, opaque | (GX_POLYGONMODE_TOON << 4));
+    triangle(GX_RGB(31, 0, 0), 0);
+    cmd(0x50, 0);
+    if (s_gpuFrames != before + 1) return false;
+    PbW2_G3RasterCapture(pixels);
+    for (unsigned i = 0; i < 256 * 192; ++i) {
+        if (pixels[i] == (0x8000 | GX_RGB(0, 31, 0))) return true;
+    }
+    return false;
+}
+
 extern void gfxInitDefault(void);
 int main(void) {
     gfxInitDefault();
     archiveMountSdmc();
     FILE *f = fopen("sdmc:/g3-fidelity.txt", "w");
     if (f) {
-        PbW2_PicaSetEnabled(false);
+        PbW2_PicaSetOptions(false, false);
         const char *failure = checks();
         if (!failure && s_gpuFrames)
             failure = "unexpected GPU work";
         fprintf(f, "CPU %s%s\n", failure ? "FAIL " : "PASS", failure ? failure : "");
 
-        PbW2_PicaSetEnabled(true);
+        PbW2_PicaSetOptions(true, false);
         failure = PbW2_PicaEnabled() ? checks() : "GPU initialization";
         if (!failure && s_gpuFrames != 32)
             failure = "unexpected GPU frame count";
         fprintf(f, "PICA200 %s%s (%u GPU frames)\n", failure ? "FAIL " : "PASS", failure ? failure : "", s_gpuFrames);
+        fprintf(f, "Optional GPU outlines %s\n", check_optional_edges() ? "PASS" : "FAIL");
         fclose(f);
     }
     for (;;)

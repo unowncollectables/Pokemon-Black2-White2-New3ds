@@ -39,6 +39,7 @@ struct NNSSndWaveOut {
     int ndspCh;
     BOOL inUse;
     BOOL active;
+    bool sequenceNote;
     int sampleRate;
     int speed;
     int volume;
@@ -109,10 +110,8 @@ static bool wave_pending(const ndspWaveBuf *buf) {
     return buf->status == NDSP_WBUF_QUEUED || buf->status == NDSP_WBUF_PLAYING;
 }
 
-NNSSndWaveOutHandle NNS_SndWaveOutAllocChannel(int channel) {
+static NNSSndWaveOutHandle alloc_channel(int channel, bool sequenceNote) {
     struct NNSSndWaveOut *waveOut;
-    PBW2_STUB_LOG("snd", "NNS_SndWaveOutAllocChannel (wave player)");
-    Log_Line("AUDIO", "WaveOutAllocChannel ch=%d", channel);
     if (channel < 0 || channel >= WAVE_DS_CHANNELS) return NULL;
     waveOut = &s_channels[channel];
     if (waveOut->inUse) return NULL;
@@ -120,13 +119,24 @@ NNSSndWaveOutHandle NNS_SndWaveOutAllocChannel(int channel) {
     waveOut->dsCh = channel;
     waveOut->ndspCh = WAVE_NDSP_BASE + channel;
     waveOut->inUse = TRUE;
+    waveOut->sequenceNote = sequenceNote;
     return waveOut;
+}
+
+NNSSndWaveOutHandle NNS_SndWaveOutAllocChannel(int channel) {
+    PBW2_STUB_LOG("snd", "NNS_SndWaveOutAllocChannel (wave player)");
+    Log_Line("AUDIO", "WaveOutAllocChannel ch=%d", channel);
+    return alloc_channel(channel, false);
+}
+
+NNSSndWaveOutHandle WaveOut_AllocSequenceChannel(int channel) {
+    return alloc_channel(channel, true);
 }
 
 void NNS_SndWaveOutFreeChannel(NNSSndWaveOutHandle handle) {
     struct NNSSndWaveOut *waveOut = handle;
     if (!waveOut) return;
-    Log_Line("AUDIO", "WaveOutFreeChannel ch=%d", waveOut->dsCh);
+    if (!waveOut->sequenceNote) Log_Line("AUDIO", "WaveOutFreeChannel ch=%d", waveOut->dsCh);
     if (waveOut->active) ndspChnWaveBufClear(waveOut->ndspCh);
     waveOut->active = FALSE;
     waveOut->inUse = FALSE;
@@ -135,9 +145,11 @@ void NNS_SndWaveOutFreeChannel(NNSSndWaveOutHandle handle) {
 BOOL NNS_SndWaveOutStart(NNSSndWaveOutHandle handle, NNSSndWaveFormat format, const void *data, BOOL loop,
                          int loopStart, int samples, int rate, int volume, int speed, int pan) {
     struct NNSSndWaveOut *waveOut = handle;
-    PBW2_STUB_LOG("snd", "NNS_SndWaveOutStart (wave player)");
-    Log_Line("AUDIO", "WaveOutStart fmt=%d loop=%d loopStart=%d samples=%d rate=%d vol=%d speed=%d pan=%d",
-             (int)format, (int)loop, loopStart, samples, rate, volume, speed, pan);
+    if (waveOut && !waveOut->sequenceNote) {
+        PBW2_STUB_LOG("snd", "NNS_SndWaveOutStart (wave player)");
+        Log_Line("AUDIO", "WaveOutStart fmt=%d loop=%d loopStart=%d samples=%d rate=%d vol=%d speed=%d pan=%d",
+                 (int)format, (int)loop, loopStart, samples, rate, volume, speed, pan);
+    }
     if (!waveOut || !waveOut->inUse || !data || samples <= 0 || rate <= 0 || speed <= 0
         || (loop && (loopStart < 0 || loopStart >= samples))) return FALSE;
     bool adpcm = (int)format == WAVE_FORMAT_IMA_ADPCM;
@@ -186,9 +198,11 @@ BOOL NNS_SndWaveOutStart(NNSSndWaveOutHandle handle, NNSSndWaveFormat format, co
         ndspChnWaveBufAdd(waveOut->ndspCh, &waveOut->loopBuf);
     }
     waveOut->active = TRUE;
-    waveOut->startTick = svcGetSystemTick();
-    Log_Line("AUDIO", "WaveOutStart ch=%d playing at %.0f Hz, %d samples", waveOut->ndspCh,
-             (double)wave_effective_rate(rate, speed), samples);
+    if (!waveOut->sequenceNote) {
+        waveOut->startTick = svcGetSystemTick();
+        Log_Line("AUDIO", "WaveOutStart ch=%d playing at %.0f Hz, %d samples", waveOut->ndspCh,
+                 (double)wave_effective_rate(rate, speed), samples);
+    }
     return TRUE;
 }
 
@@ -196,9 +210,11 @@ BOOL NNS_SndWaveOutIsPlaying(NNSSndWaveOutHandle handle) {
     struct NNSSndWaveOut *waveOut = handle;
     if (!waveOut || !waveOut->active) return FALSE;
     if (wave_pending(&waveOut->buf) || wave_pending(&waveOut->loopBuf)) return TRUE;
-    Log_Line("AUDIO", "WaveOutIsPlaying ch=%d ended status=%d samplePos=%lu after %llu ms", waveOut->dsCh,
-             (int)waveOut->buf.status, (unsigned long)ndspChnGetSamplePos(waveOut->ndspCh),
-             (unsigned long long)((svcGetSystemTick() - waveOut->startTick) / (SYSCLOCK_ARM11 / 1000)));
+    if (!waveOut->sequenceNote) {
+        Log_Line("AUDIO", "WaveOutIsPlaying ch=%d ended status=%d samplePos=%lu after %llu ms", waveOut->dsCh,
+                 (int)waveOut->buf.status, (unsigned long)ndspChnGetSamplePos(waveOut->ndspCh),
+                 (unsigned long long)((svcGetSystemTick() - waveOut->startTick) / (SYSCLOCK_ARM11 / 1000)));
+    }
     waveOut->active = FALSE;
     return FALSE;
 }
@@ -206,9 +222,11 @@ BOOL NNS_SndWaveOutIsPlaying(NNSSndWaveOutHandle handle) {
 void NNS_SndWaveOutStop(NNSSndWaveOutHandle handle) {
     struct NNSSndWaveOut *waveOut = handle;
     if (!waveOut) return;
-    Log_Line("AUDIO", "WaveOutStop ch=%d status=%d samplePos=%lu after %llu ms", waveOut->dsCh,
-             (int)waveOut->buf.status, (unsigned long)ndspChnGetSamplePos(waveOut->ndspCh),
-             (unsigned long long)((svcGetSystemTick() - waveOut->startTick) / (SYSCLOCK_ARM11 / 1000)));
+    if (!waveOut->sequenceNote) {
+        Log_Line("AUDIO", "WaveOutStop ch=%d status=%d samplePos=%lu after %llu ms", waveOut->dsCh,
+                 (int)waveOut->buf.status, (unsigned long)ndspChnGetSamplePos(waveOut->ndspCh),
+                 (unsigned long long)((svcGetSystemTick() - waveOut->startTick) / (SYSCLOCK_ARM11 / 1000)));
+    }
     if (waveOut->active) ndspChnWaveBufClear(waveOut->ndspCh);
     waveOut->active = FALSE;
 }

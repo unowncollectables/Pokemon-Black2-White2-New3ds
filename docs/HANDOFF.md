@@ -170,7 +170,7 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
   it. SDAT wave and file metadata are read in two blocks to avoid
   thousands of small SD seeks on the first cry. The game checks the
   wave archive and sample boundaries before playback. Field music and
-  sound effects still need the sequence player.
+  sound effects use the host sequence player described below.
 - The same SDAT INFO cache supplies sequence IDs, bank assignments,
   player parameters and the banks' wave archive references. The port
   checks record and file ID bounds before handing data to the game.
@@ -182,14 +182,13 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
   disposal clears an address only while it still points to that block.
   Wave load requests follow the bank's wave archive references and
   load whole SWAR files. All 1,949 populated wave archive entries in
-  the staged Black 2 SDAT use this mode. Sequence playback remains open. Both dialogue
+  the staged Black 2 SDAT use this mode. Both dialogue
   cue 1351 and confirmation cue 1356 use a 32 kHz one-shot ADPCM sample
   on program 0, played twice at different velocities.
 - WaveOut decodes DS IMA-ADPCM to PCM16 and queues a one-shot intro
   followed by a looped sustain when a wave has a nonzero loop point.
-  Azahar NDSP telemetry verifies the sustain buffer wraps. These sample
-  playback features are available to the sequence player when it is
-  implemented.
+  Azahar NDSP telemetry verifies the sustain buffer wraps. The host
+  sequence player uses the same sample playback path.
 
 ### Sequence player — BGM + SEs sounding (Nov 25, Ghost)
 
@@ -381,6 +380,20 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
   floors signed texture coordinates without calling `floorf` per texel.
   Transparent texels in shadow polygons leave the underlying pixels
   intact. The CPU and PICA200 fixtures cover that shadow case.
+- In the display menu, **GPU 3D without outlines** is a default-off
+  performance option. It enables PICA200 and omits DS edge marking on
+  frames drawn by the GPU. If another effect needs the CPU renderer,
+  that frame still draws its outlines. The graphics fixture checks
+  both cases. With the option enabled, the Black 2 R4 Continue replay
+  shows the player, NPC, and scenery in Striaton at 14.6–14.9 completed
+  3D frames per second in Azahar. All settled samples used the GPU.
+  Physical New 3DS timing is pending.
+- Sequence note channels skip the per-wave diagnostics and synchronous
+  log flushes. Sequence summaries and the game-facing WaveOut
+  diagnostics remain available. The wave fixture verifies note playback
+  through the quiet channel. In Striaton, the field music previously
+  wrote 212–301 WaveOut lines per four-second sample. The repeat replay
+  records zero per-note lines while the sequence player remains active.
 
 ### Audio follow-up — LLE unlock, title stream verified, wave player built (Nov 24–25, Ghost)
 
@@ -838,8 +851,8 @@ so a swap cannot reveal an older boot framebuffer.
    in Azahar. Compare lighting and capture to the DS title, verify the
    field, and profile the renderer on New 3DS. SoulSilver and Platinum
    remain the references for Citro3D acceleration.
-3. **Audio.** The linked build streams the title's PCM16 music with NDSP.
-   The ARM7 sequence player, sound effects, and cries remain open.
+3. **Audio.** The linked build plays the title stream, cries, and sequenced
+   music and effects through NDSP. Verify audio and timing on hardware.
 4. **Start menu.** Verify input and trace the broken rendering after the
    immediate DMA fix.
 5. **Field**, then **battle**, then **save** (game is the only writer;

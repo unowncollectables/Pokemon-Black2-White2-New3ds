@@ -9,9 +9,10 @@
 static ndspWaveBuf *s_queue[2];
 static unsigned s_count;
 static u16 s_format;
+static unsigned s_logLines;
 
 bool Audio_IsNdspReady(void) { return true; }
-void Log_Line(const char *tag, const char *fmt, ...) { (void)tag; (void)fmt; }
+void Log_Line(const char *tag, const char *fmt, ...) { (void)tag; (void)fmt; ++s_logLines; }
 void __wrap_ndspChnSetFormat(int id, u16 format) { (void)id; s_format = format; }
 void __wrap_ndspChnSetInterp(int id, ndspInterpType type) { (void)id; (void)type; }
 void __wrap_ndspChnSetRate(int id, float rate) { (void)id; (void)rate; }
@@ -57,6 +58,14 @@ static const char *check_waves(void) {
     NNS_SndWaveOutStop(wave);
     if (s_count || NNS_SndWaveOutIsPlaying(wave)) return "stopped wave";
     NNS_SndWaveOutFreeChannel(wave);
+
+    unsigned before = s_logLines;
+    wave = WaveOut_AllocSequenceChannel(15);
+    if (!NNS_SndWaveOutStart(wave, NNS_SND_WAVE_FORMAT_PCM8, pcm, FALSE, 0, 5, 16000, 127, 32768, 64) ||
+        s_count != 1 || !NNS_SndWaveOutIsPlaying(wave)) return "sequence channel plays";
+    NNS_SndWaveOutStop(wave);
+    NNS_SndWaveOutFreeChannel(wave);
+    if (s_count || s_logLines != before) return "sequence channel avoids note logs";
     WaveOut_Shutdown();
     return NULL;
 }

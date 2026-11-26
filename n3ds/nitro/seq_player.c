@@ -590,7 +590,7 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
         slot->droppedNotes++;
         return;
     }
-    waveOut = NNS_SndWaveOutAllocChannel(ch);
+    waveOut = WaveOut_AllocSequenceChannel(ch);
     if (!waveOut) {
         s_channels[ch].inUse = FALSE;
         slot->droppedNotes++;

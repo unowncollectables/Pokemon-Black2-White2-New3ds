@@ -35,7 +35,9 @@ static Batch s_batch[BATCHES];
 static unsigned s_vertexCount, s_batchCount, s_cacheBytes, s_uploads, s_hits;
 static unsigned s_alphaRef;
 static uint64_t s_frame;
-static bool s_ready, s_requested;
+static bool s_ready;
+static unsigned s_options;
+enum { PICA_ENABLED = 1u << 0, PICA_SKIP_EDGES = 1u << 1 };
 
 bool PbW2_PicaInit(void) {
     if (!C3D_Init(C3D_DEFAULT_CMDBUF_SIZE)) return false;
@@ -75,13 +77,18 @@ void PbW2_PicaExit(void) {
     s_ready = false;
 }
 
-void PbW2_PicaSetEnabled(bool enabled) {
-    __atomic_store_n(&s_requested, enabled, __ATOMIC_RELAXED);
+void PbW2_PicaSetOptions(bool enabled, bool skipEdges) {
+    unsigned options = (enabled ? PICA_ENABLED : 0) | (skipEdges ? PICA_SKIP_EDGES : 0);
+    __atomic_store_n(&s_options, options, __ATOMIC_RELAXED);
+}
+
+bool PbW2_PicaSkipEdges(void) {
+    return (__atomic_load_n(&s_options, __ATOMIC_RELAXED) & PICA_SKIP_EDGES) != 0;
 }
 
 bool PbW2_PicaEnabled(void) {
     static bool tried;
-    if (!__atomic_load_n(&s_requested, __ATOMIC_RELAXED)) return false;
+    if (!(__atomic_load_n(&s_options, __ATOMIC_RELAXED) & PICA_ENABLED)) return false;
     if (!s_ready && !tried) {
         tried = true;
         if (!PbW2_PicaInit()) Log_Line("GPU", "PICA200 setup failed, using the CPU rasterizer");

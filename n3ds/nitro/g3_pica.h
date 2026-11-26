@@ -36,7 +36,8 @@ enum {
 
 bool PbW2_PicaInit(void);
 void PbW2_PicaExit(void);
-void PbW2_PicaSetEnabled(bool enabled);
+void PbW2_PicaSetOptions(bool enabled, bool skipEdges);
+bool PbW2_PicaSkipEdges(void);
 bool PbW2_PicaEnabled(void);
 bool PbW2_PicaBegin(unsigned alphaRef);
 int PbW2_PicaUpload(const PicaTexture *texture);

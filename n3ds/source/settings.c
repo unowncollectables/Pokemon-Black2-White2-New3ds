@@ -28,12 +28,13 @@ static const struct {
     {"Sharp pixels (point filter)", DISPLAY_SHARP_PIXELS},
 #ifdef PBW2_GPU_GEOMETRY
     {"GPU geometry (experimental)", DISPLAY_PICA_GEOMETRY},
+    {"GPU 3D without outlines", DISPLAY_PICA_NO_EDGES},
 #endif
 };
 
 enum {
     ROWS = sizeof s_options / sizeof s_options[0],
-    DISPLAY_MASK = DISPLAY_LCD_FIT | DISPLAY_WIDE_FILL | DISPLAY_SHARP_PIXELS | DISPLAY_PICA_GEOMETRY,
+    DISPLAY_MASK = DISPLAY_LCD_FIT | DISPLAY_WIDE_FILL | DISPLAY_SHARP_PIXELS | DISPLAY_PICA_GEOMETRY | DISPLAY_PICA_NO_EDGES,
     ROW_X = 20, ROW_WIDTH = 280, ROW_Y = 49, ROW_HEIGHT = 25, ROW_SPACING = 31,
 };
 
@@ -62,7 +63,8 @@ void Settings_Init(const char *path) {
     }
     s_persisted = s_display;
 #ifdef PBW2_GPU_GEOMETRY
-    PbW2_PicaSetEnabled((s_display & DISPLAY_PICA_GEOMETRY) != 0);
+    PbW2_PicaSetOptions((s_display & (DISPLAY_PICA_GEOMETRY | DISPLAY_PICA_NO_EDGES)) != 0,
+                        (s_display & DISPLAY_PICA_NO_EDGES) != 0);
 #endif
 }
 
@@ -116,7 +118,8 @@ bool Settings_Handle(uint32_t down, uint32_t held) {
     if (toggle) {
         s_display ^= s_options[s_row].flag;
 #ifdef PBW2_GPU_GEOMETRY
-        PbW2_PicaSetEnabled((s_display & DISPLAY_PICA_GEOMETRY) != 0);
+        PbW2_PicaSetOptions((s_display & (DISPLAY_PICA_GEOMETRY | DISPLAY_PICA_NO_EDGES)) != 0,
+                            (s_display & DISPLAY_PICA_NO_EDGES) != 0);
 #endif
         Log_Line("CFG", "%s %s", s_options[s_row].label, s_display & s_options[s_row].flag ? "on" : "off");
     }
@@ -160,8 +163,6 @@ void Settings_Draw(void) {
         draw_text(fb, stride, 26, ROW_Y + 9 + ROW_SPACING * i, s_options[i].label, 0xffff);
         draw_text(fb, stride, 265, ROW_Y + 9 + ROW_SPACING * i, s_display & s_options[i].flag ? "On" : "Off", 0xffdf);
     }
-    draw_text(fb, stride, 24, 178, "Sharp pixels applies when scaled.", 0xbdff);
-    draw_text(fb, stride, 24, 192, "Tap a row to toggle it.", 0xbdff);
     draw_text(fb, stride, 24, 208, "D-pad  Select   A  Toggle   B  Close", 0xffff);
 #else
     printf("\x1b[1;0HSETTINGS");

@@ -11,4 +11,9 @@
 /* Release the linear PCM buffers after ndspExit. */
 void WaveOut_Shutdown(void);
 
+#ifdef PBW2_LINK_GAME
+struct NNSSndWaveOut;
+struct NNSSndWaveOut *WaveOut_AllocSequenceChannel(int channel);
+#endif
+
 #endif

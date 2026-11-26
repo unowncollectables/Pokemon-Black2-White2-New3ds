@@ -202,7 +202,7 @@ static void start_frame(void) {
     s_frameStarted = 1;
 #ifdef PBW2_GPU_GEOMETRY
     s_gpuFrame = PbW2_PicaEnabled();
-    if (s_gpuFrame && s_edgeEnabled) {
+    if (s_gpuFrame && s_edgeEnabled && !PbW2_PicaSkipEdges()) {
         report_gpu_fallback(GPU_FALLBACK_EDGE, "edge marking");
         s_gpuFrame = false;
     }

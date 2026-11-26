@@ -10,6 +10,7 @@ enum {
     DISPLAY_WIDE_FILL = 1u << 1,
     DISPLAY_SHARP_PIXELS = 1u << 2,
     DISPLAY_PICA_GEOMETRY = 1u << 3,
+    DISPLAY_PICA_NO_EDGES = 1u << 4,
 };
 
 /* Load preferences from a path that remains valid while the app runs. */
