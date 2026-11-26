@@ -12,6 +12,8 @@ uint32_t Present_Flags(void);
 void GxShim_Present(uint32_t flags);
 #if defined(PBW2_LINK_GAME)
 void Present_Clear(uint32_t flags);
+void Present_DrawBottomCached(const u16 *src, uint32_t options, const u32 *ink);
+void Present_Flush(void);
 bool Present_TouchToGame(uint16_t px, uint16_t py, uint16_t *x, uint16_t *y);
 void Present_DrawGame(gfxScreen_t screen, const uint16_t *src, uint32_t options);
 void Present_DrawGameWithText(gfxScreen_t screen, const uint16_t *src, uint32_t options, const u32 *ink);

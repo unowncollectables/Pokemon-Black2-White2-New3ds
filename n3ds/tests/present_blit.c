@@ -10,12 +10,23 @@
 enum { LCD_HEIGHT = 240, TOP_WIDTH = 400, BOTTOM_WIDTH = 320 };
 static uint16_t framebuffer[TOP_WIDTH * LCD_HEIGHT];
 static uint16_t picture[BOTTOM_WIDTH * LCD_HEIGHT];
+static uint16_t secondBottom[BOTTOM_WIDTH * LCD_HEIGHT];
+static bool useSecondBottom;
+static unsigned fullFlushes, topFlushes;
+
+void __wrap_gfxFlushBuffers(void) { ++fullFlushes; }
+
+Result __wrap_GSPGPU_FlushDataCache(const void *address, u32 size) {
+    if (address != framebuffer || size != sizeof framebuffer) return -1;
+    ++topFlushes;
+    return 0;
+}
 
 u8 *__wrap_gfxGetFramebuffer(gfxScreen_t screen, gfx3dSide_t side, u16 *width, u16 *height) {
     (void)side;
     *width = LCD_HEIGHT;
     *height = screen == GFX_TOP ? TOP_WIDTH : BOTTOM_WIDTH;
-    return (u8 *)framebuffer;
+    return (u8 *)(screen == GFX_BOTTOM && useSecondBottom ? secondBottom : framebuffer);
 }
 
 static bool check_blit(gfxScreen_t screen, unsigned picWidth, unsigned picHeight) {
@@ -76,12 +87,43 @@ static bool check_native_text(void) {
     return true;
 }
 
+static bool check_bottom_cache(void) {
+    const u16 color = 0x07c0;
+    for (unsigned i = 0; i < 256 * 192; ++i) picture[i] = color;
+    unsigned options = DISPLAY_LCD_FIT | DISPLAY_SHARP_PIXELS;
+    Present_DrawBottomCached(picture, options, NULL);
+    Present_Flush();
+    useSecondBottom = true;
+    Present_DrawBottomCached(picture, options, NULL);
+    Present_Flush();
+    if (framebuffer[0] != color || secondBottom[0] != color || fullFlushes != 2 || topFlushes) return false;
+
+    useSecondBottom = false;
+    Present_DrawBottomCached(picture, options, NULL);
+    Present_Flush();
+    useSecondBottom = true;
+    Present_DrawBottomCached(picture, options, NULL);
+    Present_Flush();
+    if (fullFlushes != 2 || topFlushes != 2) return false;
+
+    picture[191 * 256] = 0x001f;
+    Present_DrawBottomCached(picture, options, NULL);
+    Present_Flush();
+    if (secondBottom[0] != 0x001f || fullFlushes != 3) return false;
+
+    Present_DrawBottomCached(NULL, options, NULL); /* Settings takes the screen. */
+    secondBottom[0] = 0;
+    Present_DrawBottomCached(picture, options, NULL);
+    Present_Flush();
+    return secondBottom[0] == 0x001f && fullFlushes == 4 && topFlushes == 2;
+}
+
 int main(void) {
     archiveMountSdmc();
     memset(framebuffer, 0xff, sizeof framebuffer);
     bool passed = check_blit(GFX_TOP, 320, 240) &&
                   check_blit(GFX_TOP, 256, 192) &&
-                  check_blit(GFX_BOTTOM, 255, 191) && check_game_fit() && check_native_text();
+                  check_blit(GFX_BOTTOM, 255, 191) && check_game_fit() && check_native_text() && check_bottom_cache();
     FILE *out = fopen("sdmc:/present-blit-test.txt", "w");
     if (out) {
         fprintf(out, "%s\n", passed ? "PASS" : "FAIL");

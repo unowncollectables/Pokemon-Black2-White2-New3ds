@@ -21,6 +21,11 @@ presentation and keeps DS window data intact. Glyph pixels with transparent
 backgrounds, incompatible effects or clipping use the existing sampling path.
 Text baked into OBJ sprites remains open.
 
+The LCD presenter retains an unchanged bottom image after both physical
+buffers have received it. It skips the bottom redraw and data-cache flush
+while the composed pixels, text metadata, and scaling options match.
+Settings invalidates that reuse when it takes over the bottom LCD.
+
 ## 0. Nov 24 follow-up — New 3DS boot and map loading
 
 - Black 2 passes `FieldRoutine_Open` and `FieldRoutine_MapLoad` in Azahar
