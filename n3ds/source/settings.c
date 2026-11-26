@@ -26,8 +26,8 @@ static const struct {
     uint32_t flag;
 } s_options[] = {
     {"LCD fit (4:3)", DISPLAY_LCD_FIT},
-    {"Wide fill (stretch top)", DISPLAY_WIDE_FILL},
-    {"Sharp pixels (point filter)", DISPLAY_SHARP_PIXELS},
+    {"Top screen fit (4:3)", DISPLAY_TOP_FIT},
+    {"Sharp scaling", DISPLAY_SHARP_PIXELS},
 #ifdef PBW2_GPU_GEOMETRY
     {"GPU geometry (experimental)", DISPLAY_PICA_GEOMETRY},
     {"GPU 3D without outlines", DISPLAY_PICA_NO_EDGES},
@@ -36,7 +36,7 @@ static const struct {
 
 enum {
     ROWS = sizeof s_options / sizeof s_options[0],
-    DISPLAY_MASK = DISPLAY_LCD_FIT | DISPLAY_WIDE_FILL | DISPLAY_SHARP_PIXELS | DISPLAY_PICA_GEOMETRY | DISPLAY_PICA_NO_EDGES,
+    DISPLAY_MASK = DISPLAY_LCD_FIT | DISPLAY_TOP_FIT | DISPLAY_SHARP_PIXELS | DISPLAY_PICA_GEOMETRY | DISPLAY_PICA_NO_EDGES,
     ROW_X = 20, ROW_WIDTH = 280, ROW_Y = 49, ROW_HEIGHT = 25, ROW_SPACING = 31,
 };
 

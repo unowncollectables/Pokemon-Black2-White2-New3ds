@@ -158,8 +158,11 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
   The Circle Pad cannot move the player while the menu is open. A held
   stick stays blocked after the menu closes until it returns to neutral.
   LCD fit scales to 320×240 at 4:3 and maps bottom touches back to DS
-  coordinates. Wide fill stretches the top image across 400×240. Sharp
-  pixels selects point filtering for scaled screens.
+  coordinates. Top screen fit uses the same 4:3 rectangle and leaves the
+  bottom screen at 1:1 unless LCD fit is enabled. Sharp scaling applies
+  the equivalent of a nearest-neighbor 2× pass followed by linear scaling.
+  This follows the filtering in SoulSilver's `gpuscale.c` without a
+  separate intermediate framebuffer.
 - Azahar verifies the menu toggles and the ARM11 fixture checks the
   default and scaled touch bounds. Wider field visibility, per-glyph
   sharp text, and native-resolution geometry remain open.

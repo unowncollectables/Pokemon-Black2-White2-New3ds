@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "present.h"
+#include "settings.h"
 
 #include <3ds.h>
 #include <stdio.h>
@@ -33,12 +34,34 @@ static bool check_blit(gfxScreen_t screen, unsigned picWidth, unsigned picHeight
     return true;
 }
 
+static bool check_game_fit(void) {
+    for (unsigned y = 0; y < 192; ++y) {
+        for (unsigned x = 0; x < 256; ++x) picture[y * 256 + x] = x < 127 ? 0xf800 : 0x001f;
+    }
+    Present_DrawGame(GFX_TOP, picture, DISPLAY_TOP_FIT | DISPLAY_SHARP_PIXELS);
+    for (unsigned x = 0; x < TOP_WIDTH; ++x) {
+        for (unsigned y = 0; y < LCD_HEIGHT; ++y) {
+            uint16_t pixel = framebuffer[x * LCD_HEIGHT + LCD_HEIGHT - 1 - y];
+            if (x < 40 || x >= 360) {
+                if (pixel) return false;
+            } else if (x < 198) {
+                if (pixel != 0xf800) return false;
+            } else if (x >= 199) {
+                if (pixel != 0x001f) return false;
+            } else if (!(pixel & 0xf800) || !(pixel & 31)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 int main(void) {
     archiveMountSdmc();
     memset(framebuffer, 0xff, sizeof framebuffer);
     bool passed = check_blit(GFX_TOP, 320, 240) &&
                   check_blit(GFX_TOP, 256, 192) &&
-                  check_blit(GFX_BOTTOM, 255, 191);
+                  check_blit(GFX_BOTTOM, 255, 191) && check_game_fit();
     FILE *out = fopen("sdmc:/present-blit-test.txt", "w");
     if (out) {
         fprintf(out, "%s\n", passed ? "PASS" : "FAIL");
