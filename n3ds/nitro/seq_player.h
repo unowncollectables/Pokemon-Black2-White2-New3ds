@@ -5,8 +5,9 @@
 /* Host NNS sequence player (see seq_player.c). NNS_SndMain drives it
  * from the game thread; when the audio thread owns the tick (see
  * SeqPlayer_SetAudioThreadTick), NNS_SndMain is a no-op and the audio
- * thread calls SeqPlayer_Tick itself at ~60 Hz, so a game-thread
+ * thread calls SeqPlayer_Tick when it services buffers, so a game-thread
  * stall cannot starve the music. */
+void SeqPlayer_Init(void);
 void SeqPlayer_Tick(void);
 /* True once the core-2 audio thread has started: the game-thread
  * NNS_SndMain stops ticking and the audio thread owns SeqPlayer_Tick.

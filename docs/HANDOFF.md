@@ -359,6 +359,14 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
 
 ### Hardware follow-up
 
+- The core 2 worker advances sequences on each 5 ms audio buffer poll.
+  Sequence fades still use 60 Hz wall-clock frames. When a sequence
+  drops notes, its summary reports how many failed during sample lookup,
+  synthesis, channel allocation or NDSP queuing.
+- The rasterizer defers resolving texture banks and VRAM revisions until
+  a triangle passes GPU culling, and reuses that state for the remaining
+  triangles in a clipped polygon. A synthetic mixed-winding textured
+  scene in Azahar used 13.5% fewer ARM11 ticks with the same image hash.
 - The next Black 2 New 3DS run loads the first battle overlays, returns to
   the field and reaches zone 435. It has no logged sequence update gaps
   over 100 ms. Sequence 1086 still reports 64 dropped notes.

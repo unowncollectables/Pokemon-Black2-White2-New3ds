@@ -789,12 +789,20 @@ static bool render_with_pica(void) {
 }
 #endif
 
-static void draw_triangle(Vertex a, Vertex b, Vertex c, const Texture *texture) {
+static void draw_triangle(Vertex a, Vertex b, Vertex c, Texture *texture, bool *textureReady) {
 #ifdef PBW2_GPU_GEOMETRY
     if (s_gpuFrame) {
         float area = edge(a, b, c.x, c.y);
         unsigned alpha = (s_polygon >> 16) & 31;
         if (fabsf(area) < 0.001f || !(s_polygon & (area < 0 ? 0x80u : 0x40u)) || alpha <= s_alphaRef) return;
+    }
+#endif
+    if (!*textureReady) {
+        *texture = texture_state();
+        *textureReady = true;
+    }
+#ifdef PBW2_GPU_GEOMETRY
+    if (s_gpuFrame) {
         unsigned mode = (s_polygon >> 4) & 3;
         if (mode == GX_POLYGONMODE_TOON || mode == GX_POLYGONMODE_SHADOW ||
             (s_fog.enabled && (s_polygon & GX_POLYGON_ATTR_MISC_FOG))) {
@@ -866,8 +874,10 @@ static void submit_triangle(const ClipVertex *a, const ClipVertex *b, const Clip
         v->r *= v->w; v->g *= v->w; v->b *= v->w;
     }
     start_frame();
-    Texture texture = texture_state();
-    for (unsigned i = 2; i < count; ++i) draw_triangle(input[0], input[i - 1], input[i], &texture);
+    Texture texture;
+    bool textureReady = false;
+    for (unsigned i = 2; i < count; ++i)
+        draw_triangle(input[0], input[i - 1], input[i], &texture, &textureReady);
 }
 
 static s64 matrix_dot(const MtxFx44 *matrix, const s16 vector[3], unsigned axis) {
