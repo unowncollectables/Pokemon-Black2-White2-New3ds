@@ -137,7 +137,7 @@ test-present: $(BUILD)/present_blit.3dsx
 
 $(BUILD)/present_blit.elf: tests/present_blit.c source/present.c
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -UPBW2_LINK_GAME $^ $(LDFLAGS) -Wl,--wrap=gfxGetFramebuffer $(LIBPATHS) $(LIBS) -o $@
+	$(CC) $(CFLAGS) -DPBW2_LINK_GAME $^ $(LDFLAGS) -Wl,--wrap=gfxGetFramebuffer $(LIBPATHS) $(LIBS) -o $@
 
 $(BUILD)/present_blit.3dsx: $(BUILD)/present_blit.elf
 	3dsxtool $< $@

@@ -4,6 +4,18 @@ Self-contained notes so another agent can take over this New 3DS port.
 Phases: [PLAN.md](PLAN.md). Build extras: [BUILDING.md](BUILDING.md).
 Short rules pointer: [AGENTS.md](../AGENTS.md).
 
+## Widescreen 3D
+
+L+R+Y opens Display settings. Widescreen 3D defaults off. For a full top-screen
+viewport it expands the horizontal clip volume by 25 percent. The CPU and
+PICA200 renderers can draw 32 extra columns on each side. The compositor keeps
+the original 256 columns for HUD placement and DS display capture. Eligible
+PICA200 frames rasterize the world at the LCD's 400x240 resolution. The
+compositor preserves foreground 2D layers over that geometry. The software
+fallback scales a 320x192 picture with equal scaling on both axes.
+Scenes using DS windows, layer blending or capture use centered 4:3
+presentation. Independent native-resolution game glyphs remain open.
+
 ## 0. Nov 24 follow-up — New 3DS boot and map loading
 
 - Black 2 passes `FieldRoutine_Open` and `FieldRoutine_MapLoad` in Azahar
@@ -158,8 +170,11 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
   The Circle Pad cannot move the player while the menu is open. A held
   stick stays blocked after the menu closes until it returns to neutral.
   LCD fit scales to 320×240 at 4:3 and maps bottom touches back to DS
-  coordinates. Wide fill stretches the top image across 400×240. Sharp
-  pixels selects point filtering for scaled screens.
+  coordinates. Top screen fit uses the same 4:3 rectangle and leaves the
+  bottom screen at 1:1 unless LCD fit is enabled. Sharp scaling applies
+  the equivalent of a nearest-neighbor 2× pass followed by linear scaling.
+  This follows the filtering in SoulSilver's `gpuscale.c` without a
+  separate intermediate framebuffer.
 - Azahar verifies the menu toggles and the ARM11 fixture checks the
   default and scaled touch bounds. Wider field visibility, per-glyph
   sharp text, and native-resolution geometry remain open.
@@ -359,6 +374,14 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
 
 ### Hardware follow-up
 
+- The core 2 worker advances sequences on each 5 ms audio buffer poll.
+  Sequence fades still use 60 Hz wall-clock frames. When a sequence
+  drops notes, its summary reports how many failed during sample lookup,
+  synthesis, channel allocation or NDSP queuing.
+- The rasterizer defers resolving texture banks and VRAM revisions until
+  a triangle passes GPU culling, and reuses that state for the remaining
+  triangles in a clipped polygon. A synthetic mixed-winding textured
+  scene in Azahar used 13.5% fewer ARM11 ticks with the same image hash.
 - The next Black 2 New 3DS run loads the first battle overlays, returns to
   the field and reaches zone 435. It has no logged sequence update gaps
   over 100 ms. Sequence 1086 still reports 64 dropped notes.

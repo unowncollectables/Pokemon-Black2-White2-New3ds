@@ -11,7 +11,7 @@
 #include <math.h>
 #include <string.h>
 
-enum { WIDTH = 256, HEIGHT = 192, PIXELS = WIDTH * HEIGHT };
+enum { WIDTH = 256, HEIGHT = 192, PIXELS = WIDTH * HEIGHT, WIDE_WIDTH = 320, MAX_PIXELS = WIDE_WIDTH * HEIGHT };
 
 typedef struct {
     float x, y, z, w, s, t;
@@ -33,17 +33,35 @@ typedef struct {
 } Texture;
 
 typedef struct {
-    u16 color[PIXELS];
-    float depth[PIXELS];
-    u8 translucentId[PIXELS];
-    u8 opaqueId[PIXELS];
-    u8 shadowMask[PIXELS];
-    u8 fogAlpha[PIXELS];
-    u32 fogDepthW[PIXELS];
+    u16 color[MAX_PIXELS];
+    float depth[MAX_PIXELS];
+    u8 translucentId[MAX_PIXELS];
+    u8 opaqueId[MAX_PIXELS];
+    u8 shadowMask[MAX_PIXELS];
+    u8 fogAlpha[MAX_PIXELS];
+    u32 fogDepthW[MAX_PIXELS];
 } Frame;
 
+#ifdef PBW2_GPU_GEOMETRY
+static u16 s_nativeFrames[2][PBW2_NATIVE_TOP_WIDTH * PBW2_NATIVE_TOP_HEIGHT];
+static unsigned s_nativeDisplayed;
+static bool s_nativeFrame, s_haveNative;
+#endif
+static unsigned s_width = WIDTH, s_displayWidth = WIDTH;
+static unsigned char s_wideEnabled;
+static bool s_widePrimitive;
+
+void PbW2_G3SetWide(bool enabled) {
+    __atomic_store_n(&s_wideEnabled, enabled, __ATOMIC_RELAXED);
+}
+
+bool PbW2_G3WideCamera(void) {
+    return __atomic_load_n(&s_wideEnabled, __ATOMIC_RELAXED) &&
+           (PBW2_VU16(0x04000304) & 0x8000u);
+}
+
 static Frame s_drawing;
-static u16 s_display[PIXELS];
+static u16 s_display[MAX_PIXELS];
 /* The game publishes a complete frame. Only the presentation thread reads it. */
 static unsigned char s_displayLock;
 static int s_frameStarted;
@@ -139,6 +157,10 @@ static void unlock_display(void) {
 void PbW2_G3RasterReset(void) {
     lock_display();
     memset(s_display, 0, sizeof s_display);
+    s_displayWidth = WIDTH;
+#ifdef PBW2_GPU_GEOMETRY
+    s_haveNative = false;
+#endif
     unlock_display();
     s_frameStarted = s_inPrimitive = 0;
 #ifdef PBW2_GPU_GEOMETRY
@@ -165,16 +187,16 @@ static void clear_software_frame(void) {
     float depth = s_clearDepth / 32767.0f;
     /* The default cleared depth admits fragments on the far plane. */
     if (depth >= 1.0f) depth = 2.0f;
-    memset(s_drawing.translucentId, 0, sizeof s_drawing.translucentId);
-    memset(s_drawing.opaqueId, (s_clearColor >> 24) & 63, sizeof s_drawing.opaqueId);
-    memset(s_drawing.shadowMask, 0, sizeof s_drawing.shadowMask);
+    memset(s_drawing.translucentId, 0, s_width * HEIGHT);
+    memset(s_drawing.opaqueId, (s_clearColor >> 24) & 63, s_width * HEIGHT);
+    memset(s_drawing.shadowMask, 0, s_width * HEIGHT);
     s_previousShadowMask = false;
     if (s_fog.enabled) {
         unsigned fogAlpha = ((s_clearColor >> 16) & 31) | FOG_CLEAR_DEPTH;
         if (s_clearColor & REG_G3X_CLEAR_COLOR_F_MASK) fogAlpha |= FOG_ENABLED;
-        memset(s_drawing.fogAlpha, fogAlpha, sizeof s_drawing.fogAlpha);
+        memset(s_drawing.fogAlpha, fogAlpha, s_width * HEIGHT);
     }
-    for (unsigned i = 0; i < PIXELS; ++i) {
+    for (unsigned i = 0; i < s_width * HEIGHT; ++i) {
         s_drawing.color[i] = color;
         s_drawing.depth[i] = depth;
     }
@@ -182,6 +204,7 @@ static void clear_software_frame(void) {
 
 static void start_frame(void) {
     if (s_frameStarted) return;
+    s_width = PbW2_G3WideCamera() ? WIDE_WIDTH : WIDTH;
     s_clearColor = reg_G3X_CLEAR_COLOR;
     s_clearDepth = reg_G3X_CLEAR_DEPTH & 0x7fff;
     u16 control = reg_G3X_DISP3DCNT;
@@ -368,7 +391,8 @@ static u16 sample_texture(const Texture *t, float s, float v, unsigned *alpha) {
 
 static float plane_distance(const Vertex *v, unsigned plane) {
     float coordinate = plane < 2 ? v->x : (plane < 4 ? v->y : v->z);
-    return v->w + ((plane & 1) ? -coordinate : coordinate);
+    float limit = plane < 2 && s_widePrimitive ? 1.25f * v->w : v->w;
+    return limit + ((plane & 1) ? -coordinate : coordinate);
 }
 
 static Vertex interpolate(Vertex a, Vertex b, float t) {
@@ -443,17 +467,17 @@ static void apply_edge_colors(void) {
     unsigned clearId = (s_clearColor >> 24) & 63;
     float clearDepth = s_clearDepth == 0x7fff ? 2.0f : s_clearDepth / 32767.0f;
     for (unsigned y = 0; y < HEIGHT; ++y) {
-        for (unsigned x = 0; x < WIDTH; ++x) {
-            unsigned i = y * WIDTH + x;
+        for (unsigned x = 0; x < s_width; ++x) {
+            unsigned i = y * s_width + x;
             if (!(s_drawing.color[i] & 0x8000)) continue;
             unsigned id = s_drawing.opaqueId[i];
             float depth = s_drawing.depth[i];
-            bool perimeter = !x || !y || x == WIDTH - 1 || y == HEIGHT - 1;
+            bool perimeter = !x || !y || x == s_width - 1 || y == HEIGHT - 1;
             if ((perimeter && id != clearId && clearDepth > depth) ||
                 (x && edge_against(i - 1, id, depth)) ||
-                (x + 1 < WIDTH && edge_against(i + 1, id, depth)) ||
-                (y && edge_against(i - WIDTH, id, depth)) ||
-                (y + 1 < HEIGHT && edge_against(i + WIDTH, id, depth))) {
+                (x + 1 < s_width && edge_against(i + 1, id, depth)) ||
+                (y && edge_against(i - s_width, id, depth)) ||
+                (y + 1 < HEIGHT && edge_against(i + s_width, id, depth))) {
                 s_drawing.color[i] = 0x8000 | s_edgeColors[id >> 3];
             }
         }
@@ -462,7 +486,7 @@ static void apply_edge_colors(void) {
 
 static void apply_fog(bool wBuffer) {
     if (!s_fog.enabled) return;
-    for (unsigned i = 0; i < PIXELS; ++i) {
+    for (unsigned i = 0; i < s_width * HEIGHT; ++i) {
         unsigned attr = s_drawing.fogAlpha[i];
         if (!(attr & FOG_ENABLED)) continue;
         unsigned z;
@@ -498,11 +522,11 @@ static void raster_triangle(Vertex a, Vertex b, Vertex c, const Texture *texture
     unsigned polygonId = (polygon >> 24) & 63;
     bool shadowMask = shadow && polygonId == 0;
     if (shadowMask && !s_previousShadowMask)
-        memset(s_drawing.shadowMask, 0, sizeof s_drawing.shadowMask);
+        memset(s_drawing.shadowMask, 0, s_width * HEIGHT);
     s_previousShadowMask = shadowMask;
     unsigned translucentId = translucent_id(polygon);
     int left = (int)fmaxf(0, floorf(fminf(a.x, fminf(b.x, c.x))));
-    int right = (int)fminf(WIDTH - 1, ceilf(fmaxf(a.x, fmaxf(b.x, c.x))));
+    int right = (int)fminf(s_width - 1, ceilf(fmaxf(a.x, fmaxf(b.x, c.x))));
     int top = (int)fmaxf(0, floorf(fminf(a.y, fminf(b.y, c.y))));
     int bottom = (int)fminf(HEIGHT - 1, ceilf(fmaxf(a.y, fmaxf(b.y, c.y))));
     float invArea = 1.0f / area;
@@ -517,7 +541,7 @@ static void raster_triangle(Vertex a, Vertex b, Vertex c, const Texture *texture
             float v = (rowV - vx * (x + 0.5f - c.x)) * invArea;
             float w = 1.0f - u - v;
             if (u < 0.0f || v < 0.0f || w < 0.0f) continue;
-            unsigned pixel = y * WIDTH + x;
+            unsigned pixel = y * s_width + x;
             float depth = a.z * u + b.z * v + c.z * w;
             bool depthPass = depth <= s_drawing.depth[pixel];
             if (shadowMask) {
@@ -735,7 +759,7 @@ static bool render_with_pica(void) {
              * perspective division for colors and texture coordinates. */
             float w = 1.0f / p->w;
             vertex[j] = (PicaVertex){
-                (p->x / (WIDTH / 2.0f) - 1.0f) * w, (p->y / (HEIGHT / 2.0f) - 1.0f) * w,
+                (p->x / (s_width / 2.0f) - 1.0f) * w, (p->y / (HEIGHT / 2.0f) - 1.0f) * w,
                 -p->z * w, w, p->s * w * invWidth[material], p->t * w * invHeight[material],
                 p->r * w / 31.0f, p->g * w / 31.0f, p->b * w / 31.0f, alphaFloat,
             };
@@ -785,16 +809,26 @@ static bool render_with_pica(void) {
     u32 clear = s_clearColor;
     u32 color = ((clear & 31) * 255 / 31) << 24 | (((clear >> 5) & 31) * 255 / 31) << 16
                 | (((clear >> 10) & 31) * 255 / 31) << 8 | ((clear >> 16) & 31) * 255 / 31;
+    s_nativeFrame = s_width == WIDE_WIDTH && !(reg_GX_DISPCAPCNT & REG_GX_DISPCAPCNT_E_MASK);
+    PbW2_PicaSetFrameWidth(s_width, s_nativeFrame ? s_nativeFrames[s_nativeDisplayed ^ 1] : NULL);
     return PbW2_PicaFinish(color, s_clearDepth / 32767.0f, s_drawing.color);
 }
 #endif
 
-static void draw_triangle(Vertex a, Vertex b, Vertex c, const Texture *texture) {
+static void draw_triangle(Vertex a, Vertex b, Vertex c, Texture *texture, bool *textureReady) {
 #ifdef PBW2_GPU_GEOMETRY
     if (s_gpuFrame) {
         float area = edge(a, b, c.x, c.y);
         unsigned alpha = (s_polygon >> 16) & 31;
         if (fabsf(area) < 0.001f || !(s_polygon & (area < 0 ? 0x80u : 0x40u)) || alpha <= s_alphaRef) return;
+    }
+#endif
+    if (!*textureReady) {
+        *texture = texture_state();
+        *textureReady = true;
+    }
+#ifdef PBW2_GPU_GEOMETRY
+    if (s_gpuFrame) {
         unsigned mode = (s_polygon >> 4) & 3;
         if (mode == GX_POLYGONMODE_TOON || mode == GX_POLYGONMODE_SHADOW ||
             (s_fog.enabled && (s_polygon & GX_POLYGON_ATTR_MISC_FOG))) {
@@ -830,9 +864,13 @@ static void submit_triangle(const ClipVertex *a, const ClipVertex *b, const Clip
     input[1] = b->vertex;
     input[2] = c->vertex;
     unsigned count = 3;
-    if (a->outside | b->outside | c->outside) {
+    unsigned outside = a->outside | b->outside | c->outside;
+    if (outside) {
         Vertex *output = scratch;
         for (unsigned plane = 0; plane < 6; ++plane) {
+            /* Clipping interpolates along an edge. A plane containing all
+             * three original vertices also contains every generated vertex. */
+            if (!(outside & (1u << plane))) continue;
             unsigned clipped = 0;
             Vertex prev = input[count - 1];
             float d = plane_distance(&prev, plane);
@@ -859,15 +897,17 @@ static void submit_triangle(const ClipVertex *a, const ClipVertex *b, const Clip
         Vertex *v = &input[i];
         if (v->w < 0.000001f) return;
         v->w = 1.0f / v->w;
-        v->x = x0 + sx * (v->x * v->w + 1.0f);
+        v->x = (s_width - WIDTH) / 2 + x0 + sx * (v->x * v->w + 1.0f);
         v->y = HEIGHT - y0 - sy * (v->y * v->w + 1.0f);
         v->z = (v->z * v->w + 1.0f) * 0.5f;
         v->s *= v->w; v->t *= v->w;
         v->r *= v->w; v->g *= v->w; v->b *= v->w;
     }
     start_frame();
-    Texture texture = texture_state();
-    for (unsigned i = 2; i < count; ++i) draw_triangle(input[0], input[i - 1], input[i], &texture);
+    Texture texture;
+    bool textureReady = false;
+    for (unsigned i = 2; i < count; ++i)
+        draw_triangle(input[0], input[i - 1], input[i], &texture, &textureReady);
 }
 
 static s64 matrix_dot(const MtxFx44 *matrix, const s16 vector[3], unsigned axis) {
@@ -894,7 +934,8 @@ static void emit_vertex(const MtxFx44 *clip, const MtxFx44 *tex) {
                 s_vertexColor & 31, (s_vertexColor >> 5) & 31, (s_vertexColor >> 10) & 31};
     /* A strip or quad can submit a vertex more than once. Its clip
      * coordinates are already fixed at emission, so classify it once. */
-    unsigned outside = (v.x < -v.w) | ((v.x > v.w) << 1)
+    float limit = s_widePrimitive ? 1.25f * v.w : v.w;
+    unsigned outside = (v.x < -limit) | ((v.x > limit) << 1)
                      | ((v.y < -v.w) << 2) | ((v.y > v.w) << 3)
                      | ((v.z < -v.w) << 4) | ((v.z > v.w) << 5);
     ClipVertex *current = &s_strip[s_count & 3];
@@ -1050,6 +1091,8 @@ void PbW2_G3RasterCommand(u32 op, const u32 *p, const MtxFx44 *clip,
         for (unsigned i = 0; i < sizeof s_shininess; ++i) s_shininess[i] = p[i / 4] >> (8 * (i & 3));
         return;
     case G3OP_BEGIN:
+        start_frame();
+        s_widePrimitive = s_width == WIDE_WIDTH && s_viewport == GX_PACK_VIEWPORT_PARAM(0, 0, WIDTH - 1, HEIGHT - 1);
         s_primitive = p[0] & 3;
         s_lightMask = s_polygon & 15;
         s_count = 0;
@@ -1072,7 +1115,12 @@ void PbW2_G3RasterCommand(u32 op, const u32 *p, const MtxFx44 *clip,
         report_geometry_rate(s_gpuFrame);
 #endif
         lock_display();
-        memcpy(s_display, s_drawing.color, sizeof s_display);
+#ifdef PBW2_GPU_GEOMETRY
+        s_haveNative = s_gpuFrame && s_nativeFrame;
+        if (s_haveNative) s_nativeDisplayed ^= 1;
+#endif
+        s_displayWidth = s_width;
+        memcpy(s_display, s_drawing.color, s_width * HEIGHT * sizeof(*s_display));
         unlock_display();
         s_frameStarted = s_inPrimitive = 0;
         return;
@@ -1082,23 +1130,44 @@ void PbW2_G3RasterCommand(u32 op, const u32 *p, const MtxFx44 *clip,
     emit_vertex(clip, texture);
 }
 
-void PbW2_G3RasterComposite(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawColors) {
+bool PbW2_G3RasterComposite(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawColors, u16 *sides, u16 backdrop,
+                            u16 *native, bool *haveNative) {
     lock_display();
-    for (unsigned i = 0; i < PIXELS; ++i) {
-        u16 pixel = s_display[i];
-        if ((pixel & 0x8000) && (!window || (window[i] & GX_WND_PLANEMASK_BG0))) {
-            u16 color = ((pixel & 31) << 11) | ((pixel & 0x03e0) << 1) | ((pixel >> 10) & 31);
-            rgb565[i] = color;
-            if (planes) planes[i] = GX_WND_PLANEMASK_BG0;
-            if (rawColors) rawColors[i] = color;
+    if (haveNative) *haveNative = false;
+#ifdef PBW2_GPU_GEOMETRY
+    if (native && haveNative && s_haveNative) {
+        memcpy(native, s_nativeFrames[s_nativeDisplayed], sizeof s_nativeFrames[0]);
+        *haveNative = true;
+    }
+#endif
+    for (unsigned y = 0; y < HEIGHT; ++y) {
+        const u16 *row = s_display + y * s_displayWidth + (s_displayWidth - WIDTH) / 2;
+        if (sides && s_displayWidth == WIDE_WIDTH) {
+            for (int x = 0; x < 64; ++x) {
+                u16 p = row[x < 32 ? x - 32 : WIDTH + x - 32];
+                sides[y * 64 + x] = p & 0x8000 ? ((p & 31) << 11) | ((p & 0x3e0) << 1) | ((p >> 10) & 31) : backdrop;
+            }
+        }
+        for (unsigned x = 0; x < WIDTH; ++x) {
+            unsigned i = y * WIDTH + x;
+            u16 pixel = row[x];
+            if ((pixel & 0x8000) && (!window || (window[i] & GX_WND_PLANEMASK_BG0))) {
+                u16 color = ((pixel & 31) << 11) | ((pixel & 0x03e0) << 1) | ((pixel >> 10) & 31);
+                rgb565[i] = color;
+                if (planes) planes[i] = GX_WND_PLANEMASK_BG0;
+                if (rawColors) rawColors[i] = color;
+            }
         }
     }
+    bool wide = sides && s_displayWidth == WIDE_WIDTH;
     unlock_display();
+    return wide;
 }
 
 void PbW2_G3RasterCapture(u16 *rgb555) {
     lock_display();
-    memcpy(rgb555, s_display, sizeof s_display);
+    for (unsigned y = 0; y < HEIGHT; ++y)
+        memcpy(rgb555 + y * WIDTH, s_display + y * s_displayWidth + (s_displayWidth - WIDTH) / 2, WIDTH * sizeof(*rgb555));
     unlock_display();
 }
 

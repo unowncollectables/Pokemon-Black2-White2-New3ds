@@ -4,6 +4,7 @@
 #include "log.h"
 #ifdef PBW2_GPU_GEOMETRY
 #include "g3_pica.h"
+#include "g3_raster.h"
 #endif
 
 #include <3ds.h>
@@ -26,18 +27,19 @@ static const struct {
     uint32_t flag;
 } s_options[] = {
     {"LCD fit (4:3)", DISPLAY_LCD_FIT},
-    {"Wide fill (stretch top)", DISPLAY_WIDE_FILL},
-    {"Sharp pixels (point filter)", DISPLAY_SHARP_PIXELS},
+    {"Top screen fit (4:3)", DISPLAY_TOP_FIT},
+    {"Sharp scaling", DISPLAY_SHARP_PIXELS},
 #ifdef PBW2_GPU_GEOMETRY
     {"GPU geometry (experimental)", DISPLAY_PICA_GEOMETRY},
     {"GPU 3D without outlines", DISPLAY_PICA_NO_EDGES},
+    {"Widescreen 3D", DISPLAY_WIDE_FIELD},
 #endif
 };
 
 enum {
     ROWS = sizeof s_options / sizeof s_options[0],
-    DISPLAY_MASK = DISPLAY_LCD_FIT | DISPLAY_WIDE_FILL | DISPLAY_SHARP_PIXELS | DISPLAY_PICA_GEOMETRY | DISPLAY_PICA_NO_EDGES,
-    ROW_X = 20, ROW_WIDTH = 280, ROW_Y = 49, ROW_HEIGHT = 25, ROW_SPACING = 31,
+    DISPLAY_MASK = DISPLAY_WIDE_FIELD | DISPLAY_LCD_FIT | DISPLAY_TOP_FIT | DISPLAY_SHARP_PIXELS | DISPLAY_PICA_GEOMETRY | DISPLAY_PICA_NO_EDGES,
+    ROW_X = 20, ROW_WIDTH = 280, ROW_Y = 49, ROW_HEIGHT = 23, ROW_SPACING = 26,
 };
 
 static bool load_display(const char *path, uint32_t *flags) {
@@ -67,6 +69,7 @@ void Settings_Init(const char *path) {
     }
     s_persisted = s_display;
 #ifdef PBW2_GPU_GEOMETRY
+    PbW2_G3SetWide((s_display & DISPLAY_WIDE_FIELD) != 0);
     PbW2_PicaSetOptions((s_display & (DISPLAY_PICA_GEOMETRY | DISPLAY_PICA_NO_EDGES)) != 0,
                         (s_display & DISPLAY_PICA_NO_EDGES) != 0);
 #endif
@@ -138,6 +141,7 @@ bool Settings_Handle(uint32_t down, uint32_t held) {
     if (toggle) {
         s_display ^= s_options[s_row].flag;
 #ifdef PBW2_GPU_GEOMETRY
+        PbW2_G3SetWide((s_display & DISPLAY_WIDE_FIELD) != 0);
         PbW2_PicaSetOptions((s_display & (DISPLAY_PICA_GEOMETRY | DISPLAY_PICA_NO_EDGES)) != 0,
                             (s_display & DISPLAY_PICA_NO_EDGES) != 0);
 #endif

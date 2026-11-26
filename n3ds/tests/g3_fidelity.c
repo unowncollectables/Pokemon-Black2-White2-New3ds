@@ -873,6 +873,75 @@ static bool check_optional_edges(void) {
     return false;
 }
 
+static bool check_wide_frame(bool gpu) {
+    static u16 sides[64 * 192];
+    static u16 native[PBW2_NATIVE_TOP_WIDTH * PBW2_NATIVE_TOP_HEIGHT];
+    memset(pbw2_io, 0, sizeof pbw2_io);
+    PbW2_G3InterceptInit();
+    PBW2_VU16(0x04000304) = 0x8000;
+    reg_G3X_CLEAR_DEPTH = 0x7fff;
+    PbW2_G3SetWide(true);
+    PbW2_PicaSetOptions(gpu, false);
+    unsigned before = s_gpuFrames;
+    cmd(G3OP_POLYGON_ATTR, (31u << 16) | (3u << 6));
+    cmd(G3OP_COLOR, GX_RGB(31, 0, 0));
+    cmd(G3OP_BEGIN, GX_BEGIN_TRIANGLES);
+    vertex(-5080, -2048, 0);
+    vertex(-4120, -2048, 0);
+    vertex(-4608, 2048, 0);
+    cmd(G3OP_END, 0);
+    cmd(0x50, 0);
+    memset(pixels, 0, sizeof pixels);
+    bool haveNative;
+    bool wide = PbW2_G3RasterComposite(pixels, NULL, NULL, NULL, sides, 0, native, &haveNative);
+    if (haveNative != gpu || (gpu && native[120 * 400 + 20] != (0x8000 | GX_RGB(31, 0, 0))))
+        return false;
+    PbW2_G3RasterCapture(pixels);
+    for (unsigned i = 0; i < 256 * 192; ++i)
+        if (pixels[i] & 0x8000) return false;
+
+    reg_GX_DISPCNT = (1u << REG_GX_DISPCNT_MODE_SHIFT) | REG_GX_DISPCNT_BG02D3D_MASK | 0x100u;
+    u16 *palette = PbW2_VramMap((void *)HW_BG_PLTT);
+    palette[0] = GX_RGB(0, 0, 31);
+    PbW2_ComposeScreens(pixels, NULL);
+    const u16 *top = PbW2_NativeTop();
+    if (gpu && (!top || top[120 * 400 + 20] != 0xf800 || top[120 * 400 + 200] != 0x001f))
+        return false;
+    if (!gpu && top) return false;
+
+    /* Master brightness affects both the native polygon and its backdrop. */
+    PBW2_VU16(0x0400006c) = REG_GX_MASTER_BRIGHT_MODE_DOWN | 16;
+    PbW2_ComposeScreens(pixels, NULL);
+    top = PbW2_NativeTop();
+    if (gpu && (!top || top[120 * 400 + 20] || top[120 * 400 + 200])) return false;
+
+    if (!wide || sides[96 * 64 + 16] != 0xf800 || sides[96 * 64 + 48] || s_gpuFrames != before + gpu)
+        return false;
+
+    if (gpu) {
+        reg_GX_DISPCNT |= 0x200u;
+        PBW2_VU16(0x0400006c) = 0;
+        PBW2_VU16(0x04000008) = 1;
+        PBW2_VU16(0x0400000a) = 2u << REG_G2_BG0CNT_SCREENBASE_SHIFT;
+        reg_GX_VRAMCNT_A = GX_VRAMCNT(1, 0);
+        u8 *vram = PbW2_VramMap((void *)HW_BG_VRAM);
+        u16 *map = (u16 *)(vram + 0x1000);
+        memset(vram, 0, 64);
+        memset(map, 0, 0x800);
+        map[12 * 32 + 16] = 1;
+        memset(vram + 32, 0x11, 32);
+        palette[1] = GX_RGB(0, 31, 0);
+        triangle(GX_RGB(31, 0, 0), 0);
+        cmd(0x50, 0);
+        PbW2_ComposeScreens(pixels, NULL);
+        top = PbW2_NativeTop();
+        if (!top || top[121 * 400 + 201] != 0x07c0 || top[121 * 400 + 197] != 0xf800)
+            return false;
+    }
+    PbW2_G3SetWide(false);
+    return true;
+}
+
 extern void gfxInitDefault(void);
 int main(void) {
     gfxInitDefault();
@@ -891,6 +960,8 @@ int main(void) {
             failure = "unexpected GPU frame count";
         fprintf(f, "PICA200 %s%s (%u GPU frames)\n", failure ? "FAIL " : "PASS", failure ? failure : "", s_gpuFrames);
         fprintf(f, "Optional GPU outlines %s\n", check_optional_edges() ? "PASS" : "FAIL");
+        fprintf(f, "Wide camera CPU %s\n", check_wide_frame(false) ? "PASS" : "FAIL");
+        fprintf(f, "Wide camera PICA200 %s\n", check_wide_frame(true) ? "PASS" : "FAIL");
         fclose(f);
     }
     for (;;)

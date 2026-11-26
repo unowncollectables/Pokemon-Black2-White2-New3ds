@@ -9,6 +9,8 @@
 #if defined(PBW2_LINK_GAME)
 
 int PbW2_ComposeScreens(u16 *top_rgb565, u16 *bottom_rgb565);
+const u16 *PbW2_TopSides(void);
+const u16 *PbW2_NativeTop(void);
 int PbW2_GameDisplayReady(void);
 void PbW2_GxDisplayTrace(void);
 

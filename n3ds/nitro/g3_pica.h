@@ -44,6 +44,7 @@ int PbW2_PicaUpload(const PicaTexture *texture);
 unsigned PbW2_PicaTextureAlpha(int texture);
 bool PbW2_PicaTriangle(const PicaVertex vertex[3], int texture, PicaAlphaTest test,
                       bool decal, unsigned translucentId, bool writeDepth);
+void PbW2_PicaSetFrameWidth(unsigned width, uint16_t *native);
 bool PbW2_PicaFinish(uint32_t clearColor, float clearDepth, uint16_t *result);
 
 #endif

@@ -28,7 +28,7 @@ The Black 2 title uses the same VRAM capture and display path as the DS game.
 Finish geometry effects, compare with DS rendering, and measure frame
 timing on hardware. The sister ports are references for direct GPU
 composition, presentation order, and thread lifetime. Settings offers
-LCD fit, wide fill and point-filtered scaling. Wider field visibility,
+LCD fit, top-screen 4:3 fit and sharp scaling. Wider field visibility,
 per-glyph text and higher-resolution geometry follow the baseline renderer.
 
 ## Save and field

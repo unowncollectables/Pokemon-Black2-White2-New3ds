@@ -6,8 +6,9 @@
 #include <stdint.h>
 
 enum {
+    DISPLAY_WIDE_FIELD = 1u << 5,
     DISPLAY_LCD_FIT = 1u << 0,
-    DISPLAY_WIDE_FILL = 1u << 1,
+    DISPLAY_TOP_FIT = 1u << 1,
     DISPLAY_SHARP_PIXELS = 1u << 2,
     DISPLAY_PICA_GEOMETRY = 1u << 3,
     DISPLAY_PICA_NO_EDGES = 1u << 4,

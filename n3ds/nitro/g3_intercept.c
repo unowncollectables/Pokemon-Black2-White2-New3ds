@@ -80,6 +80,7 @@ static void box_test(const u32 *params) {
     s32 origin[3] = {(s16)params[0], (s16)(params[0] >> 16), (s16)params[1]};
     s32 extent[3] = {(s16)(params[1] >> 16), (s16)params[2], (s16)(params[2] >> 16)};
     unsigned outside = 0x3f;
+    bool wide = PbW2_G3WideCamera();
     for (unsigned corner = 0; corner < 8 && outside; ++corner) {
         s64 clip[4];
         for (unsigned column = 0; column < 4; ++column) {
@@ -91,8 +92,9 @@ static void box_test(const u32 *params) {
             }
         }
         for (unsigned axis = 0; axis < 3; ++axis) {
-            if (clip[axis] >= -clip[3]) outside &= ~(1u << (2 * axis));
-            if (clip[axis] <= clip[3]) outside &= ~(2u << (2 * axis));
+            s64 limit = wide && axis == 0 ? clip[3] * 5 / 4 : clip[3];
+            if (clip[axis] >= -limit) outside &= ~(1u << (2 * axis));
+            if (clip[axis] <= limit) outside &= ~(2u << (2 * axis));
         }
     }
     /* Keep intersecting boxes for the rasterizer to clip per primitive. */
@@ -211,7 +213,7 @@ int G3X_GetVectorMtx(MtxFx33 *dest) {
 }
 
 void PbW2_G3Compose(int is_main, u16 *fb_rgb565) {
-    if (is_main && fb_rgb565 != NULL) PbW2_G3RasterComposite(fb_rgb565, NULL, NULL, NULL);
+    if (is_main && fb_rgb565 != NULL) PbW2_G3RasterComposite(fb_rgb565, NULL, NULL, NULL, NULL, 0, NULL, NULL);
 }
 
 #endif

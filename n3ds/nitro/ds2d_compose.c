@@ -178,7 +178,7 @@ static void read_bg_affine(int is_sub, int bg, s16 *pa, s16 *pb, s16 *pc, s16 *p
 }
 
 static void map_bitmap_uv(s16 pa, s16 pb, s16 pc, s16 pd, s32 rx, s32 ry, int x, int y, s32 *tx, s32 *ty) {
-    /* 8.8 affine coeffs; ref in 1/256 px — identity => 1:1 screen to texel. */
+    /* 8.8 affine coeffs; ref in 1/256 px â€” identity => 1:1 screen to texel. */
     if (pa == (s16)0x0100 && pb == 0 && pc == 0 && pd == (s16)0x0100) {
         *tx = x + (rx >> 8);
         *ty = y + (ry >> 8);
@@ -644,7 +644,7 @@ static u8 *build_window_mask(const u8 *regs, u32 dc, int is_sub) {
     return window;
 }
 
-static void apply_master_bright(u16 *fb, u16 reg) {
+static void apply_master_bright(u16 *fb, unsigned pixels, u16 reg) {
     u16 mode = reg & REG_GX_MASTER_BRIGHT_E_MOD_MASK;
     u32 factor = reg & REG_GX_MASTER_BRIGHT_E_VALUE_MASK;
     int brighten = mode == REG_GX_MASTER_BRIGHT_MODE_UP;
@@ -653,10 +653,10 @@ static void apply_master_bright(u16 *fb, u16 reg) {
         return;
     }
     if (factor >= 16) {
-        memset(fb, brighten ? 0xff : 0, 256u * 192u * sizeof(*fb));
+        memset(fb, brighten ? 0xff : 0, pixels * sizeof(*fb));
         return;
     }
-    for (u32 i = 0; i < 256u * 192u; i++) {
+    for (u32 i = 0; i < pixels; i++) {
         u16 p = fb[i];
         u32 r = (p >> 11) & 0x1f;
         u32 g = (p >> 5) & 0x3f;
@@ -754,8 +754,21 @@ static void capture_main(u16 *out, u32 dc) {
     }
 }
 
+static u16 s_sides[64 * 192];
+static bool s_haveSides, s_haveNativeTop;
+static u16 s_nativeTop[PBW2_NATIVE_TOP_WIDTH * PBW2_NATIVE_TOP_HEIGHT];
+
+const u16 *PbW2_NativeTop(void) {
+    return s_haveNativeTop ? s_nativeTop : NULL;
+}
+
+const u16 *PbW2_TopSides(void) {
+    return s_haveSides ? s_sides : NULL;
+}
+
 static void compose_engine(const u8 *regs, int is_sub, u16 *out) {
     static BgBlend bg_blend;
+    static u16 underGeometry[256 * 192];
     BgBlend *blend = NULL;
     u32 dc = reg_u32(regs, 0);
     u32 bgmode = dc & REG_GX_DISPCNT_BGMODE_MASK;
@@ -810,17 +823,46 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out) {
                 continue;
             }
             if (bg == 0 && !is_sub && (dc & REG_GX_DISPCNT_BG02D3D_MASK)) {
-                PbW2_G3RasterComposite(out, window, bg_blend.track ? bg_blend.planes : NULL,
-                                       layerAlpha ? bg_blend.colors : NULL);
+                bool extend = PbW2_G3WideCamera() && ((dc >> 16) & 3) == 1 &&
+                              !window && !layerBrightness && !layerAlpha &&
+                              !(reg_GX_DISPCAPCNT & REG_GX_DISPCAPCNT_E_MASK);
+                if (extend) memcpy(underGeometry, out, sizeof underGeometry);
+                s_haveSides = PbW2_G3RasterComposite(out, window, bg_blend.track ? bg_blend.planes : NULL,
+                                                     layerAlpha ? bg_blend.colors : NULL, extend ? s_sides : NULL,
+                                                     backdrop, extend ? s_nativeTop : NULL, &s_haveNativeTop);
+                if (s_haveNativeTop) {
+                    /* Subsequent layers sit in front of the 3D layer. */
+                    bg_blend.track = true;
+                    memset(bg_blend.planes, 0, sizeof bg_blend.planes);
+                    blend = &bg_blend;
+                }
             } else {
                 draw_bg_layer(regs, dc, is_sub, bg, bgmode, out, blend);
             }
         }
         draw_obj_layer(dc, is_sub, out, window, 0, pri, blend);
     }
+    if (!is_sub && s_haveNativeTop) {
+        for (unsigned y = 0; y < PBW2_NATIVE_TOP_HEIGHT; ++y) {
+            unsigned dsRow = ((8 * y + 4) / 10) * 256;
+            u16 *row = s_nativeTop + y * PBW2_NATIVE_TOP_WIDTH;
+            for (unsigned x = 0; x < PBW2_NATIVE_TOP_WIDTH; ++x) {
+                u16 pixel = row[x];
+                if (x >= 40 && x < 360) {
+                    unsigned i = dsRow + (8 * (x - 40) + 4) / 10;
+                    if (bg_blend.planes[i]) row[x] = out[i];
+                    else row[x] = pixel & 0x8000 ? rgb555_to_565(pixel) : underGeometry[i];
+                } else {
+                    row[x] = pixel & 0x8000 ? rgb555_to_565(pixel) : backdrop;
+                }
+            }
+        }
+        apply_master_bright(s_nativeTop, PBW2_NATIVE_TOP_WIDTH * PBW2_NATIVE_TOP_HEIGHT, reg_u16(regs, 0x6cu));
+    }
     if (layerBrightness) apply_layer_brightness(out, blend, bldcnt, factor);
     if (!is_sub) capture_main(out, dc);
-    apply_master_bright(out, reg_u16(regs, 0x6cu));
+    if (!is_sub && s_haveSides) apply_master_bright(s_sides, 64 * 192, reg_u16(regs, 0x6cu));
+    apply_master_bright(out, 256 * 192, reg_u16(regs, 0x6cu));
 }
 
 int PbW2_ComposeScreens(u16 *top_rgb565, u16 *bottom_rgb565) {
@@ -828,6 +870,7 @@ int PbW2_ComposeScreens(u16 *top_rgb565, u16 *bottom_rgb565) {
     u16 *main_fb;
     u16 *sub_fb;
 
+    s_haveSides = s_haveNativeTop = false;
     s_mode5_diag.compose_frames++;
     if (main_upper) {
         main_fb = top_rgb565;

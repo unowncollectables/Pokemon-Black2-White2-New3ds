@@ -124,10 +124,12 @@ typedef struct {
     int fadeVol; /* fade level 0..127, default 127 */
     int fadeTarget; /* MoveVolume target, -1 = no fade running */
     int fadeFramesLeft, fadeFramesTotal, fadeStartVol;
+    u64 fadeStartTick;
     BOOL stopAtFadeEnd;
     BOOL paused;
     int tempoRatio; /* 256 = 1.0 */
     u32 noteCount, droppedNotes;
+    unsigned missingWave, synthesisFailed, channelUnavailable, queueFailed;
     SeqTrack tracks[SEQ_TRACKS];
 } SeqSlot;
 
@@ -156,16 +158,14 @@ static BOOL s_ndspDownLogged;
  * delegating entry points (StartSeq, SetInitialVolume, SetTrackMuteEx)
  * do NOT take it — their targets do. */
 static LightLock s_seqLock;
-/* True once the audio thread owns the tick (set by Audio_Start after
- * the worker starts). Read without the lock by NNS_SndMain; the write
- * is a single bool and the worst case is one extra game-thread tick
- * during the startup handover, which the wall-clock dt absorbs. */
 static bool s_audioThreadTick;
 
+void SeqPlayer_Init(void) {
+    LightLock_Init(&s_seqLock);
+}
+
 void SeqPlayer_SetAudioThreadTick(bool on) {
-    LightLock_Lock(&s_seqLock);
-    s_audioThreadTick = on;
-    LightLock_Unlock(&s_seqLock);
+    __atomic_store_n(&s_audioThreadTick, on, __ATOMIC_RELEASE);
 }
 
 static u16 seq_rd16(const u8 *p) { return (u16)(p[0] | (p[1] << 8)); }
@@ -580,6 +580,7 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
         freeIdx = oldestIdx;
     }
     if (!seq_resolve_wave(slot->bankNo, track->program, note, &wave)) {
+        slot->missingWave++;
         slot->droppedNotes++;
         return;
     }
@@ -604,6 +605,7 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
         float releaseSeconds = 0.0f;
         u32 synthSamples = seq_synth_note(&wave, note, pitch, noteSeconds, &releaseSeconds);
         if (synthSamples == 0) {
+            slot->synthesisFailed++;
             slot->droppedNotes++;
             return;
         }
@@ -639,12 +641,14 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
     }
     ch = seq_alloc_channel(slot, trackIdx, freeIdx, (int)track->priority, slot->tick);
     if (ch < 0) {
+        slot->channelUnavailable++;
         slot->droppedNotes++;
         return;
     }
     waveOut = WaveOut_AllocSequenceChannel(ch);
     if (!waveOut) {
         s_channels[ch].inUse = FALSE;
+        slot->channelUnavailable++;
         slot->droppedNotes++;
         return;
     }
@@ -652,6 +656,7 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
                              speed, pan)) {
         NNS_SndWaveOutFreeChannel(waveOut);
         s_channels[ch].inUse = FALSE;
+        slot->queueFailed++;
         slot->droppedNotes++;
         return;
     }
@@ -859,6 +864,9 @@ static void seq_finish_slot(int idx) {
     Log_Line("AUDIO", "SeqPlayer seq=%d finished: %lu notes, %lu dropped, %lu ticks",
              slot->seqNo, (unsigned long)slot->noteCount, (unsigned long)slot->droppedNotes,
              (unsigned long)slot->tick);
+    if (slot->droppedNotes)
+        Log_Line("AUDIO", "SeqPlayer seq=%d drop reasons: wave=%u synth=%u channels=%u queue=%u",
+                 slot->seqNo, slot->missingWave, slot->synthesisFailed, slot->channelUnavailable, slot->queueFailed);
     free(slot->seqData);
     memset(slot, 0, sizeof *slot);
 }
@@ -904,9 +912,12 @@ static void seq_advance(SeqSlot *slot, float ticks) {
     }
 }
 
-static void seq_fade_step(SeqSlot *slot) {
+static void seq_fade_step(SeqSlot *slot, u64 now) {
     if (slot->fadeTarget < 0 || slot->fadeFramesLeft <= 0) return;
-    slot->fadeFramesLeft--;
+    u64 elapsed = (now - slot->fadeStartTick) * 60 / SYSCLOCK_ARM11;
+    int left = elapsed < (u64)slot->fadeFramesTotal ? slot->fadeFramesTotal - (int)elapsed : 0;
+    if (left == slot->fadeFramesLeft) return;
+    slot->fadeFramesLeft = left;
     if (slot->fadeFramesTotal > 0) {
         int done = slot->fadeFramesTotal - slot->fadeFramesLeft;
         slot->fadeVol = slot->fadeStartVol +
@@ -933,6 +944,7 @@ static void seq_start_fade(SeqSlot *slot, int target, int frames, BOOL stopAtEnd
         if (stopAtEnd && target == 0) seq_finish_slot((int)(slot - s_slots));
         return;
     }
+    slot->fadeStartTick = svcGetSystemTick();
     slot->fadeStartVol = slot->fadeVol;
     slot->fadeTarget = target;
     slot->fadeFramesTotal = frames;
@@ -962,7 +974,7 @@ void SeqPlayer_Tick(void) {
         SeqSlot *slot = &s_slots[i];
         float ticks;
         if (!slot->inUse) continue;
-        seq_fade_step(slot);
+        seq_fade_step(slot, now);
         if (!slot->inUse) continue;
         if (slot->paused) continue;
         playing = true;
@@ -986,14 +998,13 @@ void SeqPlayer_Tick(void) {
 }
 
 void NNS_SndMain(void) {
-    if (!s_audioThreadTick) SeqPlayer_Tick();
+    if (!__atomic_load_n(&s_audioThreadTick, __ATOMIC_ACQUIRE)) SeqPlayer_Tick();
 }
 
 /* ---- Player setup ---- */
 
 BOOL NNS_SndArcPlayerSetup(NNSSndHeapHandle heap) {
     int i;
-    LightLock_Init(&s_seqLock);
     LightLock_Lock(&s_seqLock);
     s_heap = heap;
     for (i = 0; i < 32; ++i) {

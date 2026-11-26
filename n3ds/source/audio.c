@@ -76,7 +76,6 @@ static void Audio_Thread(void *arg) {
     StrmPcm *stream = NULL;
     unsigned writeIndex = 0, rate = 0, baseMs = 0;
     u64 framesQueued = 0, fadeBegin = 0, fadeEnd = 0;
-    u64 lastSeqTick = 0;
     float volume = 0;
     bool eof = false;
     ndspChnSetFormat(STREAM_CHANNEL, NDSP_FORMAT_STEREO_PCM16);
@@ -166,18 +165,7 @@ static void Audio_Thread(void *arg) {
         LightLock_Lock(&s_request.lock);
         if (s_request.command == STREAM_IDLE) s_request.positionMs = pos;
         LightLock_Unlock(&s_request.lock);
-        /* Drive the sequence player at ~60 Hz from this core-2
-         * thread, so a game-thread stall cannot starve the music.
-         * SeqPlayer_Tick's dt is wall-clock based, so jitter in the
-         * firing interval is absorbed; the 0.1 s cap inside it never
-         * engages at a steady 16.6 ms tick. */
-        {
-            u64 now = svcGetSystemTick();
-            if (now - lastSeqTick >= SYSCLOCK_ARM11 / 60) {
-                SeqPlayer_Tick();
-                lastSeqTick = now;
-            }
-        }
+        SeqPlayer_Tick();
         svcSleepThread(5000000LL);
     }
 
@@ -197,6 +185,7 @@ bool Audio_IsNdspReady(void) {
 
 void Audio_Start(void) {
 #ifdef PBW2_LINK_GAME
+    SeqPlayer_Init();
     Result result = ndspInit();
     if (R_FAILED(result)) {
         Log_Line("AUDIO", "ndspInit failed: 0x%08lx", (unsigned long)result);

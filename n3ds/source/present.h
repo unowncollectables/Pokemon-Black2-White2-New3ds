@@ -13,6 +13,7 @@ void GxShim_Present(uint32_t flags);
 #if defined(PBW2_LINK_GAME)
 void Present_Clear(uint32_t flags);
 bool Present_TouchToGame(uint16_t px, uint16_t py, uint16_t *x, uint16_t *y);
+void Present_DrawGame(gfxScreen_t screen, const uint16_t *src, uint32_t options);
 #endif
 
 /* Center pic_w x pic_h RGB565 on the chosen screen. Uses the GSP framebuffer
