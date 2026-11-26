@@ -676,9 +676,13 @@ static float repeat_shift(float a, float b, float c, float period) {
 static bool render_with_pica(void) {
     if (!s_gpuCount || !PbW2_PicaBegin(s_alphaRef)) return false;
     int gpuSlots[GPU_TEXTURES_MAX];
+    float invWidth[GPU_TEXTURES_MAX], invHeight[GPU_TEXTURES_MAX];
     for (unsigned i = 0; i < s_gpuMaterialCount; ++i) {
         const Texture *tex = &s_gpuMaterials[i];
         gpuSlots[i] = -1;
+        /* GX dimensions are powers of two, so their reciprocals are exact. */
+        invWidth[i] = 1.0f / tex->width;
+        invHeight[i] = 1.0f / tex->height;
         if (tex->format) {
             /* An upload between submission and replay must not cache the new
              * pixels under the revision recorded for the triangle. */
@@ -696,6 +700,7 @@ static bool render_with_pica(void) {
         const Texture *tex = &s_gpuMaterials[material];
         u32 polygon = s_gpuTriangles[i].polygon;
         unsigned alpha = (polygon >> 16) & 31;
+        float alphaFloat = alpha / 31.0f;
         PicaVertex vertex[3];
         for (unsigned j = 0; j < 3; ++j) {
             const Vertex *p = &s_gpuTriangles[i].vertex[j];
@@ -704,8 +709,8 @@ static bool render_with_pica(void) {
             float w = 1.0f / p->w;
             vertex[j] = (PicaVertex){
                 (p->x / (WIDTH / 2.0f) - 1.0f) * w, (p->y / (HEIGHT / 2.0f) - 1.0f) * w,
-                -p->z * w, w, p->s * w / tex->width, p->t * w / tex->height,
-                p->r * w / 31.0f, p->g * w / 31.0f, p->b * w / 31.0f, alpha / 31.0f,
+                -p->z * w, w, p->s * w * invWidth[material], p->t * w * invHeight[material],
+                p->r * w / 31.0f, p->g * w / 31.0f, p->b * w / 31.0f, alphaFloat,
             };
         }
         /* Keep repeating coordinates nonnegative. Moving an entire

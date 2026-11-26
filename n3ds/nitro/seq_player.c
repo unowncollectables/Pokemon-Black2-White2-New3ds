@@ -58,9 +58,8 @@
  * sequence; a track that hits one stops instead of desyncing), no
  * ADSR envelope on sampled notes (notes play at constant volume
  * for their duration; the PSG/noise synth does apply an ADSR),
- * no modulation/portamento/pitch-bend LFOs (values are stored, the
- * note plays at its base pitch), SetTrackPitch is stored but not
- * applied (unit unverified — applying it wrong would detune notes). */
+ * no modulation or portamento. Sampled notes follow track pitch and
+ * pitch-bend changes. PSG/noise uses the pitch at note-on. */
 
 #define SEQ_SLOTS 32
 #define SEQ_TRACKS 16
@@ -78,6 +77,8 @@ typedef struct {
     u8 baseVol; /* vel * trackVol * expr / 127^2 at note-on */
     u32 endTick;
     int priority;
+    int samplePitch;
+    bool sampled;
     BOOL active;
 } SeqNote;
 
@@ -97,7 +98,7 @@ typedef struct {
     BOOL tie;      /* 0xC8 */
     u8 attack, decay, sustain, release; /* 0xD0-0xD3, stored */
     u8 modDepth, modSpeed, modType, modRange; /* 0xCA-0xCD, stored */
-    s16 pitch;     /* SetTrackPitch, stored, not applied */
+    s16 pitch;     /* SetTrackPitch, 64 units per semitone */
     u32 callStack[SEQ_CALL_DEPTH];
     u8 callDepth;
     struct {
@@ -443,9 +444,29 @@ static void seq_note_off(SeqSlot *slot, int trackIdx, int noteIdx) {
 #define SEQ_SYNTH_MAX_SAMPLES 262144 /* 512 KiB PCM16 */
 static s16 s_synthBuf[SEQ_SYNTH_MAX_SAMPLES];
 
-static u32 seq_synth_note(const SeqWave *wave, int note, int extraSemis, float noteSeconds,
+static int seq_track_pitch(const SeqTrack *track) {
+    return track->pitch + (int)track->bend * track->bendRange;
+}
+
+static int seq_sample_speed(int pitch) {
+    if (pitch <= -36 * 64) return 4096;
+    if (pitch >= 36 * 64) return 262144;
+    return (int)(32768.0f * powf(2.0f, (float)pitch / (12 * 64)));
+}
+
+static void seq_update_track_pitch(SeqTrack *track) {
+    int pitch = seq_track_pitch(track);
+    for (unsigned i = 0; i < SEQ_TRACK_NOTES; ++i) {
+        SeqNote *note = &track->notes[i];
+        if (note->active && note->wave && note->sampled) {
+            NNS_SndWaveOutSetSpeed(note->wave, seq_sample_speed(note->samplePitch + pitch));
+        }
+    }
+}
+
+static u32 seq_synth_note(const SeqWave *wave, int note, int pitch, float noteSeconds,
                           float *releaseSeconds) {
-    float freq = 440.0f * powf(2.0f, (float)(note - 69 + extraSemis) / 12.0f);
+    float freq = 440.0f * powf(2.0f, (float)((note - 69) * 64 + pitch) / (12 * 64));
     float atkTime = (float)wave->attack / 127.0f * 0.02f;
     float decTime = (float)wave->decay / 127.0f * 0.30f;
     float relTime = (float)wave->release / 127.0f * 0.30f;
@@ -500,6 +521,7 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
     const void *data;
     BOOL loop;
     int loopStart, samples, rate, speed;
+    int samplePitch = 0;
     u32 endTick;
 
     if (track->muted) return;
@@ -534,11 +556,8 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
     if (pan > 127) pan = 127;
     endTick = slot->tick + duration;
     if (wave.kind == 0) {
-        int semis = (int)note - (int)wave.defNote + (int)track->transpose +
-                    (int)track->bend * (int)track->bendRange / 64;
-        speed = (int)(0x8000 * powf(2.0f, (float)semis / 12.0f));
-        if (speed < 4096) speed = 4096;
-        if (speed > 262144) speed = 262144;
+        samplePitch = ((int)note - (int)wave.defNote + track->transpose) * 64;
+        speed = seq_sample_speed(samplePitch + seq_track_pitch(track));
         format = (NNSSndWaveFormat)wave.format;
         data = wave.data;
         loop = wave.loop;
@@ -547,10 +566,10 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
         rate = wave.rate;
     } else {
         /* PSG / noise: synthesize at the note's pitch. */
-        int extraSemis = (int)track->transpose + (int)track->bend * (int)track->bendRange / 64;
+        int pitch = track->transpose * 64 + seq_track_pitch(track);
         float noteSeconds = slot->tempo > 0 ? (float)duration / ((float)slot->tempo * 0.8f) : 0.0f;
         float releaseSeconds = 0.0f;
-        u32 synthSamples = seq_synth_note(&wave, note, extraSemis, noteSeconds, &releaseSeconds);
+        u32 synthSamples = seq_synth_note(&wave, note, pitch, noteSeconds, &releaseSeconds);
         if (synthSamples == 0) {
             slot->droppedNotes++;
             return;
@@ -607,6 +626,8 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
         SeqNote *n = &track->notes[freeIdx];
         n->active = TRUE;
         n->wave = waveOut;
+        n->sampled = wave.kind == 0;
+        n->samplePitch = samplePitch;
         n->dsCh = ch;
         n->note = (u8)note;
         n->baseVol = (u8)baseVol;
@@ -716,8 +737,14 @@ static void seq_process_events(SeqSlot *slot, int trackIdx) {
             case 0xC1: track->volume = v; break;
             case 0xC2: slot->volume = (int)v; break;
             case 0xC3: track->transpose = (s8)v; break;
-            case 0xC4: track->bend = (s8)v; break;
-            case 0xC5: track->bendRange = v; break;
+            case 0xC4:
+                track->bend = (s8)v;
+                seq_update_track_pitch(track);
+                break;
+            case 0xC5:
+                track->bendRange = v;
+                seq_update_track_pitch(track);
+                break;
             case 0xC6: track->priority = v; break;
             case 0xC7: break; /* mono/poly */
             case 0xC8: track->tie = v ? TRUE : FALSE; break;
@@ -1139,13 +1166,15 @@ void NNS_SndPlayerSetTrackPan(NNSSndHandle *handle, u16 trackBitMask, int pan) {
 }
 
 void NNS_SndPlayerSetTrackPitch(NNSSndHandle *handle, u16 trackBitMask, int pitch) {
-    /* Stored, not applied: the unit is unverified, and applying it
-     * wrong would detune notes. See the file header. */
     SeqSlot *slot = seq_slot_from_handle(handle);
     int t;
     if (!slot) return;
     for (t = 0; t < SEQ_TRACKS; ++t) {
-        if (trackBitMask & (1u << t)) slot->tracks[t].pitch = (s16)pitch;
+        if (trackBitMask & (1u << t)) {
+            SeqTrack *track = &slot->tracks[t];
+            track->pitch = (s16)pitch;
+            seq_update_track_pitch(track);
+        }
     }
 }
 

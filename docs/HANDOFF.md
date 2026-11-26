@@ -250,13 +250,17 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
 - Remaining, sized not built: arithmetic opcodes 0xA0–0xBF (none in any
   inventoried sequence; a track hitting one stops instead of
   desyncing); ADSR on sampled notes (constant volume per note now; the
-  synth does apply ADSR); modulation/portamento/pitch-bend LFOs
-  (stored, not applied); SetTrackPitch stored, not applied (unit
-  unverified); DIRECTPCM instruments (fRecord 4, none in inventoried
+  synth does apply ADSR); modulation and portamento; DIRECTPCM
+  instruments (fRecord 4, none in inventoried
   banks). **One re-check still open:** the 620 s run's field section
   was silent from ~320 s because the demo BGM 1102's notes were
   pre-fix garbage — the fix should have cured it, but no full
   playthrough to the field has been re-run on the fixed build yet.
+- Pitch bend keeps all 64 steps per semitone. Sampled notes follow
+  SSEQ bend and bend-range changes as well as the game's track pitch
+  requests while playing. Synthesized voices use pitch at note-on.
+  The sequence player still runs from game-frame updates. SoulSilver's
+  sample-boundary scheduling is a reference for improving note timing.
   That is the natural next job.
 
 ### Hardware crash — SOLVED in the emulator (Nov 25–26, Ghost)
@@ -394,6 +398,9 @@ Short rules pointer: [AGENTS.md](../AGENTS.md).
   through the quiet channel. In Striaton, the field music previously
   wrote 212–301 WaveOut lines per four-second sample. The repeat replay
   records zero per-note lines while the sequence player remains active.
+- PICA200 vertex submission computes the reciprocal texture dimensions
+  once per material. GX textures have power-of-two dimensions, so the
+  same scaled coordinates reach the GPU without two divides per vertex.
 
 ### Audio follow-up — LLE unlock, title stream verified, wave player built (Nov 24–25, Ghost)
 
