@@ -1,3 +1,6 @@
+#ifdef PBW2_N3DS
+#include "game_text.h"
+#endif
 #include "types.h"
 #include "gfl/arc.h"
 #include "gfl/arc_util.h"
@@ -67,6 +70,9 @@ GFLBitmap *GFL_BitmapWrapVRAM(void *pixels, u32 tileWidth, u32 tileHeight, u32 t
 }
 
 void GFL_BitmapFree(GFLBitmap *bitmap) {
+#ifdef PBW2_N3DS
+    PbW2_TextForgetBitmap(bitmap);
+#endif
     if (bitmap->storage == GFL_BITMAP_OWNED) {
         GFL_HeapFree(bitmap->pixels);
     }
@@ -175,6 +181,9 @@ void GFL_BitmapFillArea(GFLBitmap *bitmap, s16 x, s16 y, u16 width, u16 height, 
 }
 
 void GFL_BitmapFill(GFLBitmap *bitmap, u8 color) {
+#ifdef PBW2_N3DS
+    PbW2_TextForgetBitmap(bitmap);
+#endif
     if (bitmap->tileSize == 0x20) {
         color = ((color & 0xf) << 4) | (color & 0xf);
     }

@@ -48,21 +48,26 @@ uint32_t Present_Flags(void) {
 }
 
 #if defined(PBW2_LINK_GAME)
-static void draw_scaled(gfxScreen_t screen, const u16 *src, unsigned sourceWidth, uint32_t options);
+static void draw_scaled(gfxScreen_t screen, const u16 *src, unsigned sourceWidth, uint32_t options, const u8 *ink);
 #endif
 
 void GxShim_Present(uint32_t flags) {
 #if defined(PBW2_LINK_GAME)
     static u16 s_top[256 * 192];
     static u16 s_bottom[256 * 192];
+    static u8 s_topInk[256 * 192], s_bottomInk[256 * 192];
     if (PbW2_VramHostReady()) {
         PbW2_GxDisplayTrace();
         /* Readiness gates the first game frame. Later frames can intentionally blank the LCDs. */
         if (PbW2_GameHasPresented() || PbW2_GameDisplayReady()) {
             u16 *top = (flags & PBW2_SCREEN_TOP) ? s_top : NULL;
             u16 *bottom = (flags & PBW2_SCREEN_BOTTOM) && !Settings_Open() ? s_bottom : NULL;
-            (void)PbW2_ComposeScreens(top, bottom);
             uint32_t options = Settings_DisplayFlags();
+            bool sharpText = (options & DISPLAY_SHARP_TEXT) != 0;
+            u8 *topInk = top && sharpText && (options & (DISPLAY_TOP_FIT | DISPLAY_LCD_FIT | DISPLAY_WIDE_FIELD))
+                             ? s_topInk : NULL;
+            u8 *bottomInk = bottom && sharpText && (options & DISPLAY_LCD_FIT) ? s_bottomInk : NULL;
+            PbW2_ComposeScreensWithText(top, bottom, topInk, bottomInk);
             if (top) {
                 const u16 *sides = PbW2_TopSides();
                 const u16 *native = PbW2_NativeTop();
@@ -75,10 +80,12 @@ void GxShim_Present(uint32_t flags) {
                         memcpy(wide + y * 320 + 32, top + y * GAME_WIDTH, GAME_WIDTH * sizeof(u16));
                         memcpy(wide + y * 320 + 288, sides + y * 64 + 32, 32 * sizeof(u16));
                     }
-                    draw_scaled(GFX_TOP, wide, 320, options);
-                } else Present_DrawGame(GFX_TOP, top, options);
+                    draw_scaled(GFX_TOP, wide, 320, options, topInk);
+                } else if (topInk) draw_scaled(GFX_TOP, top, GAME_WIDTH, options, topInk);
+                else Present_DrawGame(GFX_TOP, top, options);
             }
-            if (bottom) Present_DrawGame(GFX_BOTTOM, bottom, options);
+            if (bottomInk) draw_scaled(GFX_BOTTOM, bottom, GAME_WIDTH, options, bottomInk);
+            else if (bottom) Present_DrawGame(GFX_BOTTOM, bottom, options);
             pbw2_game_notify_present();
         }
     }
@@ -142,7 +149,7 @@ static unsigned sample_axis(unsigned pixel, unsigned output, unsigned input, boo
     return fixed;
 }
 
-static void draw_scaled(gfxScreen_t screen, const u16 *src, unsigned sourceWidth, uint32_t options) {
+static void draw_scaled(gfxScreen_t screen, const u16 *src, unsigned sourceWidth, uint32_t options, const u8 *ink) {
     u16 stride, width;
     u16 *fb = landscape_fb(screen, &stride, &width);
     if (!fb || stride != 240 || width < 320) return;
@@ -152,19 +159,29 @@ static void draw_scaled(gfxScreen_t screen, const u16 *src, unsigned sourceWidth
     /* Scaled modes fill the LCD vertically. Only the side margins need clearing. */
     clear_side_margins(fb, stride, width, rect.x, rect.x + rect.width);
     bool sharp = (options & DISPLAY_SHARP_PIXELS) != 0;
-    unsigned sampleY[240];
+    unsigned sampleY[240], nearestRow[240];
+    unsigned offset = (sourceWidth - GAME_WIDTH) / 2;
     for (unsigned y = 0; y < rect.height; ++y) {
         sampleY[y] = sample_axis(y, rect.height, GAME_HEIGHT, sharp);
+        if (ink) nearestRow[y] = ((2 * y + 1) * GAME_HEIGHT / (2 * rect.height)) * sourceWidth;
     }
     for (unsigned x = 0; x < rect.width; ++x) {
         unsigned sx = sample_axis(x, rect.width, sourceWidth, sharp);
         u16 *out = fb + (rect.x + x) * stride + stride - 1 - rect.y;
         unsigned xi = sx >> 5;
         unsigned xn = xi + (xi < sourceWidth - 1);
+        bool canSampleInk = ink && xi >= offset && xn < offset + GAME_WIDTH;
+        unsigned nearX = canSampleInk ? (2 * x + 1) * sourceWidth / (2 * rect.width) : 0;
         for (unsigned y = 0; y < rect.height; ++y) {
             unsigned sy = sampleY[y];
             unsigned yi = sy >> 5;
             unsigned yn = yi + (yi < GAME_HEIGHT - 1);
+            if (canSampleInk &&
+                (ink[yi * GAME_WIDTH + xi - offset] || ink[yi * GAME_WIDTH + xn - offset] ||
+                 ink[yn * GAME_WIDTH + xi - offset] || ink[yn * GAME_WIDTH + xn - offset])) {
+                out[-(int)y] = src[nearestRow[y] + nearX];
+                continue;
+            }
             u16 a = mix565(src[yi * sourceWidth + xi], src[yi * sourceWidth + xn], sx & 31);
             u16 b = mix565(src[yn * sourceWidth + xi], src[yn * sourceWidth + xn], sx & 31);
             out[-(int)y] = mix565(a, b, sy & 31);
@@ -178,7 +195,7 @@ void Present_DrawGame(gfxScreen_t screen, const u16 *src, uint32_t options) {
         Present_BlitRGB565(screen, src, GAME_WIDTH, GAME_HEIGHT);
         return;
     }
-    draw_scaled(screen, src, GAME_WIDTH, options);
+    draw_scaled(screen, src, GAME_WIDTH, options, NULL);
 }
 
 static void clear_screen(gfxScreen_t screen) {

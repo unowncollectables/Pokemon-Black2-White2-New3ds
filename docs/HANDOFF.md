@@ -14,7 +14,10 @@ PICA200 frames rasterize the world at the LCD's 400x240 resolution. The
 compositor preserves foreground 2D layers over that geometry. The software
 fallback scales a 320x192 picture with equal scaling on both axes.
 Scenes using DS windows, layer blending or capture use centered 4:3
-presentation. Independent native-resolution game glyphs remain open.
+presentation. The default-off Sharp game text option uses nearest-neighbor
+sampling near tracked glyph pixels in scaled DS BG windows. It follows tile
+visibility and checks uploaded tiles for later writes. Independent 1:1 glyph
+placement and OBJ-backed text remain open.
 
 ## 0. Nov 24 follow-up — New 3DS boot and map loading
 

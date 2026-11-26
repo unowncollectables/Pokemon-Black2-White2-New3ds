@@ -1131,7 +1131,7 @@ void PbW2_G3RasterCommand(u32 op, const u32 *p, const MtxFx44 *clip,
 }
 
 bool PbW2_G3RasterComposite(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawColors, u16 *sides, u16 backdrop,
-                            u16 *native, bool *haveNative) {
+                            u16 *native, bool *haveNative, u8 *ink) {
     lock_display();
     if (haveNative) *haveNative = false;
 #ifdef PBW2_GPU_GEOMETRY
@@ -1154,6 +1154,7 @@ bool PbW2_G3RasterComposite(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawC
             if ((pixel & 0x8000) && (!window || (window[i] & GX_WND_PLANEMASK_BG0))) {
                 u16 color = ((pixel & 31) << 11) | ((pixel & 0x03e0) << 1) | ((pixel >> 10) & 31);
                 rgb565[i] = color;
+                if (ink) ink[i] = 0;
                 if (planes) planes[i] = GX_WND_PLANEMASK_BG0;
                 if (rawColors) rawColors[i] = color;
             }
