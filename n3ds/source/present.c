@@ -289,6 +289,34 @@ void Present_DrawBottomCached(const u16 *src, uint32_t options, const u32 *ink) 
     Present_DrawGameWithText(GFX_BOTTOM, src, options, ink);
 }
 
+/* Present-rate window: fed once per main-loop present, emits the
+ * PERF line every 120 frames and keeps the average for the FPS
+ * overlay. This is LCD present rate, not game-logic rate. */
+static unsigned s_presentFps;
+
+void Present_NoteFrame(uint64_t start, uint64_t flushStart, uint64_t finish) {
+    static uint64_t windowStart;
+    static uint64_t drawTicks, flushTicks;
+    static unsigned frames;
+    if (!frames) windowStart = start;
+    drawTicks += flushStart - start;
+    flushTicks += finish - flushStart;
+    if (++frames == 120) {
+        uint64_t elapsed = finish - windowStart;
+        unsigned fps = elapsed ? frames * (uint64_t)SYSCLOCK_ARM11 / elapsed : 0;
+        unsigned drawUs = drawTicks * 1000000ull / ((uint64_t)frames * SYSCLOCK_ARM11);
+        unsigned flushUs = flushTicks * 1000000ull / ((uint64_t)frames * SYSCLOCK_ARM11);
+        Log_Line("PERF", "LCD %u fps, update and compose avg %u us, flush and swap avg %u us", fps, drawUs, flushUs);
+        s_presentFps = fps;
+        frames = 0;
+        drawTicks = flushTicks = 0;
+    }
+}
+
+unsigned Present_Fps(void) {
+    return s_presentFps;
+}
+
 void Present_Flush(void) {
     if (s_bottomCache.reused) {
         /* The game uses a single RGB565 image at the top. The retained bottom

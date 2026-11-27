@@ -15,11 +15,15 @@ enum {
     DISPLAY_PICA_NO_EDGES = 1u << 4,
 };
 
-/* Load preferences from a path that remains valid while the app runs. */
-void Settings_Init(const char *path);
+/* Load preferences from the game's SD directory (config.txt inside
+ * it), which must remain valid while the app runs. */
+void Settings_Init(const char *dir);
 /* L+R+Y opens Settings. Returns true when the game should ignore input. */
 bool Settings_Handle(uint32_t down, uint32_t held);
 bool Settings_Open(void);
+/* Effective FPS-counter state: hotkey override if set, else the
+ * fps_counter config key. */
+bool Settings_FpsCounterOn(void);
 uint32_t Settings_DisplayFlags(void);
 void Settings_Draw(void);
 

@@ -3,6 +3,7 @@
 #include "log.h"
 #include "nitro/fs.h"
 #include "nitro/mi.h"
+#include "scene.h"
 #include "stub_log.h"
 
 #include <stdint.h>
@@ -135,6 +136,7 @@ BOOL FS_LoadOverlay(MIProcessor target, FSOverlayID id) {
         MI_CpuFill8(hostMem + info.ramSize, 0, info.bssSize);
     }
     s_loaded[id] = hostMem;
+    PbW2_SceneOverlayLoaded(id);
     Log_Line("overlay", "GFL_OvlLoad id=%u ok host=%p ds=0x%08x size=%u bss=%u", (unsigned)id, (void *)hostMem,
              (unsigned)dsAddr, (unsigned)info.ramSize, (unsigned)info.bssSize);
     return TRUE;
@@ -147,6 +149,7 @@ BOOL FS_UnloadOverlay(MIProcessor target, FSOverlayID id) {
     }
     free(s_loaded[id]);
     s_loaded[id] = NULL;
+    PbW2_SceneOverlayUnloaded(id);
     Log_Line("overlay", "GFL_OvlUnload id=%u", (unsigned)id);
     return TRUE;
 }

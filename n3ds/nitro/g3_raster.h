@@ -8,6 +8,9 @@ enum { PBW2_NATIVE_TOP_WIDTH = 400, PBW2_NATIVE_TOP_HEIGHT = 240 };
 
 void PbW2_G3SetWide(bool enabled);
 bool PbW2_G3WideCamera(void);
+/* The published frame's shape, for compose-time decisions. */
+bool PbW2_G3PublishedWide(void);
+bool PbW2_G3PublishedNative(void);
 
 void PbW2_G3RasterReset(void);
 /* Software rasterization can begin before the GX swap command. */

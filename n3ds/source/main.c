@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "audio.h"
+#include "config.h"
+#include "fps_overlay.h"
 #include "host.h"
 #include "input.h"
 #include "io_thread.h"
@@ -137,26 +139,6 @@ static void Shutdown(void) {
     gfxExit();
 }
 
-#if defined(PBW2_LINK_GAME)
-static void report_present_time(u64 start, u64 flushStart, u64 finish) {
-    static u64 windowStart;
-    static u64 drawTicks, flushTicks;
-    static unsigned frames;
-    if (!frames) windowStart = start;
-    drawTicks += flushStart - start;
-    flushTicks += finish - flushStart;
-    if (++frames == 120) {
-        u64 elapsed = finish - windowStart;
-        unsigned fps = elapsed ? frames * (u64)SYSCLOCK_ARM11 / elapsed : 0;
-        unsigned drawUs = drawTicks * 1000000ull / ((u64)frames * SYSCLOCK_ARM11);
-        unsigned flushUs = flushTicks * 1000000ull / ((u64)frames * SYSCLOCK_ARM11);
-        Log_Line("PERF", "LCD %u fps, update and compose avg %u us, flush and swap avg %u us", fps, drawUs, flushUs);
-        frames = 0;
-        drawTicks = flushTicks = 0;
-    }
-}
-#endif
-
 int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
@@ -207,7 +189,7 @@ int main(int argc, char **argv) {
              PBW2_LIB_C_TOTAL);
 
     Save_Init();
-    Settings_Init(PBW2_SD_DIR "/display.cfg");
+    Settings_Init(PBW2_SD_DIR);
     Input_Init();
     Audio_Start();
     Io_Start();
@@ -267,6 +249,8 @@ int main(int argc, char **argv) {
         GxShim_Present(flags);
 #if defined(PBW2_LINK_GAME)
         if ((flags & PBW2_SCREEN_BOTTOM) && Settings_Open()) Settings_Draw();
+        if ((flags & PBW2_SCREEN_TOP) && Settings_FpsCounterOn() && PbW2_GameHasPresented())
+            FpsOverlay_Draw();
         u64 flushStart = svcGetSystemTick();
 #endif
 
@@ -277,7 +261,7 @@ int main(int argc, char **argv) {
 #endif
         gfxSwapBuffers();
 #if defined(PBW2_LINK_GAME)
-        if (PbW2_GameHasPresented()) report_present_time(frameStart, flushStart, svcGetSystemTick());
+        if (PbW2_GameHasPresented()) Present_NoteFrame(frameStart, flushStart, svcGetSystemTick());
 #endif
         gspWaitForVBlank();
     }

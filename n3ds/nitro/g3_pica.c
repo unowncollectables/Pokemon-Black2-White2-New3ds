@@ -7,8 +7,8 @@
 #include <citro3d.h>
 #include <string.h>
 
-enum { WIDTH = 256, HEIGHT = 192, LCD_WIDTH = 400, LCD_HEIGHT = 240, VERTICES = 24576, BATCHES = 1024, TEXTURES = 128 };
-enum { TEXTURE_CACHE_BYTES = 6 * 1024 * 1024 };
+enum { WIDTH = 256, HEIGHT = 192, LCD_WIDTH = 400, LCD_HEIGHT = 240, VERTICES = 24576, BATCHES = 1024, TEXTURES = 256 };
+enum { TEXTURE_CACHE_BYTES = 8 * 1024 * 1024 };
 
 extern const u8 _binary_g3_pass_shbin_start[], _binary_g3_pass_shbin_end[];
 
@@ -88,9 +88,15 @@ void PbW2_PicaExit(void) {
     s_ready = false;
 }
 
+static bool s_initTried;
+
 void PbW2_PicaSetOptions(bool enabled, bool skipEdges) {
     unsigned options = (enabled ? PICA_ENABLED : 0) | (skipEdges ? PICA_SKIP_EDGES : 0);
     __atomic_store_n(&s_options, options, __ATOMIC_RELAXED);
+    /* Turning the GPU off re-arms the one-shot setup: a failed first
+     * attempt used to latch for the whole session, so the toggle
+     * could never bring the GPU back after a transient setup miss. */
+    if (!enabled) s_initTried = false;
 }
 
 bool PbW2_PicaSkipEdges(void) {
@@ -98,10 +104,9 @@ bool PbW2_PicaSkipEdges(void) {
 }
 
 bool PbW2_PicaEnabled(void) {
-    static bool tried;
     if (!(__atomic_load_n(&s_options, __ATOMIC_RELAXED) & PICA_ENABLED)) return false;
-    if (!s_ready && !tried) {
-        tried = true;
+    if (!s_ready && !s_initTried) {
+        s_initTried = true;
         if (!PbW2_PicaInit()) Log_Line("GPU", "PICA200 setup failed, using the CPU rasterizer");
     }
     return s_ready;

@@ -17,6 +17,8 @@ void Present_Flush(void);
 bool Present_TouchToGame(uint16_t px, uint16_t py, uint16_t *x, uint16_t *y);
 void Present_DrawGame(gfxScreen_t screen, const uint16_t *src, uint32_t options);
 void Present_DrawGameWithText(gfxScreen_t screen, const uint16_t *src, uint32_t options, const u32 *ink);
+void Present_NoteFrame(uint64_t start, uint64_t flushStart, uint64_t finish);
+unsigned Present_Fps(void);
 #endif
 
 /* Center pic_w x pic_h RGB565 on the chosen screen. Uses the GSP framebuffer

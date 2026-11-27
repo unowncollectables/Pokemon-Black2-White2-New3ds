@@ -25,11 +25,12 @@ static char s_root[96];
 
 /* Nitro can keep many logical handles open. Keep a smaller pool of SD
  * handles so field archives leave room for audio, overlays and the log. */
-enum { SD_CACHE_SIZE = 8 };
+enum { SD_CACHE_SIZE = 32 };
 typedef struct {
     char *path;
     FILE *fp;
     uint64_t used;
+    long length; /* -1 until first measured; files never change size. */
 } CachedFile;
 
 static CachedFile s_cache[SD_CACHE_SIZE];
@@ -71,12 +72,79 @@ static CachedFile *cache_file(const char *path) {
         errno = error;
         return NULL;
     }
-    *entry = (CachedFile){copy, fp, ++s_useCount};
+    *entry = (CachedFile){copy, fp, ++s_useCount, -1};
     return entry;
 }
 
 static void root_path(void) {
     snprintf(s_root, sizeof s_root, "%s/nitrofs", PBW2_SD_DIR);
+}
+
+/* Content cache: NitroFS files are immutable at runtime, so their
+ * bytes can be cached forever. 256 blocks of 32 KB (8 MB of the New
+ * 3DS's 256 MB) with LRU eviction and one block of readahead -
+ * archive-style access re-reads headers and directories constantly,
+ * and every one of those reads used to hit the SD card. All users
+ * hold s_cacheLock, like the handle cache. */
+enum { BLOCK_BYTES = 32 * 1024, BLOCK_COUNT = 256 };
+typedef struct {
+    char path[160];
+    uint32_t block;
+    uint32_t bytes;
+    uint64_t used;
+    uint8_t data[BLOCK_BYTES];
+} ContentBlock;
+static ContentBlock s_blocks[BLOCK_COUNT];
+static uint64_t s_blockUse;
+static uint32_t s_blockHits, s_blockFills;
+
+static ContentBlock *block_find(const char *path, uint32_t block) {
+    for (unsigned i = 0; i < BLOCK_COUNT; ++i) {
+        if (s_blocks[i].bytes && s_blocks[i].block == block && strcmp(s_blocks[i].path, path) == 0) {
+            s_blocks[i].used = ++s_blockUse;
+            ++s_blockHits;
+            return &s_blocks[i];
+        }
+    }
+    return NULL;
+}
+
+static ContentBlock *block_victim(void) {
+    ContentBlock *victim = &s_blocks[0];
+    for (unsigned i = 0; i < BLOCK_COUNT; ++i) {
+        if (!s_blocks[i].bytes) return &s_blocks[i];
+        if (s_blocks[i].used < victim->used) victim = &s_blocks[i];
+    }
+    return victim;
+}
+
+/* Fill one block from the file; returns NULL when the block starts
+ * at or past EOF or the read fails (caller falls back to fread). */
+static ContentBlock *block_fill(CachedFile *entry, const char *path, uint32_t block) {
+    uint64_t start = (uint64_t)block * BLOCK_BYTES;
+    if (entry->length < 0 || start >= (uint64_t)entry->length) return NULL;
+    if (fseek(entry->fp, (long)start, SEEK_SET) != 0) return NULL;
+    ContentBlock *slot = block_victim();
+    size_t want = BLOCK_BYTES;
+    if (start + want > (uint64_t)entry->length) want = (size_t)(entry->length - start);
+    clearerr(entry->fp);
+    size_t got = fread(slot->data, 1, want, entry->fp);
+    if (!got || ferror(entry->fp)) return NULL;
+    snprintf(slot->path, sizeof slot->path, "%s", path);
+    slot->block = block;
+    slot->bytes = (uint32_t)got;
+    slot->used = ++s_blockUse;
+    if (++s_blockFills % 1024 == 0)
+        Log_Line("FS", "content cache: %u hits, %u fills", s_blockHits, s_blockFills);
+    return slot;
+}
+
+static ContentBlock *block_get(CachedFile *entry, const char *path, uint32_t block) {
+    ContentBlock *found = block_find(path, block);
+    if (found) return found;
+    found = block_fill(entry, path, block);
+    if (found) block_fill(entry, path, block + 1); /* sequential readahead */
+    return found;
 }
 
 static const char *bare_path(const char *path) {
@@ -136,9 +204,10 @@ BOOL FS_OpenFile(FSFile *file, const char *path) {
     __lock_acquire(s_cacheLock);
     CachedFile *entry = cache_file(full);
     int error = entry ? 0 : errno;
-    if (entry && fseek(entry->fp, 0, SEEK_END) == 0) {
-        end = ftell(entry->fp);
+    if (entry && entry->length < 0 && fseek(entry->fp, 0, SEEK_END) == 0) {
+        entry->length = ftell(entry->fp);
     }
+    if (entry) end = entry->length;
     __lock_release(s_cacheLock);
     if (!entry) {
         file->error = error == ENOENT ? FS_RESULT_NO_ENTRY : FS_RESULT_FAILURE;
@@ -174,15 +243,54 @@ s32 FS_ReadFile(FSFile *file, void *dest, s32 size) {
     }
     if (file->argument) {
         __lock_acquire(s_cacheLock);
-        CachedFile *entry = cache_file(file->argument);
-        if (!entry || fseek(entry->fp, range->position, SEEK_SET) != 0) {
+        /* One-entry memo: reads are heavily sequential on one file,
+         * so the last resolved handle is usually this one. The check
+         * anchors on the live entry's own path string - an evicted
+         * or reused slot simply fails the compare. */
+        static CachedFile *memo;
+        CachedFile *entry = NULL;
+        if (memo && memo->fp && strcmp(memo->path, file->argument) == 0) {
+            entry = memo;
+            entry->used = ++s_useCount;
+        } else {
+            entry = cache_file(file->argument);
+            if (entry) memo = entry;
+        }
+        if (!entry) {
             __lock_release(s_cacheLock);
             file->error = FS_RESULT_FAILURE;
             return -1;
         }
-        clearerr(entry->fp);
-        size = (s32)fread(dest, 1, (size_t)size, entry->fp);
-        if (ferror(entry->fp)) file->error = FS_RESULT_FAILURE;
+        /* Serve from the content cache when the length is known;
+         * any block that cannot be filled falls back to fread for
+         * the remainder of the read. */
+        s32 done = 0;
+        if (entry->length >= 0 && strlen(file->argument) < sizeof ((ContentBlock *)0)->path) {
+            while (done < size) {
+                uint32_t at = (uint32_t)(range->position + done);
+                ContentBlock *block = block_get(entry, file->argument, at / BLOCK_BYTES);
+                if (!block) break;
+                unsigned offset = at % BLOCK_BYTES;
+                if (offset >= block->bytes) break;
+                unsigned chunk = block->bytes - offset;
+                if (chunk > (unsigned)(size - done)) chunk = (unsigned)(size - done);
+                memcpy((u8 *)dest + done, block->data + offset, chunk);
+                done += (s32)chunk;
+            }
+        }
+        if (done < size) {
+            if (fseek(entry->fp, range->position + done, SEEK_SET) != 0) {
+                __lock_release(s_cacheLock);
+                file->error = FS_RESULT_FAILURE;
+                range->position += done;
+                return done ? done : -1;
+            }
+            clearerr(entry->fp);
+            s32 rest = (s32)fread((u8 *)dest + done, 1, (size_t)(size - done), entry->fp);
+            if (ferror(entry->fp)) file->error = FS_RESULT_FAILURE;
+            done += rest;
+        }
+        size = done;
         __lock_release(s_cacheLock);
     } else {
         /* Memory files borrow their bytes for the lifetime of the handle. */

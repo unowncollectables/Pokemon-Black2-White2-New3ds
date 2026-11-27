@@ -843,12 +843,27 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
     bool layerBrightness = (effect == REG_G2_BLDCNT_EFFECT_INCREASE || effect == REG_G2_BLDCNT_EFFECT_DECREASE)
                            && (bldcnt & 0x3f) && factor;
     bool layerAlpha = effect == REG_G2_BLDCNT_EFFECT_ALPHA && (bldcnt & 0x3f) && (bldcnt & 0x3f00);
+    /* Whether BG0 itself takes part in the effect. The wide side
+     * extension replaces only BG0 (the 3D layer), so an effect aimed
+     * at other layers must not veto it - weather and flash blends
+     * strobed the wide picture off and on - while an effect that
+     * does touch BG0 must, or the unmodified sides would seam
+     * against the modified centre. */
+    bool bg0Brightness = (effect == REG_G2_BLDCNT_EFFECT_INCREASE || effect == REG_G2_BLDCNT_EFFECT_DECREASE)
+                         && (bldcnt & 0x0001) && factor;
+    bool bg0Alpha = effect == REG_G2_BLDCNT_EFFECT_ALPHA && ((bldcnt & 0x0001) || (bldcnt & 0x0100));
     bg_blend.window = window;
     bg_blend.track = layerAlpha || layerBrightness;
     bg_blend.first = 0;
     bg_blend.ink = ((dc >> REG_GX_DISPCNT_MODE_SHIFT) & 3) == 1 ? ink : NULL;
+    /* Master brightness no longer vetoes native text: compose applies
+     * it to the finished frame (and to the native top and sides), and
+     * the native stamp samples its colours from that brightened
+     * frame, so glyphs fade with everything else. The old veto made
+     * sharp text downgrade to the DS-resolution rendering for the
+     * whole length of every fade. */
     bg_blend.nativeText = bg_blend.ink && !layerAlpha && !layerBrightness &&
-                          !reg_u16(regs, 0x6c) && (is_sub || !(reg_GX_DISPCAPCNT & REG_GX_DISPCAPCNT_E_MASK));
+                          (is_sub || !(reg_GX_DISPCAPCNT & REG_GX_DISPCAPCNT_E_MASK));
     bg_blend.track |= bg_blend.nativeText;
     if (window || bg_blend.track || bg_blend.ink) blend = &bg_blend;
     if (bg_blend.track) memset(bg_blend.planes, 1u << 5, sizeof(bg_blend.planes));
@@ -878,9 +893,9 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
                 continue;
             }
             if (bg == 0 && !is_sub && (dc & REG_GX_DISPCNT_BG02D3D_MASK)) {
-                bool extend = PbW2_G3WideCamera() && ((dc >> 16) & 3) == 1 &&
-                              !layerBrightness && !layerAlpha &&
-                              !(reg_GX_DISPCAPCNT & REG_GX_DISPCAPCNT_E_MASK);
+                bool extend = PbW2_G3PublishedWide() && ((dc >> 16) & 3) == 1 &&
+                              !bg0Brightness && !bg0Alpha &&
+                              PbW2_G3PublishedNative();
                 if (extend) memcpy(underGeometry, out, sizeof underGeometry);
                 s_haveSides = PbW2_G3RasterComposite(out, window, bg_blend.track ? bg_blend.planes : NULL,
                                                      layerAlpha ? bg_blend.colors : NULL, extend ? s_sides : NULL,
