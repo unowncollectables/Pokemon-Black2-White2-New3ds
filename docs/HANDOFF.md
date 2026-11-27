@@ -4,6 +4,22 @@ Self-contained notes so another agent can take over this New 3DS port.
 Phases: [PLAN.md](PLAN.md). Build extras: [BUILDING.md](BUILDING.md).
 Short rules pointer: [AGENTS.md](../AGENTS.md).
 
+## Field FPS and GPU outline research
+
+The fixed-route REQ-22 Azahar baseline at 35629a0b1 reports 18.8 GX
+swaps/sec with outlines off on the postgame field route and 2.1 with
+outlines on. The Center route gives 16.2 and 3.9 respectively. Both
+outline-enabled runs used the CPU. In the 18.8 fps window, game residual
+took 30.314 ms, host work took 22.685 ms, and PICA readback accounted
+for 7.158 of the 9.086 ms finish time. These are emulator measurements.
+
+`make test-pica-depth` builds a diagnostic 3DSX. It renders two depth
+and stencil values into D24S8, queues the same display transfer used
+for color, then checks those values and the clear background. Azahar
+returned 123fffff, 87bfffff and 00ffffff in the corresponding pixels.
+A New 3DS run must confirm that GSP preserves the words before the
+game can depend on this path for outlining.
+
 ## Widescreen 3D
 
 L+R+Y opens Display settings. Widescreen 3D defaults off. For a full top-screen

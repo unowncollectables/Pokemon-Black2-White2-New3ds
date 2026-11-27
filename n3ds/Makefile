@@ -104,6 +104,15 @@ $(BUILD)/g3_fidelity.elf: $(G3_TEST_SRC) $(G3_TEST_MTX) $(GPU_SHADER)
 
 $(BUILD)/g3_fidelity.3dsx: $(BUILD)/g3_fidelity.elf
 	3dsxtool $< $@
+
+.PHONY: test-pica-depth
+test-pica-depth: $(BUILD)/pica_depth_readback.3dsx
+
+$(BUILD)/pica_depth_readback.elf: tests/pica_depth_readback.c $(GPU_SHADER)
+	$(CC) $(CFLAGS) $(GAMEFLAGS) $^ $(LDFLAGS) $(LIBPATHS) $(LIBS) -o $@
+
+$(BUILD)/pica_depth_readback.3dsx: $(BUILD)/pica_depth_readback.elf
+	3dsxtool $< $@
 endif
 else
 SHELL_SRC += ../lib/nitro/src/rtc/rtc_convert.c
