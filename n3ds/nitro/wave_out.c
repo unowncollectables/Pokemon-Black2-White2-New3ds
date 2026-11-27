@@ -13,7 +13,9 @@
 /* Real NNS_SndWaveOut on NDSP. The game's model is the DS one: a wave
  * plays on a locked DS hardware channel, one buffer, and the game
  * polls IsPlaying until it ends. The host maps DS channel N to NDSP
- * channel N+1 (the stream player owns NDSP 0). NDSP reads from
+ * channel N+1 (the stream player owns NDSP 0). The sequence player
+ * additionally owns host overflow voices on NDSP 17..23 (see
+ * WAVE_OVERFLOW_CHANNELS below). NDSP reads from
  * linear memory that stays alive until the DSP is shut down.
  *
  * Playback rate: the game passes the wave's native rate plus the DS
@@ -30,11 +32,24 @@
  * unconditionally. */
 
 #define WAVE_DS_CHANNELS 16
-#define WAVE_NDSP_BASE 1 /* DS ch N -> NDSP ch N+1 */
+/* Host overflow voices for the sequence player (polyphony lift):
+ * NDSP has 24 channels; the stream player owns NDSP 0 and the DS
+ * mapping below takes NDSP 1..16 (DS ch 15 = NDSP 16 is the cry
+ * reserve), leaving NDSP 17..23 as host-only voices no DS channel
+ * number names. A host voice slot numbers them WAVE_DS_CHANNELS +
+ * overflow index, so NDSP channel = WAVE_NDSP_BASE + slot uniformly
+ * across both ranges: 24 NDSP - 1 stream - 1 cry = 22 usable
+ * sequence voices (15 DS-mapped + 7 overflow). */
+#define WAVE_OVERFLOW_CHANNELS 7
+#define WAVE_HOST_CHANNELS (WAVE_DS_CHANNELS + WAVE_OVERFLOW_CHANNELS)
+#define WAVE_NDSP_BASE 1 /* host slot N -> NDSP ch N+1 */
 #define WAVE_PCM_CAPACITY (512u * 1024u) /* 512 KiB: the largest SDAT wave decodes to 451 KiB */
 enum { WAVE_FORMAT_IMA_ADPCM = 2, ADPCM_HEADER_SAMPLES = 8 };
 
 struct NNSSndWaveOut {
+    /* Host voice slot: the DS channel for game and DS-mapped
+     * sequence handles, WAVE_DS_CHANNELS + overflow index for
+     * overflow handles. Indexes s_pcm; NDSP ch is slot + 1. */
     int dsCh;
     int ndspCh;
     BOOL inUse;
@@ -52,8 +67,8 @@ struct NNSSndWaveOut {
     ndspWaveBuf loopBuf;
 };
 
-static struct NNSSndWaveOut s_channels[WAVE_DS_CHANNELS];
-static void *s_pcm[WAVE_DS_CHANNELS];
+static struct NNSSndWaveOut s_channels[WAVE_HOST_CHANNELS];
+static void *s_pcm[WAVE_HOST_CHANNELS];
 /* Serializes the channel table and PCM buffers between the game thread
  * (cry/mic paths) and the audio thread (the sequence tick, which holds
  * the seq lock when it calls in here — order is seq -> wave, and no
@@ -63,7 +78,7 @@ static LightLock s_waveLock;
 
 void WaveOut_Shutdown(void) {
     LightLock_Lock(&s_waveLock);
-    for (unsigned i = 0; i < WAVE_DS_CHANNELS; ++i) {
+    for (unsigned i = 0; i < WAVE_HOST_CHANNELS; ++i) {
         if (s_pcm[i]) linearFree(s_pcm[i]);
         s_pcm[i] = NULL;
     }
@@ -161,9 +176,13 @@ static bool wave_pending(const ndspWaveBuf *buf) {
     return buf->status == NDSP_WBUF_QUEUED || buf->status == NDSP_WBUF_PLAYING;
 }
 
+/* `channel` is a host voice slot (see the dsCh field comment):
+ * 0..WAVE_DS_CHANNELS-1 are DS-mapped, the rest are overflow. The
+ * public entry points below each validate their own range before
+ * calling in, so the game-facing DS API stays 16 channels wide. */
 static NNSSndWaveOutHandle alloc_channel(int channel, bool sequenceNote) {
     struct NNSSndWaveOut *waveOut;
-    if (channel < 0 || channel >= WAVE_DS_CHANNELS) return NULL;
+    if (channel < 0 || channel >= WAVE_HOST_CHANNELS) return NULL;
     waveOut = &s_channels[channel];
     if (waveOut->inUse) return NULL;
     memset(waveOut, 0, sizeof *waveOut);
@@ -178,6 +197,7 @@ NNSSndWaveOutHandle NNS_SndWaveOutAllocChannel(int channel) {
     NNSSndWaveOutHandle handle;
     PBW2_STUB_LOG("snd", "NNS_SndWaveOutAllocChannel (wave player)");
     Log_Line("AUDIO", "WaveOutAllocChannel ch=%d", channel);
+    if (channel < 0 || channel >= WAVE_DS_CHANNELS) return NULL;
     LightLock_Lock(&s_waveLock);
     handle = alloc_channel(channel, false);
     LightLock_Unlock(&s_waveLock);
@@ -186,8 +206,22 @@ NNSSndWaveOutHandle NNS_SndWaveOutAllocChannel(int channel) {
 
 NNSSndWaveOutHandle WaveOut_AllocSequenceChannel(int channel) {
     NNSSndWaveOutHandle handle;
+    if (channel < 0 || channel >= WAVE_DS_CHANNELS) return NULL;
     LightLock_Lock(&s_waveLock);
     handle = alloc_channel(channel, true);
+    LightLock_Unlock(&s_waveLock);
+    return handle;
+}
+
+/* Overflow voices are sequence-player-only and host-named: overflow
+ * index i is host slot WAVE_DS_CHANNELS + i (NDSP 17 + i). The game
+ * never sees these channel numbers. Allocation runs on the audio
+ * thread's sequence tick, like every sequence channel claim. */
+NNSSndWaveOutHandle WaveOut_AllocSequenceOverflowChannel(int overflow) {
+    NNSSndWaveOutHandle handle;
+    if (overflow < 0 || overflow >= WAVE_OVERFLOW_CHANNELS) return NULL;
+    LightLock_Lock(&s_waveLock);
+    handle = alloc_channel(WAVE_DS_CHANNELS + overflow, true);
     LightLock_Unlock(&s_waveLock);
     return handle;
 }

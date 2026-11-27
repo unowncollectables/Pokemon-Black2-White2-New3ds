@@ -66,6 +66,10 @@ bool PbW2_G3WideCamera(void) {
            (PBW2_VU16(0x04000304) & 0x8000u);
 }
 
+bool PbW2_G3WideEnabled(void) {
+    return __atomic_load_n(&s_wideEnabled, __ATOMIC_RELAXED) != 0;
+}
+
 static Frame s_drawing;
 static u16 s_display[MAX_PIXELS];
 /* The game publishes a complete frame. Only the presentation thread reads it. */
@@ -413,9 +417,44 @@ static unsigned descriptor_address(unsigned block) {
     return 0x20000 + ((block & 0x1fffc) >> 1) + ((block & 0x40000) ? 0x10000 : 0);
 }
 
+/* Followers Stage 1: port-owned follower strip (see g3_raster.h).
+ * Written by the follower module on the game thread before it submits
+ * the quad; read here on the same submission path (CPU raster) and at
+ * swap time on the PICA upload path, still before any other follower
+ * write can land. */
+static u8 s_folIndices[512 * 64 / 2];
+static unsigned s_folFrameSize;
+static u16 s_folPal[2][16];
+static bool s_folShiny, s_folSet;
+static u32 s_folGen;
+
+void PbW2_G3FollowerSetTexture(const u8 *indices, const u16 *palNormal, const u16 *palShiny,
+                               unsigned frameSize, bool shiny, u32 generation) {
+    if (frameSize != 32 && frameSize != 64) return;
+    s_folFrameSize = frameSize;
+    memcpy(s_folIndices, indices, 4 * frameSize * frameSize);
+    memcpy(s_folPal[0], palNormal, sizeof s_folPal[0]);
+    memcpy(s_folPal[1], palShiny, sizeof s_folPal[1]);
+    s_folShiny = shiny;
+    s_folGen = generation;
+    s_folSet = true;
+}
+
+static bool follower_texture(const Texture *t) {
+    return s_folSet && t->format == GX_TEXFMT_PLTT16 && t->address == PBW2_FOLLOWER_TEX_ADDR &&
+           t->width == 8 * s_folFrameSize && t->height == s_folFrameSize;
+}
+
 static u16 texture_pixel(const Texture *t, unsigned x, unsigned y, unsigned *alpha) {
     *alpha = 31;
     if (!t->format) return 0x7fff;
+    if (follower_texture(t)) {
+        /* The follower strip and its palette live in port RAM. */
+        unsigned i = y * t->width + x;
+        unsigned index = (s_folIndices[i / 2] >> (4 * (i & 1))) & 15;
+        if (index == 0 && (t->param & (1u << 29))) *alpha = 0;
+        return s_folPal[s_folShiny ? 1 : 0][index] & 0x7fff;
+    }
     unsigned i = y * t->width + x;
     unsigned index;
     switch (t->format) {
@@ -754,6 +793,23 @@ typedef struct {
 
 static CompressedPaletteSpan s_paletteSpans[GPU_TEXTURES_MAX];
 
+/* Zone transition (called from GFL_G3DSysCreate): texture VRAM is about
+ * to be rewritten wholesale and the PICA cache key is a write-order
+ * stamp, not content, so no resident texture or palette span may be
+ * trusted across it. Invalidate both; each zone then starts from the
+ * known-good empty-cache state (the first-entry state that always
+ * rendered textured). Also drop the previous-frame reuse state, which
+ * names textures from the old zone. Fix v1 put this call in
+ * PbW2_G3RasterReset, but REQ-18 proved RasterReset never runs per
+ * entry -- its only caller is PbW2_G3InterceptInit (boot-time). */
+void PbW2_G3RasterInvalidateZone(void) {
+#ifdef PBW2_GPU_GEOMETRY
+    PbW2_PicaInvalidate();
+    memset(s_paletteSpans, 0, sizeof s_paletteSpans);
+    s_previousGpuFrame = false;
+#endif
+}
+
 static PicaTextureKey texture_cache_key(const Texture *tex, unsigned material) {
     PicaTextureKey key = tex->key;
     memset(key.revision, 0, sizeof key.revision);
@@ -803,6 +859,9 @@ static PicaTextureKey texture_cache_key(const Texture *tex, unsigned material) {
         paletteBytes = span->paletteBytes;
     }
     key.revision[2] = range_revision(tex->palette, 0x4000, 6, palette, paletteBytes);
+    /* The follower texture's texels live in port RAM, not VRAM, so no
+     * VRAM revision can see them change; its generation is the key. */
+    if (follower_texture(tex)) key.revision[3] = s_folGen;
     return key;
 }
 

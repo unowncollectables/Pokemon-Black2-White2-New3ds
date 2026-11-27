@@ -24,7 +24,7 @@ bool Input_Init(void) {
     Result rc = irrstInit();
     s_irrst = R_SUCCEEDED(rc);
     if (!s_irrst) {
-        Log_Line("BTN", "irrstInit failed %08lX, C-stick reads as 0", (unsigned long)rc);
+        Log_Error("BTN", "irrstInit failed %08lX, C-stick reads as 0", (unsigned long)rc);
     } else {
         Log_Line("BTN", "C-stick via IRRST, ZL/ZR via HID");
     }

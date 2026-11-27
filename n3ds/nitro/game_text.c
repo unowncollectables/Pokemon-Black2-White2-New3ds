@@ -67,7 +67,17 @@ void PbW2_TextMarkGlyph(const GFLBitmap *bitmap, const GFLBitmap *glyph, int x, 
             u64 bit = (u64)1 << pixel;
             if ((record->ink & bit) && under == record->colors[pixel]) under = record->details[pixel] & 255;
             record->details[pixel] = under | ((gx & 31) << 16) | ((gy & 31) << 21);
-            if (under && gx < 32 && gy < 32) record->details[pixel] |= PBW2_TEXT_NATIVE;
+            /* Native stamping used to require a non-zero underlay, which
+             * silently excluded every window printed over a transparent
+             * bitmap fill (e.g. the bag item description, filled with 0):
+             * those glyphs fell back to the filtered scaled path and picked
+             * up a colour fringe from the backdrop. Mark them native too,
+             * flagging the transparent underlay so the compositor restores
+             * the real composed background instead of palette[0]. */
+            if (gx < 32 && gy < 32) {
+                record->details[pixel] |= PBW2_TEXT_NATIVE;
+                if (!under) record->details[pixel] |= PBW2_TEXT_CLEAR_UNDER;
+            }
             record->colors[pixel] = color;
             record->ink |= (u64)1 << pixel;
         }

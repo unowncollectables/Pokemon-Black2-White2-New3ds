@@ -4,6 +4,41 @@ Self-contained notes so another agent can take over this New 3DS port.
 Phases: [PLAN.md](PLAN.md). Build extras: [BUILDING.md](BUILDING.md).
 Short rules pointer: [AGENTS.md](../AGENTS.md).
 
+## Logger (branch ghost/b2w2-logger-hwtest)
+
+The logger is RAM-buffered for hardware testing: `Log_Line` formats
+once into a 1 MB ring in memory and `log.txt` is written only at flush
+points (clean exit, any `Log_Error`, an overlay-load safe point at
+>= 50% full, or >= 7/8 full) — no SD I/O and no printf during gameplay.
+The old logger `fflush`'d the SD file on every line (a 49,887-line
+hardware log was 49,887 mid-gameplay flushes). Mode comes from
+`logger.cfg` in the game dir (`mode=quiet|verbose`); default quiet on
+hardware builds, verbose on `PBW2_NO_SPEEDUP` emulator builds. Quiet
+keeps errors, `3DS` markers and `PERF` summaries and counts the rest
+into one close summary. `Log_Error` (cold paths) marks the run failed
+via `log_failed.flag` and flushes immediately; at boot the previous
+`log.txt` is classified failed/crash/clean and renamed to
+`log_crash.txt` or `log_prev.txt` before anything overwrites it, and
+`log_health.txt` keeps an append-only boot/exit line per run. Design:
+`~/workspace/b2w2-3ds-port/logger-hwtest-design.md`; verification is
+REQ-15 in the test queue. Not on main until the tester passes it.
+
+## Field frame timing
+
+On the Nov 27 hardware run, the LCD reached 28-29 fps. Update and
+composition averaged 24-27 ms in the later samples, while flush and
+swap took about 0.2 ms. The handoff reports about 19 GX swaps/sec for
+field GPU rendering with outlines and about 2.8 for software. The
+existing LCD timer cannot attribute the game thread cost.
+
+`PERF2` reports mean wall time for the host game update, GX submission,
+the wait including the VBlank IRQ, post-IRQ transfers, and deferred
+rendering in four-second windows. Match those windows with the GX
+swap and fallback counts. Compare the same save, route and display
+options, including outlines. Keep boot, zone loading and steady
+walking samples separate. The first emulator run checked that the
+counters emit through boot. Field timing still needs a route capture.
+
 ## Widescreen 3D
 
 L+R+Y opens Display settings. Widescreen 3D defaults off. For a full top-screen
@@ -40,8 +75,10 @@ Texture and palette reads OR all VRAM banks mapped to the same slot.
 Cache revisions include all banks contributing indices, descriptors or colors.
 Texture addresses wrap across slot 3 and cache revisions include wrapped
 texels. Identical LCDC uploads preserve existing textures and queued geometry. PICA
-uploads write complete tiles contiguously. Evicted textures of the same
-size reuse their allocation after the previous frame fence.
+uploads write complete tiles contiguously. Evicted textures are always
+deleted and re-initialised, never overwritten in place: the previous frame
+is not fenced on every publish path, and in-place reuse rendered flat
+single-colour materials (the "playdoh interiors" bug).
 The main loop submits GPU swaps before VBlank and renders them after the
 VBlank callbacks and transfers. Queued materials then resolve the current
 texture and palette bindings and cache revisions. Software frames and

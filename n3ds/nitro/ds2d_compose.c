@@ -8,6 +8,8 @@
 #include "g3_raster.h"
 #include "game_text.h"
 #include "log.h"
+#include "scene.h"
+#include "wide_layout.h"
 #include "nitro/hw.h"
 #include "nitro/gx.h"
 #include "types.h"
@@ -278,11 +280,23 @@ static inline void put_bg_pixel(u16 *out, BgBlend *blend, unsigned i, unsigned p
 }
 
 static void put_text_pixel(u16 *out, BgBlend *blend, unsigned i, unsigned plane, u16 color, u32 ink, const u16 *palette) {
+    /* The composed colour beneath this text layer, captured before the
+     * glyph overwrites it: for a glyph over a transparent underlay this
+     * is the only honest background to restore when the native stamp
+     * moves the glyph to its native-resolution coordinate. */
+    u16 below = out[i];
     put_bg_pixel(out, blend, i, plane, color);
     if (!ink || !blend || !blend->ink || (blend->window && !(blend->window[i] & plane))) return;
     blend->ink[i] = PBW2_TEXT_INK;
-    if (blend->nativeText && (ink & PBW2_TEXT_NATIVE))
-        blend->ink[i] = (ink & ~0xffu) | PBW2_TEXT_INK | palette[ink & 255];
+    if (blend->nativeText && (ink & PBW2_TEXT_NATIVE)) {
+        if (ink & PBW2_TEXT_CLEAR_UNDER)
+            /* Keep CLEAR_UNDER in the finished word: it marks the restore
+             * colour as composed-frame (not palette) and exempts the pixel
+             * from the plane-match downgrade in compose_engine. */
+            blend->ink[i] = (ink & ~0xffu) | PBW2_TEXT_INK | below;
+        else
+            blend->ink[i] = (ink & ~0xffu) | PBW2_TEXT_INK | palette[ink & 255];
+    }
 }
 
 static void compose_text_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmode, u16 *out, BgBlend *blend) {
@@ -805,9 +819,73 @@ static void capture_main(u16 *out, u32 dc) {
 static u16 s_sides[64 * 192];
 static bool s_haveSides, s_haveNativeTop;
 static u16 s_nativeTop[PBW2_NATIVE_TOP_WIDTH * PBW2_NATIVE_TOP_HEIGHT];
+static u16 s_wideTop[WL_WIDE_WIDTH * WL_HEIGHT], s_wideBottom[WL_WIDE_WIDTH * WL_HEIGHT];
+static bool s_haveWideTop, s_haveWideBottom;
 
 const u16 *PbW2_NativeTop(void) {
     return s_haveNativeTop ? s_nativeTop : NULL;
+}
+
+const u16 *PbW2_WideTop(void) {
+    return s_haveWideTop ? s_wideTop : NULL;
+}
+
+const u16 *PbW2_WideBottom(void) {
+    return s_haveWideBottom ? s_wideBottom : NULL;
+}
+
+/* A wide 2D layout declines (the centred picture stands) when the
+ * engine is not in plain graphics mode, is forced blank, or carries
+ * the 3D layer on BG0 — that screen belongs to the 3D wide path.
+ * Display capture armed on the main engine declines both screens:
+ * capture frames are transitions, and a layout must not flicker. */
+static bool layout_declined(const u8 *regs) {
+    u32 dc = reg_u32(regs, 0);
+    if (dc & 0x80u) return true;
+    if (((dc >> REG_GX_DISPCNT_MODE_SHIFT) & 3) != 1) return true;
+    if (dc & REG_GX_DISPCNT_BG02D3D_MASK) return true;
+    return false;
+}
+
+static void log_layout_change(int isTop, const char *name) {
+    static const char *s_lastTop, *s_lastBottom;
+    const char **last = isTop ? &s_lastTop : &s_lastBottom;
+    if (name == *last) return;
+    *last = name;
+    Log_Line("WIDE", "layout %s: %s", isTop ? "top" : "bottom", name ? name : "none");
+}
+
+static void apply_wide_layouts(int main_upper, u16 *main_fb, u16 *sub_fb) {
+    u16 *top_fb = main_upper ? main_fb : sub_fb;
+    u16 *bottom_fb = main_upper ? sub_fb : main_fb;
+    const u8 *top_regs = main_upper ? pbw2_io : pbw2_io + 0x1000;
+    const u8 *bottom_regs = main_upper ? pbw2_io + 0x1000 : pbw2_io;
+    unsigned count = 0;
+    const char *name = NULL;
+    const WlPart *parts;
+
+    PbW2_WideSetFrameContext(main_upper);
+    if (!PbW2_G3WideEnabled() || (reg_GX_DISPCAPCNT & REG_GX_DISPCAPCNT_E_MASK)) {
+        log_layout_change(1, NULL);
+        log_layout_change(0, NULL);
+        return;
+    }
+    parts = PbW2_WideLayoutTop(&count, &name);
+    if (top_fb && parts && !layout_declined(top_regs)) {
+        PbW2_WideApplyLayout(top_fb, s_wideTop, parts, count);
+        s_haveWideTop = true;
+        log_layout_change(1, name);
+    } else {
+        log_layout_change(1, NULL);
+    }
+    parts = PbW2_WideLayoutBottom(&count, &name);
+    if (bottom_fb && parts && !layout_declined(bottom_regs)) {
+        PbW2_WideApplyLayout(bottom_fb, s_wideBottom, parts, count);
+        s_haveWideBottom = true;
+        log_layout_change(0, name);
+    } else {
+        log_layout_change(0, NULL);
+    }
 }
 
 const u16 *PbW2_TopSides(void) {
@@ -942,7 +1020,8 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
             int x = PbW2_TextNativeCoordinate(i % 256, (info >> 16) & 31);
             int y = PbW2_TextNativeCoordinate(i / 256, (info >> 21) & 31);
             if (!bg_blend.nativeText || !bg_blend.planes[i] || (unsigned)x >= 320 || (unsigned)y >= 240 ||
-                bg_blend.planes[i] != bg_blend.planes[PbW2_TextSourceCoordinate(y) * 256 + PbW2_TextSourceCoordinate(x)])
+                (!(info & PBW2_TEXT_CLEAR_UNDER) &&
+                 bg_blend.planes[i] != bg_blend.planes[PbW2_TextSourceCoordinate(y) * 256 + PbW2_TextSourceCoordinate(x)]))
                 ink[i] = PBW2_TEXT_INK;
         }
     }
@@ -1041,6 +1120,7 @@ void PbW2_ComposeScreensWithText(u16 *top_rgb565, u16 *bottom_rgb565, u32 *topIn
     u16 *sub_fb;
 
     s_haveSides = s_haveNativeTop = false;
+    s_haveWideTop = s_haveWideBottom = false;
     if (topInk) memset(topInk, 0, 256 * 192 * sizeof(*topInk));
     if (bottomInk) memset(bottomInk, 0, 256 * 192 * sizeof(*bottomInk));
     s_mode5_diag.compose_frames++;
@@ -1062,6 +1142,7 @@ void PbW2_ComposeScreensWithText(u16 *top_rgb565, u16 *bottom_rgb565, u32 *topIn
         if (main_upper) compose_sub(pbw2_io + 0x1000, sub_fb, bottomInk);
         else compose_engine(pbw2_io + 0x1000, 1, sub_fb, topInk);
     }
+    apply_wide_layouts(main_upper, main_fb, sub_fb);
 }
 
 int PbW2_ComposeScreens(u16 *top_rgb565, u16 *bottom_rgb565) {

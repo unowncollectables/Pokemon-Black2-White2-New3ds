@@ -117,12 +117,21 @@ static int ComputeReciprocal(BigNum *reciprocal, BigNum *modulus, int bits, BigN
 static BOOL ModExpPlain(BigNum *dest, BigNum *base, BigNum *exponent, BigNum *modulus, BigNumPool *pool);
 static BOOL ModExpMont(BigNum *dest, BigNum *base, BigNum *exponent, BigNum *modulus, BigNumPool *pool,
                        Montgomery *mont);
+#ifdef PBW2_N3DS
+static u32 MulAddWords(u32 *dest, const u32 *a, int size, u32 word);
+static u32 MulWord(u32 *dest, const u32 *a, int size, u32 word);
+static void SquareDigits(u32 *dest, const u32 *a, int size);
+static u64 DivWords(u32 high, u32 low, u32 divisor);
+static u32 AddWords(u32 *dest, const u32 *a, const u32 *b, int size);
+static u32 SubWords(u32 *dest, const u32 *a, const u32 *b, int size);
+#else
 static asm u32 MulAddWords(u32 *dest, const u32 *a, int size, u32 word);
 static asm u32 MulWord(u32 *dest, const u32 *a, int size, u32 word);
 static asm void SquareDigits(u32 *dest, const u32 *a, int size);
 static asm u64 DivWords(u32 high, u32 low, u32 divisor);
 static asm u32 AddWords(u32 *dest, const u32 *a, const u32 *b, int size);
 static asm u32 SubWords(u32 *dest, const u32 *a, const u32 *b, int size);
+#endif
 static BOOL ReadAsn1(const u8 **data, u32 *size, int tag, u32 *length);
 static BOOL ParsePadding(const u8 *block, u32 size, const u8 **out, u32 *outSize);
 static BOOL ParseDigestInfo(const u8 *data, u32 size, const u8 **oid, u32 *oidSize, const u8 **digest, u32 *digestSize);
@@ -2214,6 +2223,62 @@ done:
 
 // The primitives of the numbers' words are MWCC `asm` functions: the assembly that the bundled big-number library
 // shipped, unrolled by four with the long multiplications and the add with carry that the compiler does not use
+#ifdef PBW2_N3DS
+// Portable versions of the word operations used by the NitroDWC RSA routines.
+static u32 MulAddWords(u32 *dest, const u32 *a, int size, u32 word) {
+    u64 carry = 0;
+    for (int i = 0; i < size; ++i) {
+        u64 value = (u64)a[i] * word + dest[i] + carry;
+        dest[i] = (u32)value;
+        carry = value >> 32;
+    }
+    return (u32)carry;
+}
+
+static u32 MulWord(u32 *dest, const u32 *a, int size, u32 word) {
+    u64 carry = 0;
+    for (int i = 0; i < size; ++i) {
+        u64 value = (u64)a[i] * word + carry;
+        dest[i] = (u32)value;
+        carry = value >> 32;
+    }
+    return (u32)carry;
+}
+
+static void SquareDigits(u32 *dest, const u32 *a, int size) {
+    for (int i = 0; i < size; ++i) {
+        u64 square = (u64)a[i] * a[i];
+        dest[i * 2] = (u32)square;
+        dest[i * 2 + 1] = (u32)(square >> 32);
+    }
+}
+
+static u64 DivWords(u32 high, u32 low, u32 divisor) {
+    return (u32)((((u64)high << 32) | low) / divisor);
+}
+
+static u32 AddWords(u32 *dest, const u32 *a, const u32 *b, int size) {
+    u64 carry = 0;
+    for (int i = 0; i < size; ++i) {
+        u64 value = (u64)a[i] + b[i] + carry;
+        dest[i] = (u32)value;
+        carry = value >> 32;
+    }
+    return (u32)carry;
+}
+
+static u32 SubWords(u32 *dest, const u32 *a, const u32 *b, int size) {
+    u32 borrow = 0;
+    for (int i = 0; i < size; ++i) {
+        u64 subtrahend = (u64)b[i] + borrow;
+        u32 word = a[i];
+        dest[i] = (u32)(word - subtrahend);
+        borrow = word < subtrahend;
+    }
+    return borrow;
+}
+#else
+
 // clang-format off
 static asm u32 MulAddWords(u32 *dest, const u32 *a, int size, u32 word) {
     stmdb sp!, {r4, r5, r6, r7, r8, lr}
@@ -2414,3 +2479,4 @@ SubWords_Loop:
 }
 
 // clang-format on
+#endif

@@ -25,7 +25,8 @@ ifneq ($(ARCH_OK),yes)
 ARCH := -march=armv6k+fp -mtune=mpcore -mfloat-abi=hard -mtp=soft
 endif
 
-CFLAGS := -g -O2 -Wall -Wno-unused-function -mword-relocations -ffunction-sections -fdata-sections \
+PBW2_BUILD_COMMIT ?= $(or $(shell git rev-parse --short HEAD 2>/dev/null),unknown)
+CFLAGS := -DPBW2_BUILD_COMMIT=\"$(PBW2_BUILD_COMMIT)\" -g -O2 -Wall -Wno-unused-function -mword-relocations -ffunction-sections -fdata-sections \
 	$(ARCH) -D__3DS__ -DPBW2_N3DS \
 	-I$(CURDIR)/../build/n3ds -I$(CURDIR)/include -I$(CURDIR)/source -I$(CURDIR)/nitro \
 	-iquote$(CURDIR)/../include -I$(CURDIR)/../lib/nitro/include -I$(CURDIR)/../lib/twl/include \
@@ -79,13 +80,13 @@ LIB_GAME_OBJS := \
 	$(foreach o,$(LIB_GAME_SPL),../build/n3ds/$(GAME_SYM)/obj/lib/spl/src/$(o))
 CFLAGS += -DPBW2_LINK_GAME=1
 CFLAGS += $(shell for d in $(CURDIR)/../lib/*/include; do echo -I$$d; done)
-SHELL_SRC += source/game_thread.c nitro/mi_host.c nitro/ic_dc_host.c \
+SHELL_SRC += source/game_thread.c source/follower.c nitro/mi_host.c nitro/ic_dc_host.c \
 	nitro/os_more_host.c nitro/os_thread_host.c nitro/rom_header_host.c nitro/pm_host.c nitro/pxi_host.c \
 	nitro/pxi_service.c nitro/cp_div_host.c nitro/nvram_host.c nitro/dtcm_host.c nitro/link_syms.c nitro/overlay_host.c nitro/scene.c \
 	nitro/overlay_ids.c nitro/overlay_id_decode_gen.c nitro/nitro_stubs.c nitro/nns_title_stubs.c nitro/title_link_syms.c \
 	nitro/g3_gx_stub.c nitro/fx_host.c nitro/link_stubs.c nitro/proc_stubs.c nitro/net_stubs.c \
 	nitro/snd_silent.c nitro/strm_pcm.c nitro/snd_arc.c nitro/wave_out.c nitro/seq_player.c nitro/mic_stub.c nitro/mb_stub.c nitro/wm_stub.c nitro/twl_stub.c nitro/pad_host.c nitro/vram_host.c nitro/vram_dma.c nitro/affine_track.c nitro/ds2d_compose.c \
-	nitro/g3_intercept.c nitro/g3_gecom_host.c nitro/g3_raster.c nitro/game_text.c
+	nitro/g3_intercept.c nitro/g3_gecom_host.c nitro/g3_raster.c nitro/game_text.c nitro/wide_layout.c
 GAME_RSP := $(CURDIR)/../build/n3ds/$(shell echo $(GAME) | tr A-Z a-z)/game_objects.rsp
 GAME_LDFLAGS := @$(GAME_RSP)
 ifneq ($(PBW2_GPU_GEOMETRY),0)
@@ -97,12 +98,22 @@ LIBS := -lcitro3d $(LIBS)
 test-g3: $(BUILD)/g3_fidelity.3dsx
 
 G3_TEST_SRC := tests/g3_fidelity.c nitro/g3_pica.c nitro/g3_intercept.c nitro/g3_raster.c nitro/ds2d_compose.c \
-	nitro/vram_host.c nitro/vram_dma.c nitro/affine_track.c nitro/cp_div_host.c nitro/fx_host.c nitro/game_text.c
+	nitro/vram_host.c nitro/vram_dma.c nitro/affine_track.c nitro/cp_div_host.c nitro/fx_host.c nitro/game_text.c \
+	nitro/wide_layout.c nitro/scene.c
 G3_TEST_MTX := $(foreach size,43 44,../build/n3ds/$(GAME_SYM)/obj/lib/nitro/src/fx/fx_mtx$(size).o)
 $(BUILD)/g3_fidelity.elf: $(G3_TEST_SRC) $(G3_TEST_MTX) $(GPU_SHADER)
 	$(CC) $(CFLAGS) $(GAMEFLAGS) $^ $(LDFLAGS) -Wl,--wrap=PbW2_PicaFinish,--wrap=C3D_TexInitWithParams $(LIBPATHS) $(LIBS) -o $@
 
 $(BUILD)/g3_fidelity.3dsx: $(BUILD)/g3_fidelity.elf
+	3dsxtool $< $@
+
+.PHONY: test-follower
+test-follower: $(BUILD)/follower_native.3dsx
+
+$(BUILD)/follower_native.elf: tests/follower_native.c source/follower.c
+	$(CC) $(CFLAGS) $(GAMEFLAGS) $< $(LDFLAGS) $(LIBPATHS) $(LIBS) -o $@
+
+$(BUILD)/follower_native.3dsx: $(BUILD)/follower_native.elf
 	3dsxtool $< $@
 endif
 else

@@ -36,7 +36,7 @@ bool Workers_Start(const char *name, ThreadFunc fn, int prio, int core, Worker *
         worker->thread = threadCreate(fn, worker, 32 * 1024, prio, 0, false);
     }
     if (!worker->thread) {
-        Log_Line("3DS", "threadCreate failed for %s", name);
+        Log_Error("3DS", "threadCreate failed for %s", name);
         worker->run = false;
         return false;
     }

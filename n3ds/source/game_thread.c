@@ -30,7 +30,7 @@ void GameThread_Start(void) {
     s_thread = threadCreate(GameThread, NULL, 0x10000, 0x30, 3, false);
     if (!s_thread) {
         s_failed = 1;
-        Log_Line("game", "thread create failed");
+        Log_Error("game", "thread create failed");
         printf("\n[game] thread create failed\n");
         return;
     }

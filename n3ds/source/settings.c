@@ -3,6 +3,10 @@
 
 #include "config.h"
 #include "log.h"
+#include "pbw2_port.h"
+#if defined(PBW2_LINK_GAME)
+#include "system/gf_font.h"
+#endif
 #include "save_backup.h"
 #ifdef PBW2_GPU_GEOMETRY
 #include "g3_pica.h"
@@ -19,9 +23,8 @@
 /* DS-space canvas and presented scaled 5/4 onto the 320x240 bottom    */
 /* framebuffer, exactly like SS presents its canvas. Every zone        */
 /* constant below is SS's (kSa* in ss3ds_settings_ui.h); only the      */
-/* colours are B2W2's own greys/teals - the one difference Nate's      */
-/* parity spec permits. Text still uses the libctru console font; the  */
-/* game-font/sharp-text path is parity stage P5, not this one.         */
+/* colours are B2W2's own greys/teals. Game glyphs are stamped at      */
+/* native scale after the canvas is fitted to the LCD.                */
 /*                                                                     */
 /* Session semantics are SS's too: values are edited in a staged copy  */
 /* and applied + written to config.txt only when the menu closes       */
@@ -89,6 +92,7 @@ static uint32_t s_display;
 static int s_fpsOverride = -1;
 static char s_oldPath[160];
 static char s_cfgPath[160];
+static char s_loggerPath[160];
 static const char s_configHeader[] = "PBW2-DISPLAY 1\n";
 static const char s_hex[] = "0123456789abcdef";
 
@@ -108,15 +112,16 @@ static const struct {
     const char *label;
     const char *key;
     uint32_t flag;
+    const char *description;
 } s_options[] = {
-    {"LCD fit (4:3)", "lcd_fit", DISPLAY_LCD_FIT},
-    {"Top screen fit (4:3)", "top_fit", DISPLAY_TOP_FIT},
-    {"Sharp scaling", "sharp_pixels", DISPLAY_SHARP_PIXELS},
-    {"Sharp game text", "sharp_text", DISPLAY_SHARP_TEXT},
+    {"LCD fit (4:3)", "lcd_fit", DISPLAY_LCD_FIT, "Fit both game screens to the LCD height at 4:3."},
+    {"Top screen fit (4:3)", "top_fit", DISPLAY_TOP_FIT, "Fit the upper game screen to LCD height."},
+    {"Sharp scaling", "sharp_pixels", DISPLAY_SHARP_PIXELS, "Keep pixel edges crisp when scaling the game image."},
+    {"Sharp game text", "sharp_text", DISPLAY_SHARP_TEXT, "Draw supported game text at native LCD resolution."},
 #ifdef PBW2_GPU_GEOMETRY
-    {"GPU geometry (exp.)", "gpu_geometry", DISPLAY_PICA_GEOMETRY},
-    {"GPU 3D without outlines", "gpu_no_edges", DISPLAY_PICA_NO_EDGES},
-    {"Widescreen 3D", "wide_field", DISPLAY_WIDE_FIELD},
+    {"GPU geometry (exp.)", "gpu_geometry", DISPLAY_PICA_GEOMETRY, "Use the New 3DS GPU for supported Nintendo DS scenes."},
+    {"GPU 3D without outlines", "gpu_no_edges", DISPLAY_PICA_NO_EDGES, "Skip polygon outlines to keep more scenes on the GPU."},
+    {"Widescreen 3D", "wide_field", DISPLAY_WIDE_FIELD, "Extend supported 3D scenes to the sides of the top LCD."},
 #endif
 };
 
@@ -138,7 +143,7 @@ enum RowKind {
     ROW_NOTE,     /* empty-state note (BATTLE / PLAY), no pill */
 };
 
-enum { ROW_SPECIAL_NONE = 0, ROW_SPECIAL_SCALE = 1 };
+enum { ROW_SPECIAL_NONE = 0, ROW_SPECIAL_SCALE = 1, ROW_SPECIAL_LOGMODE = 2 };
 
 typedef struct {
     const char *label;
@@ -147,11 +152,13 @@ typedef struct {
     int nLabels;
     int kind;
     int special;
+    const char *description;
 } RowDef;
 
 static const char *const kBoolLabels[] = { "OFF", "ON" };
 static const char *const kScaleLabels[] = { "1:1", "FIT", "TOP FIT" };
 static const char *const kExportLabels[] = { "A: EXPORT", "EXPORT ON CLOSE" };
+static const char *const kLogModeLabels[] = { "QUIET", "VERBOSE" };
 
 enum {
     TAB_LOOK = 0, TAB_BATTLE = 1, TAB_PLAY = 2, TAB_SYSTEM = 3, TAB_DEBUG = 4,
@@ -162,28 +169,45 @@ static const char *const s_tabNames[TAB_COUNT] = { "LOOK", "BATTLE", "PLAY", "SY
 
 /* Rehousing map (menu-parity.md SS4.1): display rows -> LOOK, Export
  * save -> SYSTEM #1 (SS's SYSTEM export slot), FPS counter -> DEBUG
- * #1 and Save backups -> DEBUG #2 (their exact SS slots), the old
+ * #1 and Save backups -> DEBUG #2 (their exact SS slots), Log mode
+ * -> DEBUG #3 (P4, backed by logger.cfg - see s_debugRows), the old
  * System diagnostics -> DEBUG as read-only rows. BATTLE ships with
  * Nate's note row only - no functional battle rows yet, and the
  * must-NOT-copy list binds (no SELECT=reset, no skip-intro, no shiny
- * odds, no no-wild-battles). PLAY's follower row lands with the
- * follower feature; until then it carries the same note treatment. */
+ * odds, no no-wild-battles). PLAY row #1 is the follower toggle
+ * (Followers Stage 1); further PLAY rows arrive with their features. */
 static RowDef s_lookRows[ROWS + 1];
 static const RowDef s_battleRows[] = {
-    { "Battle settings come later", NULL, NULL, 0, ROW_NOTE, ROW_SPECIAL_NONE },
+    { "Battle settings come later", NULL, NULL, 0, ROW_NOTE, ROW_SPECIAL_NONE, "This build has no battle toggles." },
 };
 static const RowDef s_playRows[] = {
-    { "Play settings come later", NULL, NULL, 0, ROW_NOTE, ROW_SPECIAL_NONE },
+    /* Followers Stage 1: PLAY row #1 per the rehousing map
+     * (menu-parity.md SS4.1). Config key `follower`, default OFF
+     * (repo rule: new features ship off). The follower itself lives
+     * in n3ds/source/follower.c and reads the key through the
+     * config store, so stored == applied with no extra wiring. */
+    { "Following Pokémon", "follower", kBoolLabels, 2, ROW_VALUE, ROW_SPECIAL_NONE, "Walk with the lead Pokémon following behind you." },
 };
 static const RowDef s_systemRows[] = {
-    { "Export save", NULL, kExportLabels, 2, ROW_ACTION, ROW_SPECIAL_NONE },
+    { "Export save", NULL, kExportLabels, 2, ROW_ACTION, ROW_SPECIAL_NONE, "Copy the current save to the export folder when closing." },
 };
 static const RowDef s_debugRows[] = {
-    { "FPS counter", "fps_counter", kBoolLabels, 2, ROW_VALUE, ROW_SPECIAL_NONE },
-    { "Save backups", "save_backup", kBoolLabels, 2, ROW_VALUE, ROW_SPECIAL_NONE },
-    { "Config store", NULL, NULL, 0, ROW_READONLY, ROW_SPECIAL_NONE },
-    { "Config file reads", NULL, NULL, 0, ROW_READONLY, ROW_SPECIAL_NONE },
-    { "Display flags", NULL, NULL, 0, ROW_READONLY, ROW_SPECIAL_NONE },
+    { "FPS counter", "fps_counter", kBoolLabels, 2, ROW_VALUE, ROW_SPECIAL_NONE, "Show the measured presentation rate on the top screen." },
+    { "Save backups", "save_backup", kBoolLabels, 2, ROW_VALUE, ROW_SPECIAL_NONE, "Keep backup copies when the game updates the save." },
+    /* Log mode (P4): NOT a config-store key. It stages like every
+     * other row but commits on close to logger.cfg, the hardware-test
+     * logger's own file contract (logger-hwtest-design.md SS4:
+     * mode=quiet|verbose, read once at boot). The logger code itself
+     * lives on ghost/b2w2-logger-hwtest and is not in this branch -
+     * this row speaks to its file, never to its code, and the choice
+     * takes effect at the next launch, which the note row under it
+     * says in the menu's current text path (the top-screen card that
+     * will carry row descriptions is P5). */
+    { "Log mode", NULL, kLogModeLabels, 2, ROW_VALUE, ROW_SPECIAL_LOGMODE, "Choose quiet or verbose logging for the next launch." },
+    { "Takes effect at next launch", NULL, NULL, 0, ROW_NOTE, ROW_SPECIAL_NONE, "Relaunch the game to use the selected log mode." },
+    { "Config store", NULL, NULL, 0, ROW_READONLY, ROW_SPECIAL_NONE, "The file that stores the game port preferences." },
+    { "Config file reads", NULL, NULL, 0, ROW_READONLY, ROW_SPECIAL_NONE, "Count the times the config store has read its file." },
+    { "Display flags", NULL, NULL, 0, ROW_READONLY, ROW_SPECIAL_NONE, "Show the display bit mask currently in use." },
 };
 
 static const RowDef *tab_def(unsigned tab, unsigned *count) {
@@ -210,9 +234,82 @@ static int scale_value(void) {
     return 0;
 }
 
+/* ---------------- Log mode file contract (P4) ---------------- */
+/* The hardware-test logger (branch ghost/b2w2-logger-hwtest, design
+ * logger-hwtest-design.md SS4) owns logger.cfg in the game's SD dir:
+ * one line, mode=quiet or mode=verbose, read once at boot. That code
+ * is not in this branch, so the DEBUG Log mode row integrates through
+ * the file only: it parses the file at menu open, stages QUIET/
+ * VERBOSE like any other multi-state row, and writes the file on
+ * close (staged .tmp + rename, the config store's own pattern) when
+ * the staged value differs from the open-time value. config.txt is
+ * never touched by this row - there is deliberately no log_mode key
+ * in the config store. */
+
+/* The logger's platform default when logger.cfg is absent or holds
+ * no usable mode line: verbose on emulator test builds
+ * (PBW2_NO_SPEEDUP - the flag that already marks a build as
+ * emulator-only), quiet on hardware builds. Determinable at compile
+ * time, so the row honestly shows the effective mode, never a
+ * placeholder. Must match the logger branch's own default when it
+ * lands; REQ-15 verifies that side. */
+static int logger_default_mode(void) {
+#ifdef PBW2_NO_SPEEDUP
+    return 1; /* VERBOSE */
+#else
+    return 0; /* QUIET */
+#endif
+}
+
+/* 0 = QUIET, 1 = VERBOSE, -1 = file absent / no usable mode line. */
+static int logger_file_mode(void) {
+    FILE *file = fopen(s_loggerPath, "rb");
+    if (!file) return -1;
+    int mode = -1;
+    char line[128];
+    while (fgets(line, sizeof line, file)) {
+        const char *p = line;
+        while (*p == ' ' || *p == '\t') ++p;
+        if (strncmp(p, "mode=", 5) != 0) continue;
+        p += 5;
+        while (*p == ' ' || *p == '\t') ++p;
+        size_t len = strlen(p);
+        while (len > 0 && (p[len - 1] == '\n' || p[len - 1] == '\r' || p[len - 1] == ' ' || p[len - 1] == '\t')) --len;
+        if (len == 5 && strncmp(p, "quiet", 5) == 0) mode = 0;
+        if (len == 7 && strncmp(p, "verbose", 7) == 0) mode = 1;
+    }
+    fclose(file);
+    return mode;
+}
+
+static void write_logger_mode(int mode) {
+    char tempPath[168];
+    snprintf(tempPath, sizeof tempPath, "%s.tmp", s_loggerPath);
+    FILE *file = fopen(tempPath, "wb");
+    if (!file) {
+        Log_Line("CFG", "logger.cfg staged write failed");
+        return;
+    }
+    fprintf(file, "mode=%s\n", mode ? "verbose" : "quiet");
+    if (fclose(file) != 0) {
+        Log_Line("CFG", "logger.cfg staged close failed");
+        return;
+    }
+    remove(s_loggerPath);
+    if (rename(tempPath, s_loggerPath) != 0) {
+        Log_Line("CFG", "logger.cfg commit rename failed");
+        return;
+    }
+    Log_Line("CFG", "logger.cfg mode=%s written; applies at next launch", mode ? "verbose" : "quiet");
+}
+
 static int row_value(const RowDef *row) {
     if (row->kind == ROW_ACTION) return 0; /* actions always open disarmed */
     if (row->special == ROW_SPECIAL_SCALE) return scale_value();
+    if (row->special == ROW_SPECIAL_LOGMODE) {
+        int fileMode = logger_file_mode();
+        return fileMode >= 0 ? fileMode : logger_default_mode();
+    }
     if (row->key) return PbW2_ConfigGetInt(row->key, 0);
     return 0;
 }
@@ -272,6 +369,7 @@ void Settings_Init(const char *dir) {
         s_lookRows[i].nLabels = 2;
         s_lookRows[i].kind = ROW_VALUE;
         s_lookRows[i].special = ROW_SPECIAL_NONE;
+        s_lookRows[i].description = s_options[i].description;
     }
     s_lookRows[ROWS].label = "Scale";
     s_lookRows[ROWS].key = NULL;
@@ -279,8 +377,10 @@ void Settings_Init(const char *dir) {
     s_lookRows[ROWS].nLabels = 3;
     s_lookRows[ROWS].kind = ROW_VALUE;
     s_lookRows[ROWS].special = ROW_SPECIAL_SCALE;
+    s_lookRows[ROWS].description = "Choose original size, fit both screens, or fit the top only.";
 
     snprintf(s_cfgPath, sizeof s_cfgPath, "%s/config.txt", dir);
+    snprintf(s_loggerPath, sizeof s_loggerPath, "%s/logger.cfg", dir);
     snprintf(s_oldPath, sizeof s_oldPath, "%s/display.cfg", dir);
     PbW2_ConfigInit(s_cfgPath);
     /* One-way migration: if the config store has none of the display
@@ -365,6 +465,10 @@ static void commit_stage(void) {
             if (row->special == ROW_SPECIAL_SCALE) {
                 PbW2_ConfigSetBool("lcd_fit", s_stage[t][i] == 1);
                 PbW2_ConfigSetBool("top_fit", s_stage[t][i] == 2);
+            } else if (row->special == ROW_SPECIAL_LOGMODE) {
+                /* File contract only: logger.cfg on close, never
+                 * the config store (see the P4 block above). */
+                write_logger_mode(s_stage[t][i]);
             } else if (row->key) {
                 PbW2_ConfigSetInt(row->key, s_stage[t][i]);
             }
@@ -544,6 +648,66 @@ uint32_t Settings_DisplayFlags(void) {
 /* ------------------------- drawing ------------------------- */
 #if defined(PBW2_LINK_GAME)
 static u16 s_canvas[CANVAS_W * CANVAS_H];
+enum { FIRST_CHAR = 32, LAST_CHAR = 126, CELL_SIZE = 16, MENU_LABELS = 32 };
+static struct {
+    GlyphInfo info;
+    u8 pixels[CELL_SIZE * CELL_SIZE / 2];
+} s_glyphs[LAST_CHAR - FIRST_CHAR + 1];
+static bool s_fontReady, s_nativeText;
+static u8 s_letterIndex, s_shadowIndex;
+
+typedef struct {
+    char text[96];
+    int x, y;
+    u16 color;
+} MenuLabel;
+static MenuLabel s_labels[MENU_LABELS];
+static unsigned s_labelCount;
+
+void Settings_CacheGameFont(Font *font) {
+    if (!font || __atomic_load_n(&s_fontReady, __ATOMIC_ACQUIRE)) return;
+
+    u8 background;
+    GFL_TextRndGetGlobalColors(&s_letterIndex, &s_shadowIndex, &background);
+    if (s_letterIndex == background) return;
+    for (unsigned c = FIRST_CHAR; c <= LAST_CHAR; ++c) {
+        unsigned index = c - FIRST_CHAR;
+        GFL_FontGetGlyph(font, c, s_glyphs[index].pixels, &s_glyphs[index].info);
+    }
+    __atomic_store_n(&s_fontReady, true, __ATOMIC_RELEASE);
+    Log_Line("CFG", "settings use native game glyphs");
+}
+
+static unsigned glyph_index(unsigned c) {
+    if (c < FIRST_CHAR || c > LAST_CHAR) c = '?';
+    return c - FIRST_CHAR;
+}
+
+static void draw_labels(u16 *fb, unsigned stride, unsigned width, int offset) {
+    for (unsigned i = 0; i < s_labelCount; ++i) {
+        const MenuLabel *label = &s_labels[i];
+        int x = offset + 5 * label->x / 4;
+        int y = 5 * label->y / 4;
+        for (const char *c = label->text; *c; ++c) {
+            unsigned index = glyph_index((unsigned char)*c);
+            const GlyphInfo *info = &s_glyphs[index].info;
+            const u8 *glyph = s_glyphs[index].pixels;
+            for (unsigned gy = 0; gy < info->height && gy < CELL_SIZE; ++gy) {
+                for (unsigned gx = 0; gx < info->width && gx < CELL_SIZE; ++gx) {
+                    unsigned tile = (gy / 8) * 2 + gx / 8;
+                    unsigned data = glyph[tile * 32 + (gy & 7) * 4 + (gx & 7) / 2];
+                    unsigned ink = (data >> ((gx & 1) * 4)) & 15;
+                    unsigned px = x + info->x + gx, py = y + gy;
+                    if (px >= width || py >= stride) continue;
+                    if (ink == s_letterIndex) fb[px * stride + stride - 1 - py] = label->color;
+                    else if (ink && ink == s_shadowIndex) fb[px * stride + stride - 1 - py] = COL_BG_BOT;
+                }
+            }
+            x += info->advance;
+        }
+    }
+}
+
 
 static u16 mix565(u16 a, u16 c, int t, int n) {
     int ar = (a >> 11) & 31, ag = (a >> 5) & 63, ab = a & 31;
@@ -582,6 +746,14 @@ static void cv_box(int x0, int y0, int x1, int y1, u16 fill, u16 edge, int rim) 
 }
 
 static void cv_text(int x, int y, const char *text, u16 color) {
+    if (s_nativeText) {
+        if (s_labelCount < MENU_LABELS) {
+            MenuLabel *label = &s_labels[s_labelCount++];
+            *label = (MenuLabel){.x = x, .y = y, .color = color};
+            snprintf(label->text, sizeof label->text, "%s", text);
+        }
+        return;
+    }
     const ConsoleFont *font = &consoleGetDefault()->font;
     for (; *text; ++text, x += 8) {
         const u8 *glyph = font->gfx + 8 * ((unsigned char)*text - font->asciiOffset);
@@ -592,7 +764,10 @@ static void cv_text(int x, int y, const char *text, u16 color) {
 }
 
 static int text_w(const char *text) {
-    return (int)strlen(text) * 8;
+    if (!s_nativeText) return (int)strlen(text) * 8;
+    int width = 0;
+    for (; *text; ++text) width += s_glyphs[glyph_index((unsigned char)*text)].info.advance;
+    return (width * 4 + 4) / 5;
 }
 
 static void cv_arrow(int x, int y, int dir, u16 color) {
@@ -613,9 +788,9 @@ static int cv_pill(int xr, int y0, const char *text, u16 fill, u16 ink) {
 static const char *readonly_value(unsigned tab, unsigned row, char *buf, size_t size) {
     (void)tab;
     /* DEBUG read-only rows, in s_debugRows order after the two
-     * config-backed rows. */
-    if (row == 2) return "config.txt";
-    if (row == 3) {
+     * config-backed rows, the Log mode row and its note row. */
+    if (row == 4) return "config.txt";
+    if (row == 5) {
         snprintf(buf, size, "%u", PbW2_ConfigFileReads());
         return buf;
     }
@@ -707,11 +882,80 @@ static void draw_canvas(void) {
 }
 #endif
 
+#if defined(PBW2_LINK_GAME)
+static void describe_row(int x, int y, const char *description) {
+    char line[96];
+    unsigned length = 0;
+    for (unsigned lines = 0; lines < 3 && *description; ++lines) {
+        unsigned split = 0;
+        length = 0;
+        while (description[length] && length < sizeof line - 1) {
+            if (description[length] == ' ') split = length;
+            line[length] = description[length];
+            line[length + 1] = 0;
+            if (text_w(line) > 206) break;
+            ++length;
+        }
+        if (description[length] && split) length = split;
+        line[length] = 0;
+        cv_text(x, y + 13 * lines, line, COL_TAB_TEXT);
+        description += length;
+        while (*description == ' ') ++description;
+    }
+}
+#endif
+
+void Settings_DrawTop(void) {
+#if defined(PBW2_LINK_GAME)
+    u16 stride, width;
+    u16 *fb = (u16 *)gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &stride, &width);
+    if (!fb || stride != 240 || width != 400) return;
+    s_nativeText = __atomic_load_n(&s_fontReady, __ATOMIC_ACQUIRE);
+    s_labelCount = 0;
+
+    enum { LEFT = 12, RIGHT = 244, TOP = 19, BOTTOM = 173 };
+    cv_box(LEFT, TOP, RIGHT, BOTTOM, COL_BG_TOP, COL_TAB_ON_EDGE, 1);
+    cv_fill(LEFT + 2, TOP + 2, RIGHT - 2, TOP + 23, COL_TAB_ON);
+    cv_text(20, TOP + 5, "SETTINGS", COL_TAB_TEXT);
+    cv_pill(RIGHT - 8, TOP + 5, "INPUT PAUSED", COL_BG_BOT, COL_TAB_TEXT);
+    cv_text(20, 46, "Pokemon " PBW2_GAME_NAME " for New 3DS", COL_TAB_TEXT);
+    cv_text(20, 61, "Build " PBW2_BUILD_COMMIT " | " __DATE__, COL_TAB_TEXT);
+
+    unsigned count;
+    const RowDef *rows = tab_def(s_tab, &count);
+    const RowDef *row = &rows[s_row < count ? s_row : 0];
+    char breadcrumb[96];
+    snprintf(breadcrumb, sizeof breadcrumb, "%s > %s", s_tabNames[s_tab], row->label);
+    cv_text(20, 81, breadcrumb, COL_TAB_ON_EDGE);
+    cv_text(20, 98, row->label, COL_TAB_TEXT);
+    describe_row(20, 114, row->description);
+
+    cv_fill(LEFT + 2, 153, RIGHT - 2, BOTTOM - 2, COL_BG_BOT);
+    cv_text(20, 157, "Changes are saved when you close.", COL_TAB_TEXT);
+
+    for (unsigned x = 0; x < width; ++x) {
+        for (unsigned y = 0; y < stride; ++y) {
+            u16 *pixel = &fb[x * stride + stride - 1 - y];
+            int sx = ((int)x - 40) * 4 / 5, sy = y * 4 / 5;
+            int dy = sy - TOP < BOTTOM - 1 - sy ? sy - TOP : BOTTOM - 1 - sy;
+            int cut = dy < 2 ? 2 - dy : 0;
+            if (dy >= 0 && sx >= LEFT + cut && sx < RIGHT - cut)
+                *pixel = s_canvas[sy * CANVAS_W + sx];
+            else
+                *pixel = (*pixel >> 1) & 0x7bef;
+        }
+    }
+    draw_labels(fb, stride, width, 40);
+#endif
+}
+
 void Settings_Draw(void) {
 #if defined(PBW2_LINK_GAME)
     u16 stride, width;
     u16 *fb = (u16 *)gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &stride, &width);
     if (!fb || stride != 240 || width != 320) return;
+    s_nativeText = __atomic_load_n(&s_fontReady, __ATOMIC_ACQUIRE);
+    s_labelCount = 0;
     draw_canvas();
     /* Present the 256x192 canvas at 320x240 (uniform 5/4), in the
      * framebuffer's column-major addressing. */
@@ -721,6 +965,7 @@ void Settings_Draw(void) {
             fb[x * stride + stride - 1 - y] = s_canvas[(y * 4 / 5) * CANVAS_W + sx];
         }
     }
+    draw_labels(fb, stride, width, 0);
 #else
     printf("\x1b[1;0HSETTINGS");
     printf("\x1b[3;0HDisplay settings in linked builds.");

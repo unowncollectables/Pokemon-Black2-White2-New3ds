@@ -91,17 +91,17 @@ static void load_file(void) {
 static bool save_file(void) {
     FILE *file = fopen(s_tempPath, "wb");
     if (!file) {
-        Log_Line("CFG", "config.txt staged write failed");
+        Log_Error("CFG", "config.txt staged write failed");
         return false;
     }
     for (unsigned i = 0; i < s_lineCount; ++i) fprintf(file, "%s\n", s_lines[i]);
     if (fclose(file) != 0) {
-        Log_Line("CFG", "config.txt staged close failed");
+        Log_Error("CFG", "config.txt staged close failed");
         return false;
     }
     remove(s_path);
     if (rename(s_tempPath, s_path) != 0) {
-        Log_Line("CFG", "config.txt commit rename failed");
+        Log_Error("CFG", "config.txt commit rename failed");
         return false;
     }
     return true;

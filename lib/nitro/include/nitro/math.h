@@ -95,7 +95,7 @@ u32 MATH_CountLeadingZerosFunc(u32 x);
 // The number of set bits
 u8 MATH_CountPopulation(u32 x);
 
-#ifdef __thumb
+#if defined(__thumb) || defined(PBW2_N3DS)
 static inline u32 MATH_CountLeadingZeros(u32 x) {
     return MATH_CountLeadingZerosFunc(x);
 }

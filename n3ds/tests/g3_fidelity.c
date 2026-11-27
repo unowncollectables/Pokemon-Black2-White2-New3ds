@@ -863,7 +863,8 @@ static bool check_optional_edges(void) {
         if (pixels[i] == (0x8000 | GX_RGB(0, 31, 0))) return false;
     }
 
-    /* A feature that needs software rendering still gets its outlines. */
+    /* Re-enable outlines before checking the software path. */
+    PbW2_PicaSetOptions(true, false);
     cmd(G3OP_POLYGON_ATTR, opaque | (GX_POLYGONMODE_TOON << 4));
     triangle(GX_RGB(31, 0, 0), 0);
     cmd(0x50, 0);
@@ -1020,7 +1021,22 @@ static bool check_sharp_text(void) {
     PbW2_TextUpload(&window, vram, 1, sizeof windowPixels);
     PbW2_ComposeScreensWithText(pixels, NULL, ink, NULL);
     PbW2_TextForgetBitmap(&window);
-    return ink[0] == 0;
+    if (ink[0]) return false;
+
+    /* A clear window has no plane at the DS sample where the native
+     * glyph lands. The foreground ink must still use the real backdrop. */
+    memset(glyphPixels, 0, sizeof glyphPixels);
+    glyphPixels[3] = 0x10;
+    memset(windowPixels, 0, sizeof windowPixels);
+    palette[0] = GX_RGB(0, 0, 31);
+    PbW2_TextMarkGlyph(&window, &glyph, 0, 0, 8, 8);
+    windowPixels[3] = 0x10;
+    memcpy(vram + 32, windowPixels, sizeof windowPixels);
+    PbW2_TextUpload(&window, vram, 1, sizeof windowPixels);
+    PbW2_ComposeScreensWithText(pixels, NULL, ink, NULL);
+    PbW2_TextForgetBitmap(&window);
+    return ink[7] == (PBW2_TEXT_NATIVE | PBW2_TEXT_INK | PBW2_TEXT_CLEAR_UNDER | (7u << 16) | 0x001fu) &&
+           pixels[6] == 0x001f && pixels[7] == 0xf800;
 }
 
 static bool check_wrapped_texture(void) {
@@ -1175,11 +1191,12 @@ static uint32_t test_texel(const void *source, unsigned x, unsigned y) {
     return *(const uint32_t *)source;
 }
 
-static bool check_pica_storage_reuse(void) {
+static bool check_pica_storage_eviction(void) {
     uint32_t color = 0xff0000ff;
     PicaTexture texture = { .width = 8, .height = 8, .source = &color, .texel = test_texel };
+    PbW2_G3RasterInvalidateZone();
     if (!PbW2_PicaBegin(0)) return false;
-    for (unsigned i = 0; i < 128; ++i) {
+    for (unsigned i = 0; i < PICA_TEXTURE_SLOTS; ++i) {
         texture.key.param = 0x10000000 | i;
         if (PbW2_PicaUpload(&texture) < 0) return false;
     }
@@ -1190,8 +1207,17 @@ static bool check_pica_storage_reuse(void) {
     if (!PbW2_PicaBegin(0)) return false;
     color = 0x0000ff80;
     int slot = PbW2_PicaUpload(&texture);
-    return slot >= 0 && PbW2_PicaTextureAlpha(slot) == PICA_TEX_ALPHA_FRACTIONAL &&
-           s_textureAllocations == allocations;
+    /* The victim is deleted and re-initialised, never overwritten in place:
+     * exactly one fresh allocation, holding the new texture's data. */
+    if (slot < 0 || PbW2_PicaTextureAlpha(slot) != PICA_TEX_ALPHA_FRACTIONAL ||
+        s_textureAllocations != allocations + 1) return false;
+
+    PbW2_G3RasterInvalidateZone();
+    if (!PbW2_PicaBegin(0)) return false;
+    color = 0xff0000ff;
+    slot = PbW2_PicaUpload(&texture);
+    return slot >= 0 && PbW2_PicaTextureAlpha(slot) == PICA_TEX_ALPHA_OPAQUE &&
+           s_textureAllocations == allocations + 2;
 }
 
 static bool check_pinned_native_frame(void) {
@@ -1431,7 +1457,7 @@ int main(void) {
         fprintf(f, "Wide camera capture %s\n", check_wide_frame(true, true) ? "PASS" : "FAIL");
         fprintf(f, "Sharp text tiles %s\n", check_sharp_text() ? "PASS" : "FAIL");
         fprintf(f, "Wrapped texture and upload reuse %s\n", check_wrapped_texture() ? "PASS" : "FAIL");
-        fprintf(f, "PICA texture allocation reuse %s\n", check_pica_storage_reuse() ? "PASS" : "FAIL");
+        fprintf(f, "PICA texture eviction re-init %s\n", check_pica_storage_eviction() ? "PASS" : "FAIL");
         fprintf(f, "Pinned native frame %s\n", check_pinned_native_frame() ? "PASS" : "FAIL");
         fprintf(f, "Clipped OBJ priority %s\n", check_clipped_objs() ? "PASS" : "FAIL");
         fprintf(f, "Sub-screen input cache %s\n", check_sub_cache() ? "PASS" : "FAIL");

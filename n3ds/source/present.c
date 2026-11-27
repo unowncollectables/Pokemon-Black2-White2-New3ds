@@ -74,7 +74,14 @@ void GxShim_Present(uint32_t flags) {
             if (top) {
                 const u16 *sides = PbW2_TopSides();
                 const u16 *native = PbW2_NativeTop();
-                if (native && (options & DISPLAY_WIDE_FIELD)) {
+                const u16 *wideTop = PbW2_WideTop();
+                if (wideTop && (options & DISPLAY_WIDE_FIELD)) {
+                    /* Wide 2D layout picture (320 wide, centre unmoved).
+                     * No native ink: glyph coordinates are DS-space and
+                     * a layout screen's text rides the scaled path until
+                     * the REQ-14 map says which of its layers are native. */
+                    draw_scaled(GFX_TOP, wideTop, 320, options, NULL);
+                } else if (native && (options & DISPLAY_WIDE_FIELD)) {
                     Present_BlitRGB565(GFX_TOP, native, PBW2_NATIVE_TOP_WIDTH, PBW2_NATIVE_TOP_HEIGHT);
                     if (topInk) draw_native_text(GFX_TOP, top, GAME_WIDTH, topInk, true);
                 } else if (sides && (options & DISPLAY_WIDE_FIELD)) {
@@ -87,7 +94,14 @@ void GxShim_Present(uint32_t flags) {
                     draw_scaled(GFX_TOP, wide, 320, options, topInk);
                 } else Present_DrawGameWithText(GFX_TOP, top, options, topInk);
             }
-            Present_DrawBottomCached(bottom, options, bottomInk);
+            {
+                const u16 *wideBottom = PbW2_WideBottom();
+                if (bottom && wideBottom && (options & DISPLAY_WIDE_FIELD)) {
+                    draw_scaled(GFX_BOTTOM, wideBottom, 320, options, NULL);
+                } else {
+                    Present_DrawBottomCached(bottom, options, bottomInk);
+                }
+            }
             pbw2_game_notify_present();
         }
     }
@@ -120,6 +134,15 @@ static void clear_side_margins(u16 *fb, unsigned stride, unsigned width, unsigne
 
 #if defined(PBW2_LINK_GAME)
 bool Present_TouchToGame(uint16_t px, uint16_t py, uint16_t *x, uint16_t *y) {
+    /* Under a wide bottom layout the picture is 320 wide with the DS
+     * centre unmoved at +32: invert that mapping, or taps on the X
+     * menu's tiles would land a strip-width off. */
+    if (PbW2_WideBottom() && (Settings_DisplayFlags() & DISPLAY_WIDE_FIELD)) {
+        if (px < 32 || px >= 288) return false;
+        *x = px - 32;
+        *y = (2 * py + 1) * GAME_HEIGHT / (2 * 240);
+        return true;
+    }
     GameRect rect = game_rect(GFX_BOTTOM, 320, 240, Settings_DisplayFlags());
     if (px < rect.x || px >= rect.x + rect.width || py < rect.y || py >= rect.y + rect.height) return false;
     *x = (2 * (px - rect.x) + 1) * GAME_WIDTH / (2 * rect.width);
