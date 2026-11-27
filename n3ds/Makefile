@@ -25,7 +25,8 @@ ifneq ($(ARCH_OK),yes)
 ARCH := -march=armv6k+fp -mtune=mpcore -mfloat-abi=hard -mtp=soft
 endif
 
-CFLAGS := -g -O2 -Wall -Wno-unused-function -mword-relocations -ffunction-sections -fdata-sections \
+PBW2_BUILD_COMMIT ?= $(or $(shell git rev-parse --short HEAD 2>/dev/null),unknown)
+CFLAGS := -DPBW2_BUILD_COMMIT=\"$(PBW2_BUILD_COMMIT)\" -g -O2 -Wall -Wno-unused-function -mword-relocations -ffunction-sections -fdata-sections \
 	$(ARCH) -D__3DS__ -DPBW2_N3DS \
 	-I$(CURDIR)/../build/n3ds -I$(CURDIR)/include -I$(CURDIR)/source -I$(CURDIR)/nitro \
 	-iquote$(CURDIR)/../include -I$(CURDIR)/../lib/nitro/include -I$(CURDIR)/../lib/twl/include \

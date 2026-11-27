@@ -37,6 +37,7 @@
 
 #ifdef PBW2_N3DS
 #include "log.h"
+#include "settings.h"
 #endif
 
 // The title screen: a 3D scene under a camera that follows a curve, with 2D layers over it. The main engine draws to
@@ -563,6 +564,9 @@ static void TitleBG_Init(TitleBG *bg, HeapID heapId) {
     bg->print.flushPending = FALSE;
     GFL_BGSysLoadScr(5);
     bg->font = GFL_FontCreate(ARCID_FONT, 0, 0, 0, heapId);
+#ifdef PBW2_N3DS
+    Settings_CacheGameFont(bg->font);
+#endif
     bg->printQueue = PrintQueue_CreateDefault(heapId);
     bg->msgData = GFL_MsgSysLoadData(FALSE, ARCID_SYSTEM_MESSAGE, TEXT_BANK_TITLE, heapId);
     bg->strbuf = GFL_StrBufCreate(64, heapId);

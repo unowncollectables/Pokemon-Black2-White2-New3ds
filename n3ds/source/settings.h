@@ -31,6 +31,9 @@ uint32_t Settings_DisplayFlags(void);
  * boot -> field path applies exactly what a menu round-trip applies.
  * Idempotent: two atomic stores. */
 void Settings_ApplyDisplay(void);
+struct Font;
+void Settings_CacheGameFont(struct Font *font);
 void Settings_Draw(void);
+void Settings_DrawTop(void);
 
 #endif

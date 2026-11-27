@@ -248,9 +248,12 @@ int main(int argc, char **argv) {
 #endif
         GxShim_Present(flags);
 #if defined(PBW2_LINK_GAME)
-        if ((flags & PBW2_SCREEN_BOTTOM) && Settings_Open()) Settings_Draw();
-        if ((flags & PBW2_SCREEN_TOP) && Settings_FpsCounterOn() && PbW2_GameHasPresented())
+        if (Settings_Open()) {
+            if (flags & PBW2_SCREEN_BOTTOM) Settings_Draw();
+            if (flags & PBW2_SCREEN_TOP) Settings_DrawTop();
+        } else if ((flags & PBW2_SCREEN_TOP) && Settings_FpsCounterOn() && PbW2_GameHasPresented()) {
             FpsOverlay_Draw();
+        }
         u64 flushStart = svcGetSystemTick();
 #endif
 
