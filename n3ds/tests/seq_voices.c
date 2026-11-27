@@ -75,9 +75,14 @@ static const char *check_voices(void) {
     s_dspVoices[0].allocated = false;
     if (note_on(0, 20) != &s_dspVoices[0]) return "claim the released direct channel";
 
+    /* Force the steal case after the allocator's free-voice passes. */
+    for (int ch = 2; ch < SEQ_VOICE_SLOTS; ++ch) {
+        if (ch != SEQ_CRY_CHANNEL) s_dspVoices[ch].allocated = true;
+    }
     if (note_on(2, 20) != &s_dspVoices[1] || s_slots[1].tracks[0].notes[0].active ||
         !s_slots[0].tracks[0].notes[0].active)
         return "steal the oldest equal-priority note across sequences";
+    for (int ch = 2; ch < SEQ_VOICE_SLOTS; ++ch) s_dspVoices[ch].allocated = false;
 
     s_slots[3].playerNo = 1;
     s_allocChBitFlag[1] = 0;
