@@ -1020,7 +1020,22 @@ static bool check_sharp_text(void) {
     PbW2_TextUpload(&window, vram, 1, sizeof windowPixels);
     PbW2_ComposeScreensWithText(pixels, NULL, ink, NULL);
     PbW2_TextForgetBitmap(&window);
-    return ink[0] == 0;
+    if (ink[0]) return false;
+
+    /* A clear window has no plane at the DS sample where the native
+     * glyph lands. The foreground ink must still use the real backdrop. */
+    memset(glyphPixels, 0, sizeof glyphPixels);
+    glyphPixels[3] = 0x10;
+    memset(windowPixels, 0, sizeof windowPixels);
+    palette[0] = GX_RGB(0, 0, 31);
+    PbW2_TextMarkGlyph(&window, &glyph, 0, 0, 8, 8);
+    windowPixels[3] = 0x10;
+    memcpy(vram + 32, windowPixels, sizeof windowPixels);
+    PbW2_TextUpload(&window, vram, 1, sizeof windowPixels);
+    PbW2_ComposeScreensWithText(pixels, NULL, ink, NULL);
+    PbW2_TextForgetBitmap(&window);
+    return ink[7] == (PBW2_TEXT_NATIVE | PBW2_TEXT_INK | PBW2_TEXT_CLEAR_UNDER | (7u << 16) | 0x001fu) &&
+           pixels[6] == 0x001f && pixels[7] == 0xf800;
 }
 
 static bool check_wrapped_texture(void) {
