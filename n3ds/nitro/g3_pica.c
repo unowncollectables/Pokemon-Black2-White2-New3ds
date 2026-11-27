@@ -7,7 +7,7 @@
 #include <citro3d.h>
 #include <string.h>
 
-enum { WIDTH = 256, HEIGHT = 192, LCD_WIDTH = 400, LCD_HEIGHT = 240, VERTICES = 24576, BATCHES = 1024, TEXTURES = 256 };
+enum { WIDTH = 256, HEIGHT = 192, LCD_WIDTH = 400, LCD_HEIGHT = 240, VERTICES = 24576, BATCHES = 1024 };
 enum { TEXTURE_CACHE_BYTES = 8 * 1024 * 1024 };
 
 extern const u8 _binary_g3_pass_shbin_start[], _binary_g3_pass_shbin_end[];
@@ -39,7 +39,7 @@ static struct {
     PicaTextureKey key;
     uint64_t frame;
     unsigned bytes, alpha;
-} s_texture[TEXTURES];
+} s_texture[PICA_TEXTURE_SLOTS];
 static Batch s_batch[BATCHES];
 static unsigned s_vertexCount, s_batchCount, s_cacheBytes, s_uploads, s_hits;
 static unsigned s_invalidations;
@@ -86,14 +86,14 @@ static void evict(unsigned i) {
  * either way. Hits/uploads stay cumulative so tester comparisons across
  * entries still work; invalidations counts the resets themselves. */
 void PbW2_PicaInvalidate(void) {
-    for (unsigned i = 0; i < TEXTURES; ++i) evict(i);
+    for (unsigned i = 0; i < PICA_TEXTURE_SLOTS; ++i) evict(i);
     s_cacheBytes = 0;
     ++s_invalidations;
 }
 
 void PbW2_PicaExit(void) {
     if (!s_ready) return;
-    for (unsigned i = 0; i < TEXTURES; ++i) evict(i);
+    for (unsigned i = 0; i < PICA_TEXTURE_SLOTS; ++i) evict(i);
     if (s_shader) {
         if (s_program.vertexShader) shaderProgramFree(&s_program);
         DVLB_Free(s_shader);
@@ -147,10 +147,10 @@ static GPU_TEXTURE_WRAP_PARAM wrap(unsigned repeat, unsigned mirror) {
 }
 
 static unsigned oldest_unreferenced(void) {
-    unsigned oldest = TEXTURES;
-    for (unsigned i = 0; i < TEXTURES; ++i) {
+    unsigned oldest = PICA_TEXTURE_SLOTS;
+    for (unsigned i = 0; i < PICA_TEXTURE_SLOTS; ++i) {
         if (s_texture[i].bytes && s_texture[i].frame != s_frame
-            && (oldest == TEXTURES || s_texture[i].frame < s_texture[oldest].frame)) oldest = i;
+            && (oldest == PICA_TEXTURE_SLOTS || s_texture[i].frame < s_texture[oldest].frame)) oldest = i;
     }
     return oldest;
 }
@@ -158,7 +158,7 @@ static unsigned oldest_unreferenced(void) {
 int PbW2_PicaUpload(const PicaTexture *texture) {
     unsigned width = texture->width, height = texture->height;
     if (width > 1024 || height > 1024) return -1;
-    for (unsigned i = 0; i < TEXTURES; ++i) {
+    for (unsigned i = 0; i < PICA_TEXTURE_SLOTS; ++i) {
         if (s_texture[i].bytes && !memcmp(&s_texture[i].key, &texture->key, sizeof texture->key)) {
             s_texture[i].frame = s_frame;
             ++s_hits;
@@ -177,13 +177,13 @@ int PbW2_PicaUpload(const PicaTexture *texture) {
      * the cache on each failure -- a ratchet that guaranteed harder
      * eviction work on every later zone entry. */
     unsigned slot = 0;
-    while (slot < TEXTURES && s_texture[slot].bytes) ++slot;
-    if (slot == TEXTURES) {
+    while (slot < PICA_TEXTURE_SLOTS && s_texture[slot].bytes) ++slot;
+    if (slot == PICA_TEXTURE_SLOTS) {
         slot = oldest_unreferenced();
-        if (slot == TEXTURES) return -1;
+        if (slot == PICA_TEXTURE_SLOTS) return -1;
     }
     unsigned reclaimable = 0;
-    for (unsigned i = 0; i < TEXTURES; ++i) {
+    for (unsigned i = 0; i < PICA_TEXTURE_SLOTS; ++i) {
         if (s_texture[i].bytes && (i == slot || s_texture[i].frame != s_frame))
             reclaimable += s_texture[i].bytes;
     }
@@ -200,7 +200,7 @@ int PbW2_PicaUpload(const PicaTexture *texture) {
     evict(slot);
     while (s_cacheBytes + bytes > TEXTURE_CACHE_BYTES) {
         unsigned oldest = oldest_unreferenced();
-        if (oldest == TEXTURES) return -1; /* Unreachable: the budget was proven above. */
+        if (oldest == PICA_TEXTURE_SLOTS) return -1; /* Unreachable: the budget was proven above. */
         evict(oldest);
     }
     if (!C3D_TexInit(tex, width, height, GPU_RGBA8)) return -1;

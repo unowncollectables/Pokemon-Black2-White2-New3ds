@@ -863,7 +863,8 @@ static bool check_optional_edges(void) {
         if (pixels[i] == (0x8000 | GX_RGB(0, 31, 0))) return false;
     }
 
-    /* A feature that needs software rendering still gets its outlines. */
+    /* Re-enable outlines before checking the software path. */
+    PbW2_PicaSetOptions(true, false);
     cmd(G3OP_POLYGON_ATTR, opaque | (GX_POLYGONMODE_TOON << 4));
     triangle(GX_RGB(31, 0, 0), 0);
     cmd(0x50, 0);
@@ -1178,8 +1179,9 @@ static uint32_t test_texel(const void *source, unsigned x, unsigned y) {
 static bool check_pica_storage_eviction(void) {
     uint32_t color = 0xff0000ff;
     PicaTexture texture = { .width = 8, .height = 8, .source = &color, .texel = test_texel };
+    PbW2_G3RasterInvalidateZone();
     if (!PbW2_PicaBegin(0)) return false;
-    for (unsigned i = 0; i < 128; ++i) {
+    for (unsigned i = 0; i < PICA_TEXTURE_SLOTS; ++i) {
         texture.key.param = 0x10000000 | i;
         if (PbW2_PicaUpload(&texture) < 0) return false;
     }
@@ -1192,8 +1194,15 @@ static bool check_pica_storage_eviction(void) {
     int slot = PbW2_PicaUpload(&texture);
     /* The victim is deleted and re-initialised, never overwritten in place:
      * exactly one fresh allocation, holding the new texture's data. */
-    return slot >= 0 && PbW2_PicaTextureAlpha(slot) == PICA_TEX_ALPHA_FRACTIONAL &&
-           s_textureAllocations == allocations + 1;
+    if (slot < 0 || PbW2_PicaTextureAlpha(slot) != PICA_TEX_ALPHA_FRACTIONAL ||
+        s_textureAllocations != allocations + 1) return false;
+
+    PbW2_G3RasterInvalidateZone();
+    if (!PbW2_PicaBegin(0)) return false;
+    color = 0xff0000ff;
+    slot = PbW2_PicaUpload(&texture);
+    return slot >= 0 && PbW2_PicaTextureAlpha(slot) == PICA_TEX_ALPHA_OPAQUE &&
+           s_textureAllocations == allocations + 2;
 }
 
 static bool check_pinned_native_frame(void) {

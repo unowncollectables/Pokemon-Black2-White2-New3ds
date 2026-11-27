@@ -29,6 +29,8 @@ typedef enum {
     PICA_ALPHA_OPAQUE,
 } PicaAlphaTest;
 
+enum { PICA_TEXTURE_SLOTS = 256 };
+
 enum {
     PICA_TEX_ALPHA_OPAQUE = 1u << 0,
     PICA_TEX_ALPHA_FRACTIONAL = 1u << 1,
