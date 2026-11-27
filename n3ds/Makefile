@@ -85,7 +85,7 @@ SHELL_SRC += source/game_thread.c nitro/mi_host.c nitro/ic_dc_host.c \
 	nitro/overlay_ids.c nitro/overlay_id_decode_gen.c nitro/nitro_stubs.c nitro/nns_title_stubs.c nitro/title_link_syms.c \
 	nitro/g3_gx_stub.c nitro/fx_host.c nitro/link_stubs.c nitro/proc_stubs.c nitro/net_stubs.c \
 	nitro/snd_silent.c nitro/strm_pcm.c nitro/snd_arc.c nitro/wave_out.c nitro/seq_player.c nitro/mic_stub.c nitro/mb_stub.c nitro/wm_stub.c nitro/twl_stub.c nitro/pad_host.c nitro/vram_host.c nitro/vram_dma.c nitro/affine_track.c nitro/ds2d_compose.c \
-	nitro/g3_intercept.c nitro/g3_gecom_host.c nitro/g3_raster.c nitro/game_text.c
+	nitro/g3_intercept.c nitro/g3_gecom_host.c nitro/g3_raster.c nitro/game_text.c nitro/wide_layout.c
 GAME_RSP := $(CURDIR)/../build/n3ds/$(shell echo $(GAME) | tr A-Z a-z)/game_objects.rsp
 GAME_LDFLAGS := @$(GAME_RSP)
 ifneq ($(PBW2_GPU_GEOMETRY),0)
@@ -97,7 +97,8 @@ LIBS := -lcitro3d $(LIBS)
 test-g3: $(BUILD)/g3_fidelity.3dsx
 
 G3_TEST_SRC := tests/g3_fidelity.c nitro/g3_pica.c nitro/g3_intercept.c nitro/g3_raster.c nitro/ds2d_compose.c \
-	nitro/vram_host.c nitro/vram_dma.c nitro/affine_track.c nitro/cp_div_host.c nitro/fx_host.c nitro/game_text.c
+	nitro/vram_host.c nitro/vram_dma.c nitro/affine_track.c nitro/cp_div_host.c nitro/fx_host.c nitro/game_text.c \
+	nitro/wide_layout.c nitro/scene.c
 G3_TEST_MTX := $(foreach size,43 44,../build/n3ds/$(GAME_SYM)/obj/lib/nitro/src/fx/fx_mtx$(size).o)
 $(BUILD)/g3_fidelity.elf: $(G3_TEST_SRC) $(G3_TEST_MTX) $(GPU_SHADER)
 	$(CC) $(CFLAGS) $(GAMEFLAGS) $^ $(LDFLAGS) -Wl,--wrap=PbW2_PicaFinish,--wrap=C3D_TexInitWithParams $(LIBPATHS) $(LIBS) -o $@

@@ -12,6 +12,10 @@ void PbW2_ComposeScreensWithText(u16 *top_rgb565, u16 *bottom_rgb565, u32 *topIn
 int PbW2_ComposeScreens(u16 *top_rgb565, u16 *bottom_rgb565);
 const u16 *PbW2_TopSides(void);
 const u16 *PbW2_NativeTop(void);
+/* 320x192 wide-layout pictures for the current frame (wide_layout.c),
+ * or NULL when the scene has no layout or the layout declined. */
+const u16 *PbW2_WideTop(void);
+const u16 *PbW2_WideBottom(void);
 int PbW2_GameDisplayReady(void);
 void PbW2_GxDisplayTrace(void);
 

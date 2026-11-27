@@ -66,6 +66,10 @@ bool PbW2_G3WideCamera(void) {
            (PBW2_VU16(0x04000304) & 0x8000u);
 }
 
+bool PbW2_G3WideEnabled(void) {
+    return __atomic_load_n(&s_wideEnabled, __ATOMIC_RELAXED) != 0;
+}
+
 static Frame s_drawing;
 static u16 s_display[MAX_PIXELS];
 /* The game publishes a complete frame. Only the presentation thread reads it. */

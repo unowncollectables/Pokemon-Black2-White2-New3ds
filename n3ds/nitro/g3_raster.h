@@ -8,6 +8,9 @@ enum { PBW2_NATIVE_TOP_WIDTH = 400, PBW2_NATIVE_TOP_HEIGHT = 240 };
 
 void PbW2_G3SetWide(bool enabled);
 bool PbW2_G3WideCamera(void);
+/* The wide toggle itself (DISPLAY_WIDE_FIELD), without the per-frame
+ * camera conditions: the 2D layout path keys off the toggle alone. */
+bool PbW2_G3WideEnabled(void);
 /* The published frame's shape, for compose-time decisions. */
 bool PbW2_G3PublishedWide(void);
 bool PbW2_G3PublishedNative(void);
