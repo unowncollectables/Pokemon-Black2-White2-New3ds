@@ -114,13 +114,13 @@ BOOL FS_LoadOverlay(MIProcessor target, FSOverlayID id) {
     }
     binarySize = (info.flag & FS_OVERLAY_FLAG_COMP) ? info.compressedSize : info.ramSize;
     if (binarySize == 0 || binarySize > info.ramSize || info.bssSize > UINT32_MAX - info.ramSize) {
-        Log_Line("overlay", "GFL_OvlLoad id=%u fail (invalid sizes)", (unsigned)id);
+        Log_Error("overlay", "GFL_OvlLoad id=%u fail (invalid sizes)", (unsigned)id);
         return FALSE;
     }
     dsAddr = (u32)(uintptr_t)info.ramAddress;
     hostMem = (u8 *)malloc(info.ramSize + info.bssSize);
     if (!hostMem) {
-        Log_Line("overlay", "GFL_OvlLoad id=%u fail (nomem)", (unsigned)id);
+        Log_Error("overlay", "GFL_OvlLoad id=%u fail (nomem)", (unsigned)id);
         return FALSE;
     }
     overlay_root(path, sizeof path);
@@ -129,7 +129,7 @@ BOOL FS_LoadOverlay(MIProcessor target, FSOverlayID id) {
     if (!ok) {
         PBW2_STUB_LOG("FS_LoadOverlay", "id=%u missing %s", (unsigned)id, path);
         free(hostMem);
-        Log_Line("overlay", "GFL_OvlLoad id=%u fail (missing bin)", (unsigned)id);
+        Log_Error("overlay", "GFL_OvlLoad id=%u fail (missing bin)", (unsigned)id);
         return FALSE;
     }
     if (info.bssSize) {
@@ -139,6 +139,10 @@ BOOL FS_LoadOverlay(MIProcessor target, FSOverlayID id) {
     PbW2_SceneOverlayLoaded(id);
     Log_Line("overlay", "GFL_OvlLoad id=%u ok host=%p ds=0x%08x size=%u bss=%u", (unsigned)id, (void *)hostMem,
              (unsigned)dsAddr, (unsigned)info.ramSize, (unsigned)info.bssSize);
+    /* Loading moment: the game is already reading the card. Give the
+     * logger its safe point so a long session's RAM ring reaches
+     * log.txt in bounded pieces (no-op below half full). */
+    Log_SafePoint();
     return TRUE;
 }
 
