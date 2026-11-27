@@ -29,3 +29,18 @@ void PbW2_G3ReleaseNative(void);
 void PbW2_G3RasterCapture(u16 *rgb555);
 /* Called on the geometry thread before an upload overwrites LCDC memory. */
 void PbW2_G3RasterBeforeLcdcWrite(u32 address, u32 bytes);
+
+/* Followers Stage 1: the port-owned follower texture. The follower
+ * quad is submitted with this magic TEXIMAGE address (a PLTT16
+ * texture there would run past the end of texture VRAM, so no real
+ * draw can use it -- the same trick Nate's Platinum port uses).
+ * texture_pixel() serves texels from the registered strip instead of
+ * VRAM, on both the CPU rasterizer and the PICA upload path
+ * (gpu_texel funnels through texture_pixel). The strip is one
+ * 256x32 PLTT16 image: eight 32x32 frames, controller-14 order.
+ * `generation` increments on every identity/palette change and is
+ * folded into the PICA cache key so a cached upload can never go
+ * stale across a follower change. */
+#define PBW2_FOLLOWER_TEX_ADDR 0x7FFF8u
+void PbW2_G3FollowerSetTexture(const u8 *indices, const u16 *palNormal, const u16 *palShiny,
+                               bool shiny, u32 generation);

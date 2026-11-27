@@ -413,9 +413,41 @@ static unsigned descriptor_address(unsigned block) {
     return 0x20000 + ((block & 0x1fffc) >> 1) + ((block & 0x40000) ? 0x10000 : 0);
 }
 
+/* Followers Stage 1: port-owned follower strip (see g3_raster.h).
+ * Written by the follower module on the game thread before it submits
+ * the quad; read here on the same submission path (CPU raster) and at
+ * swap time on the PICA upload path, still before any other follower
+ * write can land. */
+static u8 s_folIndices[256 * 32 / 2];
+static u16 s_folPal[2][16];
+static bool s_folShiny, s_folSet;
+static u32 s_folGen;
+
+void PbW2_G3FollowerSetTexture(const u8 *indices, const u16 *palNormal, const u16 *palShiny,
+                               bool shiny, u32 generation) {
+    memcpy(s_folIndices, indices, sizeof s_folIndices);
+    memcpy(s_folPal[0], palNormal, sizeof s_folPal[0]);
+    memcpy(s_folPal[1], palShiny, sizeof s_folPal[1]);
+    s_folShiny = shiny;
+    s_folGen = generation;
+    s_folSet = true;
+}
+
+static bool follower_texture(const Texture *t) {
+    return s_folSet && t->format == GX_TEXFMT_PLTT16 && t->address == PBW2_FOLLOWER_TEX_ADDR;
+}
+
 static u16 texture_pixel(const Texture *t, unsigned x, unsigned y, unsigned *alpha) {
     *alpha = 31;
     if (!t->format) return 0x7fff;
+    if (follower_texture(t)) {
+        /* One 256x32 strip of 4bpp indices; the palette is the
+         * follower's own (normal or shiny), never VRAM's. */
+        unsigned i = y * t->width + x;
+        unsigned index = (s_folIndices[i / 2] >> (4 * (i & 1))) & 15;
+        if (index == 0 && (t->param & (1u << 29))) *alpha = 0;
+        return s_folPal[s_folShiny ? 1 : 0][index] & 0x7fff;
+    }
     unsigned i = y * t->width + x;
     unsigned index;
     switch (t->format) {
@@ -803,6 +835,9 @@ static PicaTextureKey texture_cache_key(const Texture *tex, unsigned material) {
         paletteBytes = span->paletteBytes;
     }
     key.revision[2] = range_revision(tex->palette, 0x4000, 6, palette, paletteBytes);
+    /* The follower texture's texels live in port RAM, not VRAM, so no
+     * VRAM revision can see them change; its generation is the key. */
+    if (follower_texture(tex)) key.revision[3] = s_folGen;
     return key;
 }
 

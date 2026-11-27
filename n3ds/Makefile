@@ -79,7 +79,7 @@ LIB_GAME_OBJS := \
 	$(foreach o,$(LIB_GAME_SPL),../build/n3ds/$(GAME_SYM)/obj/lib/spl/src/$(o))
 CFLAGS += -DPBW2_LINK_GAME=1
 CFLAGS += $(shell for d in $(CURDIR)/../lib/*/include; do echo -I$$d; done)
-SHELL_SRC += source/game_thread.c nitro/mi_host.c nitro/ic_dc_host.c \
+SHELL_SRC += source/game_thread.c source/follower.c nitro/mi_host.c nitro/ic_dc_host.c \
 	nitro/os_more_host.c nitro/os_thread_host.c nitro/rom_header_host.c nitro/pm_host.c nitro/pxi_host.c \
 	nitro/pxi_service.c nitro/cp_div_host.c nitro/nvram_host.c nitro/dtcm_host.c nitro/link_syms.c nitro/overlay_host.c nitro/scene.c \
 	nitro/overlay_ids.c nitro/overlay_id_decode_gen.c nitro/nitro_stubs.c nitro/nns_title_stubs.c nitro/title_link_syms.c \
