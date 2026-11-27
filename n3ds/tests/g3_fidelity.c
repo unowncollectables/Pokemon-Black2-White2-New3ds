@@ -664,9 +664,11 @@ static const char *checks(void) {
     reg_G3X_DISP3DCNT = REG_G3X_DISP3DCNT_FME_MASK | (10u << REG_G3X_DISP3DCNT_FOG_SHIFT_SHIFT);
     PBW2_VU8(0x04000361) = 0;
     PBW2_VU8(0x04000367) = 127;
+    PbW2_G3RasterSetWBuffer(true);
     triangle(GX_RGB(31, 0, 0), 0);
     cmd(0x50, GX_BUFFERMODE_W << 1);
     PbW2_G3RasterCapture(pixels);
+    PbW2_G3RasterSetWBuffer(false);
     if (pixels[center] != (0x8000 | GX_RGB(0, 0, 31))) return "W-buffer fog uses clip-space W";
 
     reg_G3X_DISP3DCNT |= REG_G3X_DISP3DCNT_FMOD_MASK;
@@ -1211,9 +1213,11 @@ static bool check_frame_reuse(void) {
     return s_gpuFrames == before + 4 && pixels[0] == 0x83e0;
 }
 
-static const char *check_pica_w_depth(void) {
+static const char *check_buffer_depth(bool gpu, bool edges) {
+    PbW2_PicaSetOptions(gpu, false);
     memset(pbw2_io, 0, sizeof pbw2_io);
     PbW2_G3InterceptInit();
+    if (edges) reg_G3X_DISP3DCNT = REG_G3X_DISP3DCNT_EME_MASK;
     const unsigned before = s_gpuFrames;
     const unsigned center = 96 * 256 + 128;
     G3_MtxMode(GX_MTXMODE_PROJECTION);
@@ -1226,6 +1230,7 @@ static const char *check_pica_w_depth(void) {
         0, 0, FX32_ONE, 0, 0, 0, (u32)-FX32_ONE, 2 * FX32_ONE,
     };
     for (unsigned i = 0; i < 3; ++i) {
+        PbW2_G3RasterSetWBuffer(i != 0);
         reg_G3X_CLEAR_DEPTH = i == 2 ? 6 : 0x7fff;
         PbW2_G3Command(G3OP_MTX_LOAD_4x4, red);
         triangle(GX_RGB(31, 0, 0), 0);
@@ -1250,7 +1255,29 @@ static const char *check_pica_w_depth(void) {
     if (pixels[center - 6] != (0x8000 | GX_RGB(31, 0, 0)) ||
         pixels[center + 6] != (0x8000 | GX_RGB(0, 31, 0))) return "interpolated W depth";
 
-    return s_gpuFrames == before + 4 ? NULL : "GPU frame count";
+    if (gpu && !edges) {
+        /* A fractional decal is rejected after the GPU batch is collected. */
+        PbW2_G3RasterSetWBuffer(false);
+        reg_GX_VRAMCNT_A = GX_VRAMCNT(3, 0);
+        reg_GX_VRAMCNT_E = GX_VRAMCNT(3, 0);
+        u8 *tiles = PbW2_VramMap((void *)HW_LCDC_VRAM_A);
+        u16 *palette = PbW2_VramMap((void *)HW_LCDC_VRAM_E);
+        memset(tiles, (15u << 3) | 1, 64);
+        palette[1] = GX_RGB(31, 0, 0);
+        PbW2_VramNoteLcdcWrite(HW_LCDC_VRAM_A, 64);
+        PbW2_VramNoteLcdcWrite(HW_LCDC_VRAM_E, 4);
+
+        PbW2_G3Command(G3OP_MTX_LOAD_4x4, green);
+        triangle(GX_RGB(0, 31, 0), 0);
+        PbW2_G3Command(G3OP_MTX_LOAD_4x4, red);
+        cmd(G3OP_POLYGON_ATTR, (31u << 16) | (3u << 6) | (GX_POLYGONMODE_DECAL << 4));
+        cmd(G3OP_TEXIMAGE_PARAM, GX_TEXFMT_A5I3 << 26);
+        triangle(GX_RGB(31, 0, 0), 0);
+        cmd(0x50, GX_BUFFERMODE_W << 1);
+        PbW2_G3RasterCapture(pixels);
+        if (pixels[center] != (0x8000 | GX_RGB(30, 0, 0))) return "W depth on batch fallback";
+    }
+    return s_gpuFrames == before + (gpu && !edges ? 4 : 0) ? NULL : "GPU frame count";
 }
 
 int main(void) {
@@ -1280,8 +1307,12 @@ int main(void) {
         fprintf(f, "Clipped OBJ priority %s\n", check_clipped_objs() ? "PASS" : "FAIL");
         fprintf(f, "Sub-screen input cache %s\n", check_sub_cache() ? "PASS" : "FAIL");
         fprintf(f, "PICA frame reuse %s\n", check_frame_reuse() ? "PASS" : "FAIL");
-        failure = check_pica_w_depth();
+        failure = check_buffer_depth(true, false);
         fprintf(f, "PICA Z and W depth %s%s\n", failure ? "FAIL " : "PASS", failure ? failure : "");
+        failure = check_buffer_depth(false, false);
+        fprintf(f, "CPU Z and W depth %s%s\n", failure ? "FAIL " : "PASS", failure ? failure : "");
+        failure = check_buffer_depth(true, true);
+        fprintf(f, "Edge-marking fallback Z and W depth %s%s\n", failure ? "FAIL " : "PASS", failure ? failure : "");
         fclose(f);
     }
     for (;;)

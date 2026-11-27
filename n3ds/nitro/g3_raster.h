@@ -10,6 +10,8 @@ void PbW2_G3SetWide(bool enabled);
 bool PbW2_G3WideCamera(void);
 
 void PbW2_G3RasterReset(void);
+/* Software rasterization can begin before the GX swap command. */
+void PbW2_G3RasterSetWBuffer(bool enabled);
 void PbW2_G3RasterCommand(u32 opcode, const u32 *args, const MtxFx44 *clip,
                          const MtxFx44 *texture, const MtxFx44 *vector);
 /* The single presenter can borrow the native frame until it finishes composing. */

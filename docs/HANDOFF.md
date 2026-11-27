@@ -24,8 +24,10 @@ Text baked into OBJ sprites remains open.
 
 PICA200 honors the GX swap command's Z- or W-buffer selection. W-buffer
 frames project reciprocal W into the hardware depth range and transform
-the GX clear depth the same way. W-based occlusion in the software
-fallback is still open.
+the GX clear depth the same way. The game publishes its depth mode before
+submission so the software renderer can use the same depth for occlusion,
+edge marking and fog. If the GPU falls back at swap time, software uses
+the mode from the swap command.
 
 Ordinary PICA200 frames use a 256x192 render target and readback.
 Widescreen and wide capture share a separate 400x240 allocation. The LCD

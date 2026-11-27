@@ -1,6 +1,7 @@
 #include "types.h"
 #include "gfl/arc.h"
 #ifdef PBW2_N3DS
+#include "g3_raster.h"
 #include "log.h"
 #endif
 #include "gfl/g3d.h"
@@ -220,6 +221,9 @@ void GFL_G3DSysFree(void) {
     }
     GFL_HeapFree(g_G3DSystem.sys);
     g_G3DSystem.sys = NULL;
+#ifdef PBW2_N3DS
+    PbW2_G3RasterSetWBuffer(FALSE);
+#endif
 }
 
 void GFL_G3DSysMtxGetProjection(G3DCameraProjection *dest) {
@@ -305,6 +309,9 @@ void GFL_G3DSysMtxSetViewLookAt(const FxLookAt *lookAt) {
 void GFL_G3DSysSetSwapBufferParams(u32 sortMode, u32 bufferMode) {
     g_G3DSystem.sys->sortMode = sortMode;
     g_G3DSystem.sys->bufferMode = bufferMode;
+#ifdef PBW2_N3DS
+    PbW2_G3RasterSetWBuffer(bufferMode == GX_BUFFERMODE_W);
+#endif
 }
 
 BOOL GFL_G3DSysUsesFrmTexVramMgr(void) {
