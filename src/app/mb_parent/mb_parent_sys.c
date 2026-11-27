@@ -57,6 +57,10 @@
 #include "system/wordset.h"
 #include "text/system/net_error.h"
 
+#if defined(PBW2_N3DS)
+#include "vram_host_api.h"
+#endif
+
 // The DS Download Play parent (mb_parent_sys.c): sends a program to another system by DS Download Play and stores the
 // Pokémon it sends back. The Poké Transfer Lab starts it to bring Pokémon over from the Gen 4 games, and the start
 // menu's item starts it with a game data of its own; that this is the Pokémon Dream Radar's transfer is our inference,
@@ -830,8 +834,15 @@ static void MBParent_DrawTopScreen(MBParentWork *wk) {
     GFL_StrBufFree(strbuf);
     GFL_MsgDataFree(msgData);
     BmpWin_Free(window);
+#if defined(PBW2_N3DS)
+    /* HW_BG_PLTT / HW_DB_BG_PLTT are palette RAM, unmapped on the 3DS;
+     * resolve them through the host map (same pattern as PStatus_InitText). */
+    ((u16 *)PbW2_VramMap((const void *)HW_BG_PLTT))[0] = GX_RGB(10, 23, 31);
+    ((u16 *)PbW2_VramMap((const void *)HW_DB_BG_PLTT))[0] = GX_RGB(10, 23, 31);
+#else
     ((u16 *)HW_BG_PLTT)[0] = GX_RGB(10, 23, 31);
     ((u16 *)HW_DB_BG_PLTT)[0] = GX_RGB(10, 23, 31);
+#endif
 }
 
 static void MBParent_SetupGameInfo(MBParentWork *wk) {
