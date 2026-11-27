@@ -166,14 +166,19 @@ static const char *const s_tabNames[TAB_COUNT] = { "LOOK", "BATTLE", "PLAY", "SY
  * System diagnostics -> DEBUG as read-only rows. BATTLE ships with
  * Nate's note row only - no functional battle rows yet, and the
  * must-NOT-copy list binds (no SELECT=reset, no skip-intro, no shiny
- * odds, no no-wild-battles). PLAY's follower row lands with the
- * follower feature; until then it carries the same note treatment. */
+ * odds, no no-wild-battles). PLAY row #1 is the follower toggle
+ * (Followers Stage 1); further PLAY rows arrive with their features. */
 static RowDef s_lookRows[ROWS + 1];
 static const RowDef s_battleRows[] = {
     { "Battle settings come later", NULL, NULL, 0, ROW_NOTE, ROW_SPECIAL_NONE },
 };
 static const RowDef s_playRows[] = {
-    { "Play settings come later", NULL, NULL, 0, ROW_NOTE, ROW_SPECIAL_NONE },
+    /* Followers Stage 1: PLAY row #1 per the rehousing map
+     * (menu-parity.md SS4.1). Config key `follower`, default OFF
+     * (repo rule: new features ship off). The follower itself lives
+     * in n3ds/source/follower.c and reads the key through the
+     * config store, so stored == applied with no extra wiring. */
+    { "Following Pokémon", "follower", kBoolLabels, 2, ROW_VALUE, ROW_SPECIAL_NONE },
 };
 static const RowDef s_systemRows[] = {
     { "Export save", NULL, kExportLabels, 2, ROW_ACTION, ROW_SPECIAL_NONE },
