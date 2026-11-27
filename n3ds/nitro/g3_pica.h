@@ -29,8 +29,6 @@ typedef enum {
     PICA_ALPHA_OPAQUE,
 } PicaAlphaTest;
 
-enum { PICA_TEXTURE_SLOTS = 256 };
-
 enum {
     PICA_TEX_ALPHA_OPAQUE = 1u << 0,
     PICA_TEX_ALPHA_FRACTIONAL = 1u << 1,
@@ -42,7 +40,6 @@ void PbW2_PicaSetOptions(bool enabled, bool skipEdges);
 bool PbW2_PicaSkipEdges(void);
 bool PbW2_PicaEnabled(void);
 bool PbW2_PicaBegin(unsigned alphaRef);
-void PbW2_PicaInvalidate(void);
 int PbW2_PicaUpload(const PicaTexture *texture);
 unsigned PbW2_PicaTextureAlpha(int texture);
 bool PbW2_PicaTriangle(const PicaVertex vertex[3], int texture, PicaAlphaTest test,
