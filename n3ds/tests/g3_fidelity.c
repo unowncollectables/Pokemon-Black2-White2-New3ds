@@ -875,7 +875,7 @@ static bool check_optional_edges(void) {
 
 static bool check_wide_frame(bool gpu, bool capture) {
     static u16 sides[64 * 192];
-    static u16 native[PBW2_NATIVE_TOP_WIDTH * PBW2_NATIVE_TOP_HEIGHT];
+    const u16 *native;
     memset(pbw2_io, 0, sizeof pbw2_io);
     PbW2_G3InterceptInit();
     PBW2_VU16(0x04000304) = 0x8000;
@@ -893,10 +893,11 @@ static bool check_wide_frame(bool gpu, bool capture) {
     cmd(G3OP_END, 0);
     cmd(0x50, 0);
     memset(pixels, 0, sizeof pixels);
-    bool haveNative;
-    bool wide = PbW2_G3RasterComposite(pixels, NULL, NULL, NULL, sides, 0, native, &haveNative, NULL);
-    if (haveNative != (gpu && !capture) || (haveNative && native[120 * 400 + 20] != (0x8000 | GX_RGB(31, 0, 0))))
-        return false;
+    bool wide = PbW2_G3RasterComposite(pixels, NULL, NULL, NULL, sides, 0, &native, NULL);
+    bool nativeCorrect = (native != NULL) == (gpu && !capture) &&
+                         (!native || native[120 * 400 + 20] == (0x8000 | GX_RGB(31, 0, 0)));
+    if (native) PbW2_G3ReleaseNative();
+    if (!nativeCorrect) return false;
     PbW2_G3RasterCapture(pixels);
     for (unsigned i = 0; i < 256 * 192; ++i)
         if (pixels[i] & 0x8000) return false;
@@ -1062,6 +1063,35 @@ static bool check_pica_storage_reuse(void) {
            s_textureAllocations == allocations;
 }
 
+static bool check_pinned_native_frame(void) {
+    unsigned center = 120 * PBW2_NATIVE_TOP_WIDTH + 200;
+    memset(pbw2_io, 0, sizeof pbw2_io);
+    PbW2_G3InterceptInit();
+    PBW2_VU16(0x04000304) = 0x8000;
+    reg_G3X_CLEAR_DEPTH = 0x7fff;
+    PbW2_G3SetWide(true);
+    PbW2_PicaSetOptions(true, false);
+    triangle(GX_RGB(31, 0, 0), 0);
+    cmd(0x50, 0);
+
+    const u16 *held;
+    PbW2_G3RasterComposite(pixels, NULL, NULL, NULL, NULL, 0, &held, NULL);
+    if (!held) return false;
+    triangle(GX_RGB(0, 31, 0), 0);
+    cmd(0x50, 0);
+    triangle(GX_RGB(0, 0, 31), 0);
+    cmd(0x50, 0);
+    bool correct = held[center] == 0x801f;
+    PbW2_G3ReleaseNative();
+
+    const u16 *latest;
+    PbW2_G3RasterComposite(pixels, NULL, NULL, NULL, NULL, 0, &latest, NULL);
+    correct = correct && latest && latest[center] == 0xfc00;
+    if (latest) PbW2_G3ReleaseNative();
+    PbW2_G3SetWide(false);
+    return correct;
+}
+
 int main(void) {
     gfxInitDefault();
     archiveMountSdmc();
@@ -1085,6 +1115,7 @@ int main(void) {
         fprintf(f, "Sharp text tiles %s\n", check_sharp_text() ? "PASS" : "FAIL");
         fprintf(f, "Wrapped texture and upload reuse %s\n", check_wrapped_texture() ? "PASS" : "FAIL");
         fprintf(f, "PICA texture allocation reuse %s\n", check_pica_storage_reuse() ? "PASS" : "FAIL");
+        fprintf(f, "Pinned native frame %s\n", check_pinned_native_frame() ? "PASS" : "FAIL");
         fclose(f);
     }
     for (;;)

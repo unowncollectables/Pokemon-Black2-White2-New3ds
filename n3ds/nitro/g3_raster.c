@@ -43,8 +43,10 @@ typedef struct {
 } Frame;
 
 #ifdef PBW2_GPU_GEOMETRY
-static u16 s_nativeFrames[2][PBW2_NATIVE_TOP_WIDTH * PBW2_NATIVE_TOP_HEIGHT];
-static unsigned s_nativeDisplayed;
+enum { NATIVE_BUFFERS = 3 };
+static u16 s_nativeFrames[NATIVE_BUFFERS][PBW2_NATIVE_TOP_WIDTH * PBW2_NATIVE_TOP_HEIGHT];
+static unsigned s_nativeDisplayed, s_nativeDraw;
+static unsigned s_nativeReader = NATIVE_BUFFERS;
 static bool s_nativeFrame, s_haveNative;
 #endif
 static unsigned s_width = WIDTH, s_displayWidth = WIDTH;
@@ -828,7 +830,14 @@ static bool render_with_pica(void) {
     u32 color = ((clear & 31) * 255 / 31) << 24 | (((clear >> 5) & 31) * 255 / 31) << 16
                 | (((clear >> 10) & 31) * 255 / 31) << 8 | ((clear >> 16) & 31) * 255 / 31;
     s_nativeFrame = s_width == WIDE_WIDTH && !(reg_GX_DISPCAPCNT & REG_GX_DISPCAPCNT_E_MASK);
-    PbW2_PicaSetFrameWidth(s_width, s_nativeFrame ? s_nativeFrames[s_nativeDisplayed ^ 1] : NULL);
+    if (s_nativeFrame) {
+        lock_display();
+        for (s_nativeDraw = 0; s_nativeDraw < NATIVE_BUFFERS; ++s_nativeDraw) {
+            if (s_nativeDraw != s_nativeDisplayed && s_nativeDraw != s_nativeReader) break;
+        }
+        unlock_display();
+    }
+    PbW2_PicaSetFrameWidth(s_width, s_nativeFrame ? s_nativeFrames[s_nativeDraw] : NULL);
     if (trace) {
         Log_Line("GPU", "scene frame %u: %u triangles, %u/%u materials textured (%u transparent), formats=%02x, width=%u%s",
                  s_sceneSwaps + 1, s_gpuCount, textured, s_gpuMaterialCount, blank, formats, s_width,
@@ -1143,7 +1152,7 @@ void PbW2_G3RasterCommand(u32 op, const u32 *p, const MtxFx44 *clip,
         lock_display();
 #ifdef PBW2_GPU_GEOMETRY
         s_haveNative = s_gpuFrame && s_nativeFrame;
-        if (s_haveNative) s_nativeDisplayed ^= 1;
+        if (s_haveNative) s_nativeDisplayed = s_nativeDraw;
 #endif
         s_displayWidth = s_width;
         memcpy(s_display, s_drawing.color, s_width * HEIGHT * sizeof(*s_display));
@@ -1157,13 +1166,13 @@ void PbW2_G3RasterCommand(u32 op, const u32 *p, const MtxFx44 *clip,
 }
 
 bool PbW2_G3RasterComposite(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawColors, u16 *sides, u16 backdrop,
-                            u16 *native, bool *haveNative, u32 *ink) {
+                            const u16 **native, u32 *ink) {
     lock_display();
-    if (haveNative) *haveNative = false;
+    if (native) *native = NULL;
 #ifdef PBW2_GPU_GEOMETRY
-    if (native && haveNative && s_haveNative) {
-        memcpy(native, s_nativeFrames[s_nativeDisplayed], sizeof s_nativeFrames[0]);
-        *haveNative = true;
+    if (native && s_haveNative && s_nativeReader == NATIVE_BUFFERS) {
+        s_nativeReader = s_nativeDisplayed;
+        *native = s_nativeFrames[s_nativeReader];
     }
 #endif
     for (unsigned y = 0; y < HEIGHT; ++y) {
@@ -1191,6 +1200,14 @@ bool PbW2_G3RasterComposite(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawC
     bool wide = sides && s_displayWidth == WIDE_WIDTH;
     unlock_display();
     return wide;
+}
+
+void PbW2_G3ReleaseNative(void) {
+#ifdef PBW2_GPU_GEOMETRY
+    lock_display();
+    s_nativeReader = NATIVE_BUFFERS;
+    unlock_display();
+#endif
 }
 
 void PbW2_G3RasterCapture(u16 *rgb555) {

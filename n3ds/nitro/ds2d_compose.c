@@ -792,6 +792,7 @@ const u16 *PbW2_TopSides(void) {
 static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
     static BgBlend bg_blend;
     static u16 underGeometry[256 * 192];
+    const u16 *nativeFrame = NULL;
     BgBlend *blend = NULL;
     u32 dc = reg_u32(regs, 0);
     u32 bgmode = dc & REG_GX_DISPCNT_BGMODE_MASK;
@@ -853,11 +854,11 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
                 bool extend = PbW2_G3WideCamera() && ((dc >> 16) & 3) == 1 &&
                               !layerBrightness && !layerAlpha &&
                               !(reg_GX_DISPCAPCNT & REG_GX_DISPCAPCNT_E_MASK);
-                if (extend) memcpy(underGeometry, out, sizeof underGeometry);
+                if (extend && !window) memcpy(underGeometry, out, sizeof underGeometry);
                 s_haveSides = PbW2_G3RasterComposite(out, window, bg_blend.track ? bg_blend.planes : NULL,
                                                      layerAlpha ? bg_blend.colors : NULL, extend ? s_sides : NULL,
-                                                     backdrop, extend && !window ? s_nativeTop : NULL, &s_haveNativeTop, bg_blend.ink);
-                if (s_haveNativeTop) {
+                                                     backdrop, extend && !window ? &nativeFrame : NULL, bg_blend.ink);
+                if (nativeFrame) {
                     /* Subsequent layers sit in front of the 3D layer. */
                     bg_blend.track = true;
                     memset(bg_blend.planes, 0, sizeof bg_blend.planes);
@@ -869,12 +870,13 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
         }
         draw_obj_layer(dc, is_sub, out, window, 0, pri, blend);
     }
-    if (!is_sub && s_haveNativeTop) {
+    if (nativeFrame) {
         for (unsigned y = 0; y < PBW2_NATIVE_TOP_HEIGHT; ++y) {
             unsigned dsRow = ((8 * y + 4) / 10) * 256;
             u16 *row = s_nativeTop + y * PBW2_NATIVE_TOP_WIDTH;
+            const u16 *geometry = nativeFrame + y * PBW2_NATIVE_TOP_WIDTH;
             for (unsigned x = 0; x < PBW2_NATIVE_TOP_WIDTH; ++x) {
-                u16 pixel = row[x];
+                u16 pixel = geometry[x];
                 if (x >= 40 && x < 360) {
                     unsigned i = dsRow + (8 * (x - 40) + 4) / 10;
                     if (bg_blend.planes[i]) row[x] = out[i];
@@ -884,6 +886,8 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
                 }
             }
         }
+        PbW2_G3ReleaseNative();
+        s_haveNativeTop = true;
         apply_master_bright(s_nativeTop, PBW2_NATIVE_TOP_WIDTH * PBW2_NATIVE_TOP_HEIGHT, reg_u16(regs, 0x6cu));
     }
     if (bg_blend.ink) {

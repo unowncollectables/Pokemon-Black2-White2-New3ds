@@ -23,7 +23,10 @@ backgrounds, incompatible effects or clipping use the existing sampling path.
 Text baked into OBJ sprites remains open.
 
 Ordinary PICA200 frames use a 256x192 render target and readback.
-Widescreen and wide capture share a separate 400x240 allocation.
+Widescreen and wide capture share a separate 400x240 allocation. The LCD
+compositor borrows the published native image while it blends the layers,
+so it can skip copying all 400x240 pixels while the renderer starts the
+next frame.
 Texture addresses wrap across slot 3 and cache revisions include wrapped
 texels. Identical LCDC uploads preserve existing textures and queued geometry. PICA
 uploads write complete tiles contiguously. Evicted textures of the same
