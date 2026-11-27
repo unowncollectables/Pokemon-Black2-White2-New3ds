@@ -21,8 +21,9 @@
  * The ARM7 sequence interpreter does not exist in this tree, so the
  * host runs it: the audio worker advances each playing sequence's tick clock from
  * wall time, the event parser walks the SSEQ tracks, and NOTE-ONs
- * resolve program -> instrument (SBNK) -> wave (SWAR) -> a DS channel
- * through the wave player (wave_out.c). The sequence data is copied
+ * resolve program -> instrument (SBNK) -> wave (SWAR) -> a host
+ * voice (DS-mapped or overflow, see SEQ_VOICE_SLOTS) through the
+ * wave player (wave_out.c). The sequence data is copied
  * at StartSeq time, so the sound heap may unload the bank underneath
  * a playing sequence without the parser reading freed memory; a wave
  * is resolved at note-on time and skipped (not hung on) when its bank
@@ -67,13 +68,36 @@
 #define SEQ_TRACK_NOTES 4
 #define SEQ_DS_CHANNELS 16
 #define SEQ_CRY_CHANNEL 15
+/* Host overflow voices (polyphony lift): the game's channel
+ * requests stay SEQ_DS_CHANNELS wide — that width is game design.
+ * The HOST voice pool is wider: past the DS-mapped voices sit
+ * SEQ_OVERFLOW_CHANNELS extra voices on NDSP 17..23 (wave_out.c),
+ * for 15 DS-mapped usable (cry channel excluded) + 7 overflow = 22
+ * usable sequence voices against NDSP's 24 (stream ch 0 and the
+ * cry reserve excluded). A voice slot indexes s_channels: slots
+ * 0..SEQ_DS_CHANNELS-1 are DS channels, the rest are overflow.
+ * Priority-stealing remains the valve, but only ABOVE this cap:
+ * a note steals only when no DS voice, no finished voice and no
+ * overflow voice is free.
+ *
+ * Frame-rate decoupling (Nate, Nov 27): this pool is managed only
+ * from seq_note_on / seq_note_off, reached from SeqPlayer_Tick —
+ * the audio thread's wall-clock tick (audio.c, 5 ms period,
+ * svcGetSystemTick dt), never from a frame/vsync path. No pool
+ * decision is paced by frames. (Pre-existing touchpoint, flagged
+ * in the work log: StartSeqEx processes a sequence's first events
+ * on the game thread, so a sequence's very first notes claim
+ * voices there; every later claim/steal/free is audio-thread.) */
+#define SEQ_OVERFLOW_CHANNELS 7
+#define SEQ_VOICE_SLOTS (SEQ_DS_CHANNELS + SEQ_OVERFLOW_CHANNELS)
 #define SEQ_CALL_DEPTH 4
 #define SEQ_LOOP_DEPTH 4
 #define SEQ_TICKS_PER_QUARTER 48
 
 typedef struct {
     NNSSndWaveOutHandle wave;
-    int dsCh; /* -1 when the note is timed but not sounding (NDSP down) */
+    int dsCh; /* host voice slot (see SEQ_VOICE_SLOTS); -1 when the
+               * note is timed but not sounding (NDSP down) */
     u8 note;
     u8 velocity;
     u8 instrumentPan;
@@ -158,7 +182,7 @@ typedef struct {
 } SeqChannel;
 
 static SeqSlot s_slots[SEQ_SLOTS];
-static SeqChannel s_channels[SEQ_DS_CHANNELS];
+static SeqChannel s_channels[SEQ_VOICE_SLOTS];
 static u64 s_channelOrder;
 static NNSSndHeapHandle s_heap; /* stashed by NNS_SndArcPlayerSetup */
 static int s_playerVolume[32];
@@ -402,12 +426,20 @@ static void seq_free_channel(int ch) {
 }
 
 static NNSSndWaveOutHandle seq_claim_channel(SeqSlot *slot, int trackIdx, int noteIdx, int priority, int ch) {
-    NNSSndWaveOutHandle wave = WaveOut_AllocSequenceChannel(ch);
+    NNSSndWaveOutHandle wave = ch < SEQ_DS_CHANNELS
+                                   ? WaveOut_AllocSequenceChannel(ch)
+                                   : WaveOut_AllocSequenceOverflowChannel(ch - SEQ_DS_CHANNELS);
     if (wave) {
         s_channels[ch] = (SeqChannel){TRUE, (int)(slot - s_slots), trackIdx, noteIdx, priority, s_channelOrder++};
         slot->tracks[trackIdx].notes[noteIdx].dsCh = ch;
     }
     return wave;
+}
+
+/* The game's alloc mask names DS channels only; overflow voices are
+ * host-owned and always eligible. The cry channel is never eligible. */
+static bool seq_voice_eligible(int voice, u32 allowed) {
+    return voice >= SEQ_DS_CHANNELS || (allowed & (1u << voice)) != 0;
 }
 
 static NNSSndWaveOutHandle seq_alloc_channel(SeqSlot *slot, int trackIdx, int noteIdx, int priority) {
@@ -417,21 +449,40 @@ static NNSSndWaveOutHandle seq_alloc_channel(SeqSlot *slot, int trackIdx, int no
     NNSSndWaveOutHandle wave;
     int victim = -1;
 
+    /* 1. A free DS-mapped voice, in the game's own channel order. */
     for (int ch = 0; ch < SEQ_DS_CHANNELS; ++ch) {
         if (!(allowed & (1u << ch)) || s_channels[ch].inUse) continue;
         wave = seq_claim_channel(slot, trackIdx, noteIdx, priority, ch);
         if (wave) return wave;
     }
 
-    for (int ch = 0; ch < SEQ_DS_CHANNELS; ++ch) {
+    /* 2. A voice whose wave already finished, DS slots first, then
+     * overflow — reclaiming one keeps the overflow pool in reserve
+     * for genuinely simultaneous notes. */
+    for (int ch = 0; ch < SEQ_VOICE_SLOTS; ++ch) {
         SeqChannel *channel = &s_channels[ch];
-        if (!(allowed & (1u << ch)) || !channel->inUse) continue;
-        if (!NNS_SndWaveOutIsPlaying(seq_channel_note(channel)->wave)) {
-            seq_free_channel(ch);
-            wave = seq_claim_channel(slot, trackIdx, noteIdx, priority, ch);
-            if (wave) return wave;
-            continue;
-        }
+        if (!seq_voice_eligible(ch, allowed) || !channel->inUse) continue;
+        if (NNS_SndWaveOutIsPlaying(seq_channel_note(channel)->wave)) continue;
+        seq_free_channel(ch);
+        wave = seq_claim_channel(slot, trackIdx, noteIdx, priority, ch);
+        if (wave) return wave;
+    }
+
+    /* 3. A free overflow voice: the polyphony lift proper. Notes
+     * that used to drop as channel-unavailable sound here instead. */
+    for (int ch = SEQ_DS_CHANNELS; ch < SEQ_VOICE_SLOTS; ++ch) {
+        if (s_channels[ch].inUse) continue;
+        wave = seq_claim_channel(slot, trackIdx, noteIdx, priority, ch);
+        if (wave) return wave;
+    }
+
+    /* 4. Only with the whole pool sounding does priority-stealing
+     * remain, across DS and overflow voices alike: the lowest
+     * priority, oldest first, at or below the new note's priority. */
+    for (int ch = 0; ch < SEQ_VOICE_SLOTS; ++ch) {
+        SeqChannel *channel = &s_channels[ch];
+        if (!seq_voice_eligible(ch, allowed) || !channel->inUse) continue;
+        if (!NNS_SndWaveOutIsPlaying(seq_channel_note(channel)->wave)) continue;
         if (channel->priority > priority) continue;
         if (victim < 0 || channel->priority < s_channels[victim].priority ||
             (channel->priority == s_channels[victim].priority && channel->order < s_channels[victim].order))
@@ -501,7 +552,7 @@ static void seq_note_off(SeqSlot *slot, int trackIdx, int noteIdx) {
     SeqTrack *track = &slot->tracks[trackIdx];
     SeqNote *note = &track->notes[noteIdx];
     if (!note->active) return;
-    if (note->dsCh >= 0 && note->dsCh < SEQ_DS_CHANNELS && s_channels[note->dsCh].inUse &&
+    if (note->dsCh >= 0 && note->dsCh < SEQ_VOICE_SLOTS && s_channels[note->dsCh].inUse &&
         s_channels[note->dsCh].slot == (int)(slot - s_slots) &&
         s_channels[note->dsCh].noteIdx == noteIdx && s_channels[note->dsCh].track == trackIdx) {
         s_channels[note->dsCh].inUse = FALSE;
