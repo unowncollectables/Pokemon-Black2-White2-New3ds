@@ -89,7 +89,7 @@ static bool commit_display(void) {
 static void save_display(void) {
     if (!s_path) return;
     if (s_pending && !commit_display()) {
-        Log_Line("CFG", "could not finalize staged display preferences");
+        Log_Error("CFG", "could not finalize staged display preferences");
         return;
     }
     if (s_display == s_persisted) return;
@@ -105,7 +105,7 @@ static void save_display(void) {
             remove(s_tempPath);
         }
     }
-    Log_Line("CFG", "could not save display preferences");
+    Log_Error("CFG", "could not save display preferences");
 }
 
 bool Settings_Open(void) {

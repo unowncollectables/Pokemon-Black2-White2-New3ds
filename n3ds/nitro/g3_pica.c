@@ -102,7 +102,7 @@ bool PbW2_PicaEnabled(void) {
     if (!(__atomic_load_n(&s_options, __ATOMIC_RELAXED) & PICA_ENABLED)) return false;
     if (!s_ready && !tried) {
         tried = true;
-        if (!PbW2_PicaInit()) Log_Line("GPU", "PICA200 setup failed, using the CPU rasterizer");
+        if (!PbW2_PicaInit()) Log_Error("GPU", "PICA200 setup failed, using the CPU rasterizer");
     }
     return s_ready;
 }

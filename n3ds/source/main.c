@@ -194,7 +194,7 @@ int main(int argc, char **argv) {
     } else if (log_ok) {
         Log_Line("3DS", "sdmc already mounted");
     } else {
-        Log_Line("3DS", "sdmc not mounted");
+        Log_Error("3DS", "sdmc not mounted");
     }
     Log_Line("3DS", "new3ds=%d speedup %s", new3ds ? 1 : 0,
 #if defined(PBW2_NO_SPEEDUP)

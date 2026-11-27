@@ -4,6 +4,25 @@ Self-contained notes so another agent can take over this New 3DS port.
 Phases: [PLAN.md](PLAN.md). Build extras: [BUILDING.md](BUILDING.md).
 Short rules pointer: [AGENTS.md](../AGENTS.md).
 
+## Logger (branch ghost/b2w2-logger-hwtest)
+
+The logger is RAM-buffered for hardware testing: `Log_Line` formats
+once into a 1 MB ring in memory and `log.txt` is written only at flush
+points (clean exit, any `Log_Error`, an overlay-load safe point at
+>= 50% full, or >= 7/8 full) — no SD I/O and no printf during gameplay.
+The old logger `fflush`'d the SD file on every line (a 49,887-line
+hardware log was 49,887 mid-gameplay flushes). Mode comes from
+`logger.cfg` in the game dir (`mode=quiet|verbose`); default quiet on
+hardware builds, verbose on `PBW2_NO_SPEEDUP` emulator builds. Quiet
+keeps errors, `3DS` markers and `PERF` summaries and counts the rest
+into one close summary. `Log_Error` (cold paths) marks the run failed
+via `log_failed.flag` and flushes immediately; at boot the previous
+`log.txt` is classified failed/crash/clean and renamed to
+`log_crash.txt` or `log_prev.txt` before anything overwrites it, and
+`log_health.txt` keeps an append-only boot/exit line per run. Design:
+`~/workspace/b2w2-3ds-port/logger-hwtest-design.md`; verification is
+REQ-15 in the test queue. Not on main until the tester passes it.
+
 ## Widescreen 3D
 
 L+R+Y opens Display settings. Widescreen 3D defaults off. For a full top-screen

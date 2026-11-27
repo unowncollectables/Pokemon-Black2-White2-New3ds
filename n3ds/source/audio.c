@@ -198,13 +198,13 @@ void Audio_Start(void) {
     SeqPlayer_Init();
     Result result = ndspInit();
     if (R_FAILED(result)) {
-        Log_Line("AUDIO", "ndspInit failed: 0x%08lx", (unsigned long)result);
+        Log_Error("AUDIO", "ndspInit failed: 0x%08lx", (unsigned long)result);
         return;
     }
     s_ndsp = true;
     s_pcm = linearAlloc(BUFFER_COUNT * BUFFER_FRAMES * 2 * sizeof *s_pcm);
     if (!s_pcm) {
-        Log_Line("AUDIO", "could not allocate PCM buffers");
+        Log_Error("AUDIO", "could not allocate PCM buffers");
         Audio_NdspExit();
         return;
     }

@@ -23,7 +23,7 @@ void Save_Init(void) {
         if (errno == ENOENT)
             Log_Line("SAVE", "no %s", PBW2_SAVE_FILE);
         else
-            Log_Line("SAVE", "cannot open %s (errno %d)", PBW2_SAVE_FILE, errno);
+            Log_Error("SAVE", "cannot open %s (errno %d)", PBW2_SAVE_FILE, errno);
         return;
     }
     if (fseek(file, 0, SEEK_END) != 0) {
