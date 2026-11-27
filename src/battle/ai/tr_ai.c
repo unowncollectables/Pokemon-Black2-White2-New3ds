@@ -2169,7 +2169,17 @@ BOOL AIJumpByMoveEffect(VM *vm, void *work) {
     TrAIContext *wk = work;
     u32 mode = VM_Read32(vm);
     s32 max = VM_Read32(vm);
-    const u16 *table = (const u16 *)(vm->pc + (s32)VM_Read32(vm));
+    /* The offset read must be sequenced BEFORE vm->pc is read for the
+     * table base: the base is the pc AFTER this argument (the VM's
+     * convention for every relative offset). Writing it as
+     * vm->pc + VM_Read32(vm) leaves the pc load unsequenced against
+     * the read's side effect (UB) — the 3DS compiler loads the pc
+     * first, putting the table 4 bytes early; entry 0 then picks up
+     * the word before the table as its high half (0x004D0000) and
+     * the VM jumps ~5 MB past the script, so the AI never finishes
+     * thinking and the battle soft-locks (Runs 5/7/8/9, Build 17). */
+    s32 tableOffset = VM_Read32(vm);
+    const u16 *table = (const u16 *)(vm->pc + tableOffset);
     int index;
     BOOL end = FALSE;
 
