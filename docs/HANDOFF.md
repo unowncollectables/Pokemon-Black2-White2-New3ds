@@ -25,7 +25,9 @@ Text baked into OBJ sprites remains open.
 Ordinary PICA200 frames use a 256-column render target and readback.
 Widescreen and wide capture share a separate 400-column allocation.
 Texture addresses wrap across slot 3 and cache revisions include wrapped
-texels. Identical LCDC uploads preserve existing textures and queued geometry.
+texels. Identical LCDC uploads preserve existing textures and queued geometry. PICA
+uploads write complete tiles contiguously. Evicted textures of the same
+size reuse their allocation after the previous frame fence.
 
 The LCD presenter retains an unchanged bottom image after both physical
 buffers have received it. It skips the bottom redraw and data-cache flush
@@ -287,6 +289,9 @@ Settings invalidates that reuse when it takes over the bottom LCD.
   was silent from ~320 s because the demo BGM 1102's notes were
   pre-fix garbage — the fix should have cured it, but no full
   playthrough to the field has been re-run on the fixed build yet.
+- The audio worker targets fixed 5 ms deadlines. WaveOut averages source
+  blocks before high-rate decimation and filters the intro and sustain
+  independently to retain their original loop boundary.
 - With all permitted sequence voices occupied, a finished NDSP sample
   can be reclaimed before its note deadline. New notes can replace
   equal- or lower-priority voices, with ties decided by onset order

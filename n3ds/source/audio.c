@@ -81,6 +81,8 @@ static void Audio_Thread(void *arg) {
     ndspChnSetFormat(STREAM_CHANNEL, NDSP_FORMAT_STEREO_PCM16);
     ndspChnSetInterp(STREAM_CHANNEL, NDSP_INTERP_LINEAR);
 
+    const u64 period = SYSCLOCK_ARM11 / 200;
+    u64 nextUpdate = svcGetSystemTick() + period;
     while (Worker_Run(worker)) {
         LightLock_Lock(&s_request.lock);
         StreamCommand command = s_request.command;
@@ -166,7 +168,15 @@ static void Audio_Thread(void *arg) {
         if (s_request.command == STREAM_IDLE) s_request.positionMs = pos;
         LightLock_Unlock(&s_request.lock);
         SeqPlayer_Tick();
-        svcSleepThread(5000000LL);
+        /* Keep the worker on a 5 ms clock even when refilling takes time. */
+        u64 tick = svcGetSystemTick();
+        if (tick < nextUpdate) {
+            svcSleepThread((s64)((nextUpdate - tick) * 1000000000ull / SYSCLOCK_ARM11));
+            nextUpdate += period;
+        } else {
+            /* The sequencer already caught up to wall time. Rephase after a stall. */
+            nextUpdate = tick + period;
+        }
     }
 
     ndspChnWaveBufClear(STREAM_CHANNEL);

@@ -3,7 +3,7 @@
 | Component | Source | License |
 |-----------|--------|---------|
 | DS GXFIFO intercept and packed command layout | [Pokemon-HeartGold-SoulSilver-New3ds](https://github.com/unowncollectables/Pokemon-HeartGold-SoulSilver-New3ds) `soulsilver3ds/platform/g3packet.c` | GPL-3.0-or-later |
-| PICA200 batching, viewport-sized targets and queued readback with cache-line prefetch | [Pokemon-HeartGold-SoulSilver-New3ds](https://github.com/unowncollectables/Pokemon-HeartGold-SoulSilver-New3ds) `soulsilver3ds/platform/g3gpu.c` and `platform/shaders/g3.v.pica` | GPL-3.0-or-later |
+| PICA200 batching, in-place texture refresh, viewport-sized targets and queued readback with cache-line prefetch | [Pokemon-HeartGold-SoulSilver-New3ds](https://github.com/unowncollectables/Pokemon-HeartGold-SoulSilver-New3ds) `soulsilver3ds/platform/g3gpu.c` and `platform/shaders/g3.v.pica` | GPL-3.0-or-later |
 | Command-list-only flush with explicit vertex and texture cache maintenance (reference) | [Pokemon-HeartGold-SoulSilver-New3ds](https://github.com/unowncollectables/Pokemon-HeartGold-SoulSilver-New3ds) `soulsilver3ds/platform/g3gpu.c` and `gpuscale.c` | GPL-3.0-or-later |
 | Expanded 3D camera, 32-pixel side strips and nearest-then-linear sharp scaling (reference) | [Pokemon-HeartGold-SoulSilver-New3ds](https://github.com/unowncollectables/Pokemon-HeartGold-SoulSilver-New3ds) `soulsilver3ds/platform/gpuscale.c`, `g3gpu.c` and `g3soft.cpp` | GPL-3.0-or-later |
 | GX lighting arithmetic and specular behavior (reference) | [melonDS GPU3D.cpp](https://github.com/melonDS-emu/melonDS/blob/master/src/GPU3D.cpp), including azusa's hardware research | GPL-3.0-or-later |

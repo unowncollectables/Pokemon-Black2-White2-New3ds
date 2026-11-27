@@ -142,33 +142,42 @@ int PbW2_PicaUpload(const PicaTexture *texture) {
         }
     }
     unsigned bytes = width * height * 4;
-    while (s_cacheBytes + bytes > TEXTURE_CACHE_BYTES) {
-        unsigned oldest = oldest_unreferenced();
-        if (oldest == TEXTURES) return -1;
-        evict(oldest);
-    }
     unsigned slot = 0;
     while (slot < TEXTURES && s_texture[slot].bytes) ++slot;
-    if (slot == TEXTURES) slot = oldest_unreferenced();
+    if (slot == TEXTURES || s_cacheBytes + bytes > TEXTURE_CACHE_BYTES)
+        slot = oldest_unreferenced();
     if (slot == TEXTURES) return -1;
-    evict(slot);
+
     C3D_Tex *tex = &s_texture[slot].texture;
-    if (!C3D_TexInit(tex, width, height, GPU_RGBA8)) return -1;
+    /* The previous frame is fenced before we get here. Refresh only a victim
+     * that has no references in this frame, matching SoulSilver's in-place
+     * upload without sacrificing cache hits for other live materials. */
+    bool reuse = s_texture[slot].bytes && tex->width == width && tex->height == height;
+    if (!reuse) {
+        evict(slot);
+        while (s_cacheBytes + bytes > TEXTURE_CACHE_BYTES) {
+            unsigned oldest = oldest_unreferenced();
+            if (oldest == TEXTURES) return -1;
+            evict(oldest);
+        }
+        if (!C3D_TexInit(tex, width, height, GPU_RGBA8)) return -1;
+        s_cacheBytes += bytes;
+    }
     u32 *tiles = tex->data;
     unsigned alpha = 0;
-    for (unsigned y = 0; y < height; ++y) {
-        /* DS T coordinates start at the top. PICA addresses tiled rows
-         * from the bottom, so reverse the upload while retaining DS UVs. */
-        unsigned tiledY = height - 1 - y;
-        for (unsigned x = 0; x < width; ++x) {
-            unsigned morton = (x & 1) | ((tiledY & 1) << 1) | ((x & 2) << 1) | ((tiledY & 2) << 2)
-                              | ((x & 4) << 2) | ((tiledY & 4) << 3);
-            unsigned tile = (tiledY / 8) * (width / 8) + x / 8;
-            u32 rgba = texture->texel(texture->source, x, y);
-            unsigned texelAlpha = rgba & 255;
-            if (texelAlpha == 255) alpha |= PICA_TEX_ALPHA_OPAQUE;
-            else if (texelAlpha) alpha |= PICA_TEX_ALPHA_FRACTIONAL;
-            tiles[tile * 64 + morton] = rgba;
+    /* Walk complete PICA tiles so writes stay within contiguous cache lines.
+     * PICA's origin is below the image while DS T starts at the top. */
+    for (unsigned y = height; y > 0; y -= 8) {
+        for (unsigned x = 0; x < width; x += 8) {
+            for (unsigned morton = 0; morton < 64; ++morton) {
+                unsigned dx = (morton & 1) | ((morton >> 1) & 2) | ((morton >> 2) & 4);
+                unsigned dy = ((morton >> 1) & 1) | ((morton >> 2) & 2) | ((morton >> 3) & 4);
+                u32 rgba = texture->texel(texture->source, x + dx, y - 1 - dy);
+                unsigned texelAlpha = rgba & 255;
+                if (texelAlpha == 255) alpha |= PICA_TEX_ALPHA_OPAQUE;
+                else if (texelAlpha) alpha |= PICA_TEX_ALPHA_FRACTIONAL;
+                *tiles++ = rgba;
+            }
         }
     }
     C3D_TexFlush(tex);
@@ -179,7 +188,6 @@ int PbW2_PicaUpload(const PicaTexture *texture) {
     s_texture[slot].frame = s_frame;
     s_texture[slot].bytes = bytes;
     s_texture[slot].alpha = alpha;
-    s_cacheBytes += bytes;
     ++s_uploads;
     return slot;
 }

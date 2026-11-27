@@ -7,11 +7,10 @@
 #include "nitro/gx.h"
 #include "vram_dma.h"
 #include "vram_host.h"
+#include <citro3d.h>
 #include <stdio.h>
 #include <string.h>
 
-extern int archiveMountSdmc(void);
-extern void svcSleepThread(s64 ns);
 u8 pbw2_io[0x110000] ATTRIBUTE_ALIGN(32);
 static u16 pixels[256 * 192];
 void Log_Line(const char *tag, const char *fmt, ...) {
@@ -1029,7 +1028,40 @@ static bool check_wrapped_texture(void) {
     return pixels[center] == 0xfc00 && s_gpuFrames == before + 2;
 }
 
-extern void gfxInitDefault(void);
+static unsigned s_textureAllocations;
+
+bool __real_C3D_TexInitWithParams(C3D_Tex *texture, C3D_TexCube *cube, C3D_TexInitParams params);
+
+bool __wrap_C3D_TexInitWithParams(C3D_Tex *texture, C3D_TexCube *cube, C3D_TexInitParams params) {
+    ++s_textureAllocations;
+    return __real_C3D_TexInitWithParams(texture, cube, params);
+}
+
+static uint32_t test_texel(const void *source, unsigned x, unsigned y) {
+    (void)x;
+    (void)y;
+    return *(const uint32_t *)source;
+}
+
+static bool check_pica_storage_reuse(void) {
+    uint32_t color = 0xff0000ff;
+    PicaTexture texture = { .width = 8, .height = 8, .source = &color, .texel = test_texel };
+    if (!PbW2_PicaBegin(0)) return false;
+    for (unsigned i = 0; i < 128; ++i) {
+        texture.key.param = 0x10000000 | i;
+        if (PbW2_PicaUpload(&texture) < 0) return false;
+    }
+    unsigned allocations = s_textureAllocations;
+    texture.key.param++;
+    if (PbW2_PicaUpload(&texture) >= 0) return false; /* Every slot is pinned this frame. */
+
+    if (!PbW2_PicaBegin(0)) return false;
+    color = 0x0000ff80;
+    int slot = PbW2_PicaUpload(&texture);
+    return slot >= 0 && PbW2_PicaTextureAlpha(slot) == PICA_TEX_ALPHA_FRACTIONAL &&
+           s_textureAllocations == allocations;
+}
+
 int main(void) {
     gfxInitDefault();
     archiveMountSdmc();
@@ -1052,6 +1084,7 @@ int main(void) {
         fprintf(f, "Wide camera capture %s\n", check_wide_frame(true, true) ? "PASS" : "FAIL");
         fprintf(f, "Sharp text tiles %s\n", check_sharp_text() ? "PASS" : "FAIL");
         fprintf(f, "Wrapped texture and upload reuse %s\n", check_wrapped_texture() ? "PASS" : "FAIL");
+        fprintf(f, "PICA texture allocation reuse %s\n", check_pica_storage_reuse() ? "PASS" : "FAIL");
         fclose(f);
     }
     for (;;)
