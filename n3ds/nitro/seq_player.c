@@ -396,7 +396,9 @@ static NNSSndWaveOutHandle seq_claim_channel(SeqSlot *slot, int trackIdx, int no
 }
 
 static NNSSndWaveOutHandle seq_alloc_channel(SeqSlot *slot, int trackIdx, int noteIdx, int priority) {
-    u32 allowed = s_allocChBitFlag[slot->playerNo] & ~(1u << SEQ_CRY_CHANNEL);
+    u32 mask = s_allocChBitFlag[slot->playerNo];
+    /* NitroSystem leaves the default channel mask in place for zero. */
+    u32 allowed = (mask ? mask : 0xffffu) & ~(1u << SEQ_CRY_CHANNEL);
     NNSSndWaveOutHandle wave;
     int victim = -1;
 

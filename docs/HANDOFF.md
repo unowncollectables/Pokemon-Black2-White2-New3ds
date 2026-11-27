@@ -13,8 +13,10 @@ the original 256 columns for HUD placement and DS display capture. Eligible
 PICA200 frames rasterize the world at the LCD's 400x240 resolution. The
 compositor preserves foreground 2D layers over that geometry. The software
 fallback scales a 320x192 picture with equal scaling on both axes.
-DS window scenes keep widescreen through the scaled compositor and honor
-BG0 visibility at the screen edges. Layer blending and capture can still
+DS window scenes keep native widescreen when a GPU image is available.
+The compositor masks BG0 in the center and at the screen edges. Sharp
+glyphs follow the same window visibility as their source layer.
+Layer blending and capture can still
 use centered 4:3 presentation. Display toggles are saved when changed.
 The default-off Sharp game text option draws eligible glyphs in scaled DS BG windows at one LCD pixel per font pixel, including foreground
 text over native 3D. It restores the recorded opaque background during

@@ -64,6 +64,11 @@ static const char *check_voices(void) {
     if (note_on(2, 20) != &s_dspVoices[1] || s_slots[1].tracks[0].notes[0].active ||
         !s_slots[0].tracks[0].notes[0].active)
         return "steal the oldest equal-priority note across sequences";
+
+    s_slots[3].playerNo = 1;
+    s_allocChBitFlag[1] = 0;
+    if (note_on(3, 20) != &s_dspVoices[2]) return "zero archive mask keeps default channel access";
+    seq_note_off(&s_slots[3], 0, 0);
     return NULL;
 }
 

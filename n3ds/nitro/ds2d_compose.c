@@ -847,7 +847,7 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
     bg_blend.track = layerAlpha || layerBrightness;
     bg_blend.first = 0;
     bg_blend.ink = ((dc >> REG_GX_DISPCNT_MODE_SHIFT) & 3) == 1 ? ink : NULL;
-    bg_blend.nativeText = bg_blend.ink && !window && !layerAlpha && !layerBrightness &&
+    bg_blend.nativeText = bg_blend.ink && !layerAlpha && !layerBrightness &&
                           !reg_u16(regs, 0x6c) && (is_sub || !(reg_GX_DISPCAPCNT & REG_GX_DISPCAPCNT_E_MASK));
     bg_blend.track |= bg_blend.nativeText;
     if (window || bg_blend.track || bg_blend.ink) blend = &bg_blend;
@@ -881,10 +881,10 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
                 bool extend = PbW2_G3WideCamera() && ((dc >> 16) & 3) == 1 &&
                               !layerBrightness && !layerAlpha &&
                               !(reg_GX_DISPCAPCNT & REG_GX_DISPCAPCNT_E_MASK);
-                if (extend && !window) memcpy(underGeometry, out, sizeof underGeometry);
+                if (extend) memcpy(underGeometry, out, sizeof underGeometry);
                 s_haveSides = PbW2_G3RasterComposite(out, window, bg_blend.track ? bg_blend.planes : NULL,
                                                      layerAlpha ? bg_blend.colors : NULL, extend ? s_sides : NULL,
-                                                     backdrop, extend && !window ? &nativeFrame : NULL, bg_blend.ink);
+                                                     backdrop, extend ? &nativeFrame : NULL, bg_blend.ink);
                 if (nativeFrame) {
                     /* Subsequent layers sit in front of the 3D layer. */
                     bg_blend.track = true;
@@ -906,10 +906,13 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
                 u16 pixel = geometry[x];
                 if (x >= 40 && x < 360) {
                     unsigned i = dsRow + (8 * (x - 40) + 4) / 10;
+                    bool visible = !window || (window[i] & GX_WND_PLANEMASK_BG0);
                     if (bg_blend.planes[i]) row[x] = out[i];
-                    else row[x] = pixel & 0x8000 ? rgb555_to_565(pixel) : underGeometry[i];
+                    else row[x] = visible && (pixel & 0x8000) ? rgb555_to_565(pixel) : underGeometry[i];
                 } else {
-                    row[x] = pixel & 0x8000 ? rgb555_to_565(pixel) : backdrop;
+                    unsigned edge = x < 40 ? 0 : 255;
+                    bool visible = !window || (window[dsRow + edge] & GX_WND_PLANEMASK_BG0);
+                    row[x] = visible && (pixel & 0x8000) ? rgb555_to_565(pixel) : backdrop;
                 }
             }
         }

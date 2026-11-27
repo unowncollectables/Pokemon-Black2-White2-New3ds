@@ -933,10 +933,13 @@ static bool check_wide_frame(bool gpu, bool capture) {
     PBW2_VU16(0x0400004a) = GX_WND_PLANEMASK_BG0;
     PbW2_ComposeScreens(pixels, NULL);
     const u16 *windowedSides = PbW2_TopSides();
-    if (!windowedSides || windowedSides[96 * 64 + 16] != 0xf800 || PbW2_NativeTop()) return false;
+    top = PbW2_NativeTop();
+    if (!windowedSides || windowedSides[96 * 64 + 16] != 0xf800 ||
+        (top != NULL) != gpu || (top && top[120 * 400 + 20] != 0xf800)) return false;
     PBW2_VU16(0x0400004a) = 0;
     PbW2_ComposeScreens(pixels, NULL);
-    if (PbW2_TopSides()[96 * 64 + 16] != 0x001f) return false;
+    top = PbW2_NativeTop();
+    if (PbW2_TopSides()[96 * 64 + 16] != 0x001f || (top && top[120 * 400 + 20] != 0x001f)) return false;
     reg_GX_DISPCNT &= ~(1u << 13);
 
     if (gpu) {
@@ -958,6 +961,16 @@ static bool check_wide_frame(bool gpu, bool capture) {
         top = PbW2_NativeTop();
         if (!top || top[121 * 400 + 201] != 0x07c0 || top[121 * 400 + 197] != 0xf800)
             return false;
+        reg_GX_DISPCNT |= 1u << 13;
+        PBW2_VU16(0x04000040) = (100u << 8) | 128u;
+        PBW2_VU16(0x04000044) = (90u << 8) | 110u;
+        PBW2_VU16(0x04000048) = GX_WND_PLANEMASK_BG0;
+        PBW2_VU16(0x0400004a) = GX_WND_PLANEMASK_BG1;
+        PbW2_ComposeScreens(pixels, NULL);
+        top = PbW2_NativeTop();
+        if (!top || top[121 * 400 + 201] != 0x07c0 || top[121 * 400 + 197] != 0xf800 ||
+            top[121 * 400 + 185] != 0xf800 || top[121 * 400 + 165] != 0xf800 ||
+            top[121 * 400 + 164] != 0x001f) return false;
     }
     PbW2_G3SetWide(false);
     return true;
@@ -988,6 +1001,18 @@ static bool check_sharp_text(void) {
     PbW2_TextUpload(&window, vram, 1, sizeof windowPixels);
     PbW2_ComposeScreensWithText(pixels, NULL, ink, NULL);
     if (ink[0] != (PBW2_TEXT_NATIVE | PBW2_TEXT_INK | 0x07c0u) || ink[1] || pixels[0] != 0xf800 || pixels[1] != 0x07c0) return false;
+    reg_GX_DISPCNT |= 1u << 13;
+    PBW2_VU16(0x04000040) = 8;
+    PBW2_VU16(0x04000044) = 8;
+    PBW2_VU16(0x04000048) = GX_WND_PLANEMASK_BG0;
+    PBW2_VU16(0x0400004a) = 0;
+    PbW2_ComposeScreensWithText(pixels, NULL, ink, NULL);
+    if (!(ink[0] & PBW2_TEXT_NATIVE) || pixels[0] != 0xf800) return false;
+    PBW2_VU16(0x04000048) = 0;
+    PbW2_ComposeScreensWithText(pixels, NULL, ink, NULL);
+    if (ink[0] || pixels[0] == 0xf800) return false;
+    reg_GX_DISPCNT &= ~(1u << 13);
+
     vram[32] = 0x22;
     PbW2_ComposeScreensWithText(pixels, NULL, ink, NULL);
     if (ink[0] || pixels[0] != 0x07c0) return false;
