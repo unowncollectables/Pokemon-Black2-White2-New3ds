@@ -46,6 +46,14 @@
 #include "system/btl_setup.h"
 #include "system/pms_data.h"
 
+#ifdef PBW2_N3DS
+#include "log.h"
+
+/* Build 15 probe: the command each client is currently answering,
+ * so the RETURN step can name it in the reply marker below. */
+static u32 s_probeCmd[8];
+#endif
+
 // Function names from swan (https://github.com/ds-pokemon-hacking/swan, GPL-3.0) where it has them
 
 // The most energy a client's Shooter holds
@@ -1073,6 +1081,15 @@ static BOOL BattleClient_MainProcNormal(BtlClient *client) {
         } else if (cmd != 0) {
             u32 locksRecPlay;
 
+#ifdef PBW2_N3DS
+            /* Build 15 probe: pair with the reply marker in the
+             * RETURN step — a recv with no matching reply names the
+             * client and command the battle is stuck inside. */
+            if (client->clientId < 8) {
+                s_probeCmd[client->clientId] = cmd;
+            }
+            Log_Line("BTL", "client %u type=%u recv acmd=%u", client->clientId, client->clientType, cmd);
+#endif
             client->cmdProc = BattleClient_GetCmdProc(client, cmd, &locksRecPlay);
             if (locksRecPlay) {
                 if (!RecPlayer_TryLock(&client->recPlayer)) {
@@ -1108,6 +1125,13 @@ static BOOL BattleClient_MainProcNormal(BtlClient *client) {
         break;
     case CLIENT_MAIN_SEQ_RETURN:
         if (BtlAdapter_SetReturnData(client->adapter, client->returnData, client->returnDataSize)) {
+#ifdef PBW2_N3DS
+            /* Build 15 probe: this is the exact call the server's
+             * WAIT_SELECT waits on (via the shared adapter's returned
+             * flag). One line per answered command. */
+            Log_Line("BTL", "client %u replied acmd=%u", client->clientId,
+                     client->clientId < 8 ? s_probeCmd[client->clientId] : 0);
+#endif
             client->mainSeq = CLIENT_MAIN_SEQ_RECV_CMD;
         }
         if (client->forceQuit) {

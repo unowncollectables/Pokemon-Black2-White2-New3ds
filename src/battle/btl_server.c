@@ -21,6 +21,10 @@
 #include "system/game_beacon.h"
 #include "system/game_comm.h"
 
+#ifdef PBW2_N3DS
+#include "log.h"
+#endif
+
 // The steps of BattleServer_ProcStart: send the setup, run the battle's start, then send its first commands and wait
 // for the clients to take them
 enum {
@@ -245,6 +249,41 @@ BOOL BattleServer_ProcSelectAction(BtlServer *server, int *seq) {
         (*seq)++;
         break;
     case BTL_SERVER_ACTION_SEQ_WAIT_SELECT:
+#ifdef PBW2_N3DS
+        /* Build 15 probe: Runs 5/7 soft-lock with the server parked
+         * here — some client never replies to SELECT_ACTION, but the
+         * Build 13/14 probes only watched the view core and input,
+         * which are downstream and read idle. Name the blocking slot:
+         * log the per-slot blocker mask whenever it changes, plus a
+         * slow heartbeat. BtlAdapter_WaitCmd is the same call
+         * AllClientsReplied makes; in SEND it performs the send the
+         * real check would perform on this same frame, in WAIT_REPLY
+         * it is a pure reply check, so probing with it changes no
+         * observable behaviour. */
+        {
+            static u32 s_waitFrames;
+            static u32 s_lastMask = 0xffffffff;
+
+            if (!BattleServer_AllClientsReplied(server)) {
+                u32 mask = 0;
+                int bi;
+
+                for (bi = 0; bi < 4; bi++) {
+                    if (IsSwitchModeEnabled(&server->clients[bi]) &&
+                        !BtlAdapter_WaitCmd(server->clients[bi].adapter)) {
+                        mask |= 1u << bi;
+                    }
+                }
+                if (mask != s_lastMask || (s_waitFrames % 600) == 0) {
+                    Log_Line("BTL", "server WAIT_SELECT blocked=0x%x ids=%u,%u,%u,%u", mask,
+                             server->clients[0].clientId, server->clients[1].clientId,
+                             server->clients[2].clientId, server->clients[3].clientId);
+                    s_lastMask = mask;
+                }
+                s_waitFrames++;
+            }
+        }
+#endif
         if (BattleServer_AllClientsReplied(server)) {
             BattleServer_FinishCmd(server);
             if (IsGameTimeUp(server->mainModule)) {

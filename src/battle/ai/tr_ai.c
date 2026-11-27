@@ -19,6 +19,10 @@
 #include "pml/personal.h"
 #include "system/vm.h"
 
+#ifdef PBW2_N3DS
+#include "log.h"
+#endif
+
 // The AI stops thinking for the frame once it has run for this many ticks
 #define TRAI_TIME_LIMIT 500
 
@@ -475,6 +479,12 @@ void TrAI_Setup(VM *vm, const u8 *usableMoves, u8 attackerPos) {
     wk->scriptIndex = 0;
     wk->attackerPos = attackerPos;
     wk->flagsRemaining = wk->aiFlags;
+#ifdef PBW2_N3DS
+    /* Build 15 probe: a think starts. aiFlags is the wild/trainer
+     * discriminator — a wild single battle passes 0 and never loads
+     * a script; a trainer battle passes the trainer's flags. */
+    Log_Line("BTL", "trai setup aiFlags=0x%x pos=%u", wk->aiFlags, attackerPos);
+#endif
     wk->unkC8 = 4;
     for (i = 0; i < TRAI_MOVE_MAX; i++) {
         if (usableMoves[i] == 0) {
@@ -552,6 +562,12 @@ BOOL TrAI_ChooseMove(VM *vm, TrAIContext *wk) {
     }
     wk->chosenMove = move;
     wk->chosenTarget = wk->defenderPos;
+#ifdef PBW2_N3DS
+    /* Build 15 probe: the think finished — the AI client can now
+     * reply to SELECT_ACTION. Absence of this line while suspends
+     * drip is the soft-lock's signature. */
+    Log_Line("BTL", "trai choose done move=%u target=%u", move, wk->chosenTarget);
+#endif
     return FALSE;
 }
 
@@ -696,6 +712,26 @@ void TrAI_RunScripts(VM *vm, TrAIContext *wk) {
                     TrAI_ReleaseScript(wk);
                     wk->script = NULL;
                 } else if (OS_GetTick() - wk->startTick > TRAI_TIME_LIMIT) {
+#ifdef PBW2_N3DS
+                    /* Build 15 probe: the think ran out of its tick
+                     * budget without finishing the script. A healthy
+                     * script suspends rarely; a script that can never
+                     * reach AIEnd suspends every frame forever, and
+                     * vmState then says why the VM is stuck (0 =
+                     * STOPPED: bad command/NULL pc; 1 = RUNNING: the
+                     * script itself loops). Log the first few and a
+                     * slow drip so the count itself is the evidence. */
+                    {
+                        static u32 s_suspends;
+
+                        s_suspends++;
+                        if (s_suspends <= 3 || (s_suspends % 200) == 0) {
+                            Log_Line("BTL", "trai suspend #%u script=%u moveIdx=%u vmState=%u pcNull=%u status=0x%x",
+                                     s_suspends, wk->scriptIndex, wk->moveIdx, vm->state,
+                                     vm->pc == NULL ? 1 : 0, wk->status);
+                        }
+                    }
+#endif
                     wk->status |= TRAI_STATUS_SUSPENDED;
                     break;
                 }
@@ -2378,6 +2414,16 @@ void *TrAI_LoadScript(TrAIContext *wk) {
     for (i = 0; i < TRAI_SCRIPT_CACHE_SIZE; i++) {
         if (wk->scriptIndex == sScriptCache->fileIds[i]) {
             sScriptCache->refCounts[i]++;
+#ifdef PBW2_N3DS
+            /* Build 15 probe: the script bytes the VM will run.
+             * w0 is the first command ID; the VM stops dead if it is
+             * >= the command count, and AIEnd (MOVE_DONE) is then
+             * never reached — the think suspends/resumes forever. */
+            Log_Line("BTL", "trai load script=%u cache-hit ptr=%p w0=%04x cmdCount=%u", wk->scriptIndex,
+                     sScriptCache->scripts[i],
+                     sScriptCache->scripts[i] ? *(const u16 *)sScriptCache->scripts[i] : 0xffff,
+                     (u32)NELEMS(sTrAICommands));
+#endif
             return sScriptCache->scripts[i];
         }
     }
@@ -2394,6 +2440,13 @@ void *TrAI_LoadScript(TrAIContext *wk) {
     sScriptCache->fileIds[i] = wk->scriptIndex;
     sScriptCache->refCounts[i]++;
     sScriptCache->scripts[i] = GFL_ArcToolReadHeapNew(wk->scriptArc, wk->scriptIndex, heapId);
+#ifdef PBW2_N3DS
+    /* Build 15 probe: see the cache-hit log above. */
+    Log_Line("BTL", "trai load script=%u slot=%d ptr=%p w0=%04x cmdCount=%u", wk->scriptIndex, i,
+             sScriptCache->scripts[i],
+             sScriptCache->scripts[i] ? *(const u16 *)sScriptCache->scripts[i] : 0xffff,
+             (u32)NELEMS(sTrAICommands));
+#endif
     return sScriptCache->scripts[i];
 }
 
