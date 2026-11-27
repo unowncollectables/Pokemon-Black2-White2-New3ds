@@ -104,6 +104,15 @@ $(BUILD)/g3_fidelity.elf: $(G3_TEST_SRC) $(G3_TEST_MTX) $(GPU_SHADER)
 
 $(BUILD)/g3_fidelity.3dsx: $(BUILD)/g3_fidelity.elf
 	3dsxtool $< $@
+
+.PHONY: test-follower
+test-follower: $(BUILD)/follower_native.3dsx
+
+$(BUILD)/follower_native.elf: tests/follower_native.c source/follower.c
+	$(CC) $(CFLAGS) $(GAMEFLAGS) $< $(LDFLAGS) $(LIBPATHS) $(LIBS) -o $@
+
+$(BUILD)/follower_native.3dsx: $(BUILD)/follower_native.elf
+	3dsxtool $< $@
 endif
 else
 SHELL_SRC += ../lib/nitro/src/rtc/rtc_convert.c

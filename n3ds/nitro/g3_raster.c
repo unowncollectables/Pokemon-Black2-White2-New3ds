@@ -418,14 +418,17 @@ static unsigned descriptor_address(unsigned block) {
  * the quad; read here on the same submission path (CPU raster) and at
  * swap time on the PICA upload path, still before any other follower
  * write can land. */
-static u8 s_folIndices[256 * 32 / 2];
+static u8 s_folIndices[512 * 64 / 2];
+static unsigned s_folFrameSize;
 static u16 s_folPal[2][16];
 static bool s_folShiny, s_folSet;
 static u32 s_folGen;
 
 void PbW2_G3FollowerSetTexture(const u8 *indices, const u16 *palNormal, const u16 *palShiny,
-                               bool shiny, u32 generation) {
-    memcpy(s_folIndices, indices, sizeof s_folIndices);
+                               unsigned frameSize, bool shiny, u32 generation) {
+    if (frameSize != 32 && frameSize != 64) return;
+    s_folFrameSize = frameSize;
+    memcpy(s_folIndices, indices, 4 * frameSize * frameSize);
     memcpy(s_folPal[0], palNormal, sizeof s_folPal[0]);
     memcpy(s_folPal[1], palShiny, sizeof s_folPal[1]);
     s_folShiny = shiny;
@@ -434,15 +437,15 @@ void PbW2_G3FollowerSetTexture(const u8 *indices, const u16 *palNormal, const u1
 }
 
 static bool follower_texture(const Texture *t) {
-    return s_folSet && t->format == GX_TEXFMT_PLTT16 && t->address == PBW2_FOLLOWER_TEX_ADDR;
+    return s_folSet && t->format == GX_TEXFMT_PLTT16 && t->address == PBW2_FOLLOWER_TEX_ADDR &&
+           t->width == 8 * s_folFrameSize && t->height == s_folFrameSize;
 }
 
 static u16 texture_pixel(const Texture *t, unsigned x, unsigned y, unsigned *alpha) {
     *alpha = 31;
     if (!t->format) return 0x7fff;
     if (follower_texture(t)) {
-        /* One 256x32 strip of 4bpp indices; the palette is the
-         * follower's own (normal or shiny), never VRAM's. */
+        /* The follower strip and its palette live in port RAM. */
         unsigned i = y * t->width + x;
         unsigned index = (s_folIndices[i / 2] >> (4 * (i & 1))) & 15;
         if (index == 0 && (t->param & (1u << 29))) *alpha = 0;

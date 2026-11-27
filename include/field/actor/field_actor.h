@@ -5,6 +5,7 @@
 #include "constants/actor_event_types.h"
 #include "constants/directions.h"
 #include "constants/move_codes.h"
+#include "field/actor/field_actor_config.h"
 #include "field/map/zone.h"
 #include "gfl/billboard_actor.h"
 #include "gfl/heap.h"
@@ -24,43 +25,6 @@ typedef struct {
     s16 z;
     s16 pad06;
 } GridPos;
-
-// The resources of an object code's model
-typedef struct {
-    u16 res1;
-    u16 res2;
-    u16 animations[3];
-} FieldActorResGroup;
-
-// An object code's record in ARCID_MMODEL_TBL, from 4 bytes into the file, at the index GetIndexOfObjID returns. Names
-// from swan's FieldActorConfig
-typedef struct {
-    u16 uid;
-    u8 entityType;
-    u8 sceneNodeType;
-    u8 enableShadow;
-    u8 footprintType;
-    u8 enableReflections;
-    u8 billboardSize;
-    u8 spriteAtlasSize;
-    u8 spriteControllerType;
-    u8 gender;
-    u8 collWidth;
-    u8 collHeight;
-    s8 wPosOffsetX;
-    s8 wPosOffsetY;
-    s8 wPosOffsetZ;
-    FieldActorResGroup rscIndices;
-    u16 padding;
-} FieldActorConfig;
-
-// A config's billboardSize: the size of the actor's billboard in pixels, by field_actor_drawdata.c's
-// ACTOR_BILLBOARD_SIZES_INT
-enum {
-    ACTOR_BILLBOARD_SIZE_32,
-    ACTOR_BILLBOARD_SIZE_16,
-    ACTOR_BILLBOARD_SIZE_64,
-};
 
 // An actor's place on a rail, from swan's ActorPositionRail. magic is ACTOR_RAIL_POS_SET once the place is set
 typedef struct {

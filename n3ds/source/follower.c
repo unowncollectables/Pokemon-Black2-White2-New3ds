@@ -32,15 +32,15 @@
  * back up, mirrored front right, front left, 1 px bob as frame 2,
  * shiny palette from battle data. No extracted asset is ever
  * committed or shipped; the strip exists only in port RAM.
- * Native-tier species resolve through PbW2_FollowerLoadNative(),
- * the Stage 2 entry point (TPoke data path); in Stage 1 it reports
- * "not loaded yet" and the follower stays in its Ball for those
- * species rather than drawing anything wrong.
+ * Native-tier sprites resolve through the ROM's TPoke and actor
+ * archives. Their field palettes lack a shiny variant.
  */
 #include "follower.h"
 
 #include "config.h"
 #include "g3_raster.h"
+#include "constants/directions.h"
+#include "field/actor/field_actor_config.h"
 #include "log.h"
 #include "pbw2_follower_feed.h"
 
@@ -70,10 +70,6 @@ _Static_assert(offsetof(PbW2GlbHead, cameraMtx) == 76, "NNS_G3dGlb cameraMtx off
 extern void NNS_G3dGeFlushBuffer(void);
 
 #define TILE_FX (16 * FX32_ONE)
-#define DIR_UP 0
-#define DIR_DOWN 1
-#define DIR_LEFT 2
-#define DIR_RIGHT 3
 /* FLD_PLAYER_EXSTATE_* (include/field/player/player_state.h) */
 #define EXSTATE_NONE 0
 
@@ -131,7 +127,8 @@ static struct {
     int failedSpecies;  /* species whose load failed; don't retry every frame */
 } s_fol;
 
-static u8 s_stripIndices[256 * 32 / 2];
+static u8 s_stripIndices[512 * 64 / 2];
+static unsigned s_frameSize = 32;
 static u16 s_stripPalNormal[16], s_stripPalShiny[16];
 static u32 s_stripGen;
 
@@ -150,11 +147,15 @@ static fx32 fol_abs(fx32 v) { return v < 0 ? -v : v; }
 #endif
 #define FOL_POKEGRA_PATH FOL_SD_DIR "/nitrofs/a/0/0/4"
 #define FOL_PERSONAL_PATH FOL_SD_DIR "/nitrofs/a/0/1/6"
+#define FOL_TPOKE_PATH FOL_SD_DIR "/nitrofs/a/2/0/8"
+#define FOL_ACTORS_PATH FOL_SD_DIR "/nitrofs/a/0/4/7"
+#define FOL_GRAPHICS_PATH FOL_SD_DIR "/nitrofs/a/0/4/8"
 
 typedef struct {
     FILE *file;
     u32 count;
     u32 gmif; /* absolute offset of the GMIF data */
+    u32 dataSize;
     u32 *entries; /* (start,end) pairs relative to gmif */
 } Narc;
 
@@ -168,29 +169,32 @@ static int narc_open(Narc *narc, const char *path) {
     memset(narc, 0, sizeof *narc);
     narc->file = fopen(path, "rb");
     if (!narc->file) return 0;
+    if (fseek(narc->file, 0, SEEK_END) != 0) goto fail;
+    long fileSize = ftell(narc->file);
+    if (fileSize < 16 || fseek(narc->file, 0, SEEK_SET) != 0) goto fail;
     u8 header[16];
     if (fread(header, 1, sizeof header, narc->file) != sizeof header || memcmp(header, "NARC", 4) != 0) goto fail;
-    u32 pos = 16;
-    for (;;) {
+    for (u32 pos = 16; pos + 8 <= (u32)fileSize;) {
         u8 chunk[8];
         if (fseek(narc->file, (long)pos, SEEK_SET) != 0 || fread(chunk, 1, 8, narc->file) != 8) goto fail;
         u32 size;
         memcpy(&size, chunk + 4, 4);
-        if (size < 8) goto fail;
+        if (size < 8 || size > (u32)fileSize - pos) goto fail;
         if (memcmp(chunk, "BTAF", 4) == 0) {
             u8 countBuf[4];
-            if (fread(countBuf, 1, 4, narc->file) != 4) goto fail;
-            memcpy(&narc->count, countBuf, 4);
+            if (size < 12 || narc->entries || fread(countBuf, 1, 4, narc->file) != 4) goto fail;
+            narc->count = countBuf[0] | ((u32)countBuf[1] << 8);
+            if (!narc->count || narc->count > (size - 12) / 8) goto fail;
             narc->entries = malloc(narc->count * 8);
             if (!narc->entries) goto fail;
             if (fread(narc->entries, 8, narc->count, narc->file) != narc->count) goto fail;
-        } else if (memcmp(chunk, "GMIF", 4) == 0) {
+        } else if (memcmp(chunk, "GMIF", 4) == 0 && narc->entries) {
             narc->gmif = pos + 8;
-            break;
+            narc->dataSize = size - 8;
+            return 1;
         }
         pos += size;
     }
-    return narc->entries != NULL;
 fail:
     narc_close(narc);
     return 0;
@@ -199,7 +203,7 @@ fail:
 static u8 *narc_member(Narc *narc, u32 index, u32 *outSize) {
     if (index >= narc->count) return NULL;
     u32 start = narc->entries[2 * index], end = narc->entries[2 * index + 1];
-    if (end < start) return NULL;
+    if (end < start || end > narc->dataSize) return NULL;
     u8 *buf = malloc(end - start ? end - start : 1);
     if (!buf) return NULL;
     if (fseek(narc->file, (long)(narc->gmif + start), SEEK_SET) != 0 ||
@@ -471,16 +475,127 @@ done:
     return ok;
 }
 
-/* Native TPoke tier: the Stage 2 entry point. Stage 1 proves the
- * floor tier (Trubbish); the native data path (TPoke table + the
- * game's own field graphics archive) lands in Stage 2 behind this
- * same gate-checked call. Returning 0 keeps the follower in its
- * Ball for native species in Stage 1 -- never a wrong sprite. */
+static u16 little16(const u8 *bytes) {
+    return bytes[0] | ((u16)bytes[1] << 8);
+}
+
+static u32 little32(const u8 *bytes) {
+    return little16(bytes) | ((u32)little16(bytes + 2) << 16);
+}
+
+static u8 *read_member(const char *path, unsigned index, u32 *size) {
+    Narc archive;
+    if (!narc_open(&archive, path)) return NULL;
+    u8 *member = narc_member(&archive, index, size);
+    narc_close(&archive);
+    return member;
+}
+
+static bool native_actor(u16 species, u8 form, u8 sex, FieldActorConfig *config) {
+    u32 size;
+    u8 *member = read_member(FOL_TPOKE_PATH, 0, &size);
+    if (!member) return false;
+    u8 *entries = lz_decode(member, size, &size);
+    free(member);
+    if (!entries) return false;
+
+    unsigned uid = 0;
+    for (unsigned i = 0; i + 8 <= size; i += 8) {
+        const u8 *entry = entries + i;
+        unsigned entrySex = little16(entry + 2);
+        if (little16(entry) == species && (entrySex == 2 || entrySex == sex) && little16(entry + 4) == form) {
+            uid = little16(entry + 6);
+            break;
+        }
+    }
+    free(entries);
+    if (!uid) return false;
+
+    member = read_member(FOL_ACTORS_PATH, 0, &size);
+    if (!member) return false;
+    bool found = false;
+    if (size >= 4) {
+        u32 records = little32(member);
+        if (records <= (size - 4) / sizeof(*config)) {
+            const u8 *record = member + 4;
+            for (unsigned i = 0; i < records; ++i, record += sizeof(*config)) {
+                if (little16(record) == uid) {
+                    memcpy(config, record, sizeof(*config));
+                    found = true;
+                    break;
+                }
+            }
+        }
+    }
+    free(member);
+    return found;
+}
+
+static bool decode_field_strip(const u8 *data, u32 bytes, unsigned side, unsigned controller) {
+    /* BTX0's TEX0 offset table and texture dictionary are the same
+     * layout used by tools/data/field_actor_data.py. */
+    if (bytes < 20 || memcmp(data, "BTX0", 4)) return false;
+    unsigned block = little32(data + 16);
+    if (block > bytes || bytes - block < 0x44 || memcmp(data + block, "TEX0", 4)) return false;
+    const u8 *tex = data + block;
+    unsigned span = little32(tex + 4);
+    if (span > bytes - block || span < 0x44) return false;
+    unsigned texels = little32(tex + 20), palette = little32(tex + 56);
+    if (texels > span || palette > span || span - palette < 32) return false;
+    unsigned expected = controller == 13 ? 6 : 8;
+    unsigned count = tex[0x3d];
+    unsigned records = 0x3c + 8 + 4 * (count + 1) + 4;
+    if (count != expected || records > span || 8 * count > span - records) return false;
+
+    const u8 *frames[8];
+    for (unsigned i = 0; i < count; ++i) {
+        unsigned params = little32(tex + records + 8 * i);
+        unsigned dimensions = little32(tex + records + 8 * i + 4);
+        unsigned offset = (params & 0xffffu) * 8;
+        if (((params >> 26) & 7) != GX_TEXFMT_PLTT16 || (dimensions & 0x7ff) != side ||
+            ((dimensions >> 11) & 0x7ff) != side || offset > span - texels ||
+            side * side / 2 > span - texels - offset) return false;
+        frames[i] = tex + texels + offset;
+    }
+
+    /* Use the existing up/down/right/left strip order. Controller 13
+     * draws the right side by mirroring its left-side frames. */
+    for (unsigned y = 0; y < side; ++y) {
+        for (unsigned i = 0; i < 8; ++i) {
+            bool flip = controller == 13 && (i == 4 || i == 5);
+            unsigned sourceFrame = i;
+            if (i >= 6 || flip) sourceFrame = 4 + (i & 1);
+            else if (i >= 4) sourceFrame = i + 2;
+            const u8 *src = frames[sourceFrame] + y * side / 2;
+            u8 *dst = s_stripIndices + (y * 8 + i) * side / 2;
+            if (!flip) {
+                memcpy(dst, src, side / 2);
+                continue;
+            }
+            for (unsigned x = 0; x < side / 2; ++x) {
+                u8 pair = src[side / 2 - 1 - x];
+                dst[x] = (pair >> 4) | (pair << 4);
+            }
+        }
+    }
+    for (unsigned i = 0; i < 16; ++i)
+        s_stripPalNormal[i] = s_stripPalShiny[i] = little16(tex + palette + 2 * i);
+    return true;
+}
+
 static int PbW2_FollowerLoadNative(u16 species, u8 form, u8 sex) {
-    (void)species;
-    (void)form;
-    (void)sex;
-    return 0;
+    FieldActorConfig config;
+    if (!native_actor(species, form, sex, &config) || config.entityType != 1 ||
+        (config.spriteControllerType != 13 && config.spriteControllerType != 14) ||
+        (config.billboardSize != ACTOR_BILLBOARD_SIZE_32 && config.billboardSize != ACTOR_BILLBOARD_SIZE_64)) return 0;
+    unsigned side = config.billboardSize == ACTOR_BILLBOARD_SIZE_64 ? 64 : 32;
+    u32 size;
+    u8 *data = read_member(FOL_GRAPHICS_PATH, config.rscIndices.res1, &size);
+    if (!data) return 0;
+    bool ok = decode_field_strip(data, size, side, config.spriteControllerType);
+    free(data);
+    if (ok) s_frameSize = side;
+    return ok;
 }
 
 /* Resolve the feed's lead identity to a registered strip, on change
@@ -505,6 +620,7 @@ static int follower_resolve_sprite(const PbW2FollowerFeed *feed) {
     enum PbW2FollowerTier tier = PbW2_FollowerCoverage(lead->species, lead->form, lead->sex);
     int ok = 0;
     if (tier == TIER_FLOOR) {
+        s_frameSize = 32;
         ok = PbW2_FollowerLoadFloor(lead->species, lead->form, lead->sex);
     } else if (tier == TIER_NATIVE_TPOKE) {
         ok = PbW2_FollowerLoadNative(lead->species, lead->form, lead->sex);
@@ -521,7 +637,7 @@ static int follower_resolve_sprite(const PbW2FollowerFeed *feed) {
     }
     s_fol.failedSpecies = -1;
     ++s_stripGen;
-    PbW2_G3FollowerSetTexture(s_stripIndices, s_stripPalNormal, s_stripPalShiny, s_fol.shiny != 0, s_stripGen);
+    PbW2_G3FollowerSetTexture(s_stripIndices, s_stripPalNormal, s_stripPalShiny, s_frameSize, s_fol.shiny != 0, s_stripGen);
     s_fol.loaded = 1;
     Log_Line("FOL", "lead species %u form %u sex %u shiny %d -> strip registered (gen %lu)",
              lead->species, lead->form, lead->sex, s_fol.shiny, (unsigned long)s_stripGen);
@@ -627,14 +743,14 @@ void PbW2_FollowerDraw(void) {
     if (fol_abs(s_fol.cur.x - pos.x) < 4 * FX32_ONE && fol_abs(s_fol.cur.z - pos.z) < 4 * FX32_ONE && !s_fol.moving) return;
     s_fol.anim++;
 
-    /* Draw: view-space quad at the follower's feet, bottom-centred,
-     * 32x32 world units (1 texel = 1 unit), like Platinum. Frame
-     * selection: strip order up/down/right/left pairs. */
+    /* Draw a bottom-centred quad at the follower's feet, one world unit per
+     * texel. The strip stores up, down, right and left frame pairs. */
     static const int kFrameBase[4] = { 0, 2, 6, 4 }; /* DIR_UP, DOWN, LEFT, RIGHT */
     int dir = s_fol.dir & 3;
     int frame = kFrameBase[dir] + ((s_fol.anim >> (s_fol.moving ? 3 : 4)) & 1);
     VecFx32 centre = s_fol.cur, view;
-    centre.y += 16 * FX32_ONE;
+    fx32 half = (s_frameSize / 2) * FX32_ONE;
+    centre.y += half;
     MTX_MultVec43(&centre, &NNS_G3dGlb.cameraMtx, &view);
     view.y += 3 * FX32_ONE; /* field sprites sit ~3 px lower in their cell */
 
@@ -643,18 +759,21 @@ void PbW2_FollowerDraw(void) {
     G3_PushMtx();
     G3_Identity();
     G3_Translate(view.x, view.y, view.z);
-    G3_Scale(16 * FX32_ONE, 16 * FX32_ONE, 16 * FX32_ONE);
+    G3_Scale(half, half, half);
     G3_PolygonAttr(GX_LIGHTMASK_NONE, GX_POLYGONMODE_MODULATE, GX_CULL_NONE, 0, 31, GX_POLYGON_ATTR_MISC_FOG);
-    G3_TexImageParam(GX_TEXFMT_PLTT16, GX_TEXGEN_TEXCOORD, GX_TEXSIZE_S256, GX_TEXSIZE_T32,
+    GXTexSizeS sizeS = s_frameSize == 64 ? GX_TEXSIZE_S512 : GX_TEXSIZE_S256;
+    GXTexSizeT sizeT = s_frameSize == 64 ? GX_TEXSIZE_T64 : GX_TEXSIZE_T32;
+    G3_TexImageParam(GX_TEXFMT_PLTT16, GX_TEXGEN_NONE, sizeS, sizeT,
                      GX_TEXREPEAT_NONE, GX_TEXFLIP_NONE, GX_TEXPLTTCOLOR0_TRNS, PBW2_FOLLOWER_TEX_ADDR);
     G3_TexPlttBase(0, GX_TEXFMT_PLTT16);
     G3_Color(GX_RGB(31, 31, 31));
-    fx32 s0 = frame * 32 * FX32_ONE, s1 = s0 + 32 * FX32_ONE;
-    fx16 hw = (fx16)FX16_ONE; /* (32/2) texels at the 16x scale below */
+    fx32 textureSide = s_frameSize * FX32_ONE;
+    fx32 s0 = frame * textureSide, s1 = s0 + textureSide;
+    fx16 hw = FX16_ONE;
     G3_Begin(GX_BEGIN_QUADS);
     G3_TexCoord(s0, 0); G3_Vtx(-hw, hw, 0);
-    G3_TexCoord(s0, 32 * FX32_ONE); G3_Vtx(-hw, -hw, 0);
-    G3_TexCoord(s1, 32 * FX32_ONE); G3_Vtx(hw, -hw, 0);
+    G3_TexCoord(s0, textureSide); G3_Vtx(-hw, -hw, 0);
+    G3_TexCoord(s1, textureSide); G3_Vtx(hw, -hw, 0);
     G3_TexCoord(s1, 0); G3_Vtx(hw, hw, 0);
     G3_End();
     G3_PopMtx(1);
