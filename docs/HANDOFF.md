@@ -22,6 +22,11 @@ presentation and keeps DS window data intact. Glyph pixels with transparent
 backgrounds, incompatible effects or clipping use the existing sampling path.
 Text baked into OBJ sprites remains open.
 
+PICA200 honors the GX swap command's Z- or W-buffer selection. W-buffer
+frames project reciprocal W into the hardware depth range and transform
+the GX clear depth the same way. W-based occlusion in the software
+fallback is still open.
+
 Ordinary PICA200 frames use a 256x192 render target and readback.
 Widescreen and wide capture share a separate 400x240 allocation. The LCD
 compositor borrows the published native image while it blends the layers,

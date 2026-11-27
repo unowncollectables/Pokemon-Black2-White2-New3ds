@@ -781,6 +781,22 @@ static bool render_with_pica(u32 swapFlags) {
         return true;
     }
 
+    bool wBuffer = (swapFlags & (GX_BUFFERMODE_W << 1)) != 0;
+    float depthScale = 0.0f;
+    float clearDepth = s_clearDepth / 32767.0f;
+    if (wBuffer) {
+        float clearW = ((s_clearDepth << 9) | 511) / 4096.0f;
+        float maxInvW = 1.0f / clearW;
+        for (unsigned i = 0; i < s_gpuCount; ++i) {
+            const Vertex *v = s_gpuTriangles[i].vertex;
+            for (unsigned j = 0; j < 3; ++j) {
+                if (v[j].w > maxInvW) maxInvW = v[j].w;
+            }
+        }
+        depthScale = 0.5f / maxInvW;
+        clearDepth = 1.0f - depthScale / clearW;
+    }
+
     if (!PbW2_PicaBegin(s_alphaRef)) return false;
     int gpuSlots[GPU_TEXTURES_MAX];
     float invWidth[GPU_TEXTURES_MAX], invHeight[GPU_TEXTURES_MAX];
@@ -816,7 +832,10 @@ static bool render_with_pica(u32 swapFlags) {
             float w = 1.0f / p->w;
             vertex[j] = (PicaVertex){
                 (p->x / (s_width / 2.0f) - 1.0f) * w, (p->y / (HEIGHT / 2.0f) - 1.0f) * w,
-                -p->z * w, w, p->s * w * invWidth[material], p->t * w * invHeight[material],
+                /* After division this gives depth 1 - scale / W. PICA
+                 * interpolates 1/W in screen space, preserving W order. */
+                wBuffer ? depthScale - w : -p->z * w, w,
+                p->s * w * invWidth[material], p->t * w * invHeight[material],
                 p->r * w / 31.0f, p->g * w / 31.0f, p->b * w / 31.0f, alphaFloat,
             };
         }
@@ -878,7 +897,7 @@ static bool render_with_pica(u32 swapFlags) {
                  s_sceneSwaps + 1, s_gpuCount, textured, s_gpuMaterialCount, blank, formats, s_width,
                  s_nativeFrame ? " native" : "");
     }
-    if (!PbW2_PicaFinish(color, s_clearDepth / 32767.0f, s_drawing.color)) return false;
+    if (!PbW2_PicaFinish(color, clearDepth, s_drawing.color)) return false;
     s_previousGpuFrame = true;
     s_previousFrame = frame;
     memcpy(s_previousTextures, textures, s_gpuMaterialCount * sizeof(*textures));

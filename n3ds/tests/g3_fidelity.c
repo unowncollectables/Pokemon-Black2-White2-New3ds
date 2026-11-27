@@ -1211,6 +1211,48 @@ static bool check_frame_reuse(void) {
     return s_gpuFrames == before + 4 && pixels[0] == 0x83e0;
 }
 
+static const char *check_pica_w_depth(void) {
+    memset(pbw2_io, 0, sizeof pbw2_io);
+    PbW2_G3InterceptInit();
+    const unsigned before = s_gpuFrames;
+    const unsigned center = 96 * 256 + 128;
+    G3_MtxMode(GX_MTXMODE_PROJECTION);
+    const u32 red[] = {
+        FX32_ONE, 0, 0, 0, 0, FX32_ONE, 0, 0,
+        0, 0, FX32_ONE, 0, 0, 0, FX32_ONE / 2, FX32_ONE,
+    };
+    const u32 green[] = {
+        2 * FX32_ONE, 0, 0, 0, 0, 2 * FX32_ONE, 0, 0,
+        0, 0, FX32_ONE, 0, 0, 0, (u32)-FX32_ONE, 2 * FX32_ONE,
+    };
+    for (unsigned i = 0; i < 3; ++i) {
+        reg_G3X_CLEAR_DEPTH = i == 2 ? 6 : 0x7fff;
+        PbW2_G3Command(G3OP_MTX_LOAD_4x4, red);
+        triangle(GX_RGB(31, 0, 0), 0);
+        PbW2_G3Command(G3OP_MTX_LOAD_4x4, green);
+        triangle(GX_RGB(0, 31, 0), 0);
+        cmd(0x50, i == 0 ? GX_BUFFERMODE_Z << 1 : GX_BUFFERMODE_W << 1);
+        PbW2_G3RasterCapture(pixels);
+        const u16 expected[] = {0x8000 | GX_RGB(0, 31, 0), 0x8000 | GX_RGB(31, 0, 0), 0};
+        if (pixels[center] != expected[i]) return i == 0 ? "Z order" : i == 1 ? "W order" : "W clear depth";
+    }
+    const u32 sloped[] = {
+        FX32_ONE, 0, 0, FX32_ONE, 0, FX32_ONE, 0, 0,
+        0, 0, FX32_ONE, 0, 0, 0, 0, 2 * FX32_ONE,
+    };
+    reg_G3X_CLEAR_DEPTH = 0x7fff;
+    PbW2_G3Command(G3OP_MTX_LOAD_4x4, green);
+    triangle(GX_RGB(0, 31, 0), 0);
+    PbW2_G3Command(G3OP_MTX_LOAD_4x4, sloped);
+    triangle(GX_RGB(31, 0, 0), 0);
+    cmd(0x50, GX_BUFFERMODE_W << 1);
+    PbW2_G3RasterCapture(pixels);
+    if (pixels[center - 6] != (0x8000 | GX_RGB(31, 0, 0)) ||
+        pixels[center + 6] != (0x8000 | GX_RGB(0, 31, 0))) return "interpolated W depth";
+
+    return s_gpuFrames == before + 4 ? NULL : "GPU frame count";
+}
+
 int main(void) {
     gfxInitDefault();
     archiveMountSdmc();
@@ -1238,6 +1280,8 @@ int main(void) {
         fprintf(f, "Clipped OBJ priority %s\n", check_clipped_objs() ? "PASS" : "FAIL");
         fprintf(f, "Sub-screen input cache %s\n", check_sub_cache() ? "PASS" : "FAIL");
         fprintf(f, "PICA frame reuse %s\n", check_frame_reuse() ? "PASS" : "FAIL");
+        failure = check_pica_w_depth();
+        fprintf(f, "PICA Z and W depth %s%s\n", failure ? "FAIL " : "PASS", failure ? failure : "");
         fclose(f);
     }
     for (;;)
