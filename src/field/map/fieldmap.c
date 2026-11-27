@@ -52,6 +52,10 @@
 #ifdef PBW2_N3DS
 #include "g3_raster.h"
 #include "log.h"
+#include "pbw2_follower_feed.h"
+#include "constants/directions.h"
+#include "constants/pokemon.h"
+#include "pml/poke_party.h"
 #endif
 #include "gfl/billboard_actor.h"
 #include "gfl/bmpwin.h"
@@ -530,6 +534,89 @@ u32 FieldRoutine_MapSpawnFinish(GameSystem *gsys, Field *field) {
     return FIELD_ROUTINE_NEXT;
 }
 
+#ifdef PBW2_N3DS
+/* Followers Stage 1 publication feed (followers-design.md SS6.1 +
+ * SS5B.2 feed v2). Runs once per field frame after the actor update:
+ * publishes ONLY -- creates no actor, sets no flag, writes no work
+ * value, touches no save data. The port layer is the only reader.
+ * Party identity is re-read on the SS5 cadence (~30 frames) so party
+ * changes land without any hook into the party code itself. */
+static void PbW2_FollowerPublish(GameSystem *gsys, Field *field) {
+    PbW2FollowerFeed *feed = &g_PbW2FollowerFeed;
+    static u8 partyCadence;
+    FieldActor *player = field->actorSystem != NULL ? FindPlayerFieldActor(field->actorSystem) : NULL;
+
+    feed->valid = FALSE;
+    if (player == NULL) {
+        return;
+    }
+    GridPos gpos;
+    FldAct_GetGPos(player, &gpos);
+    CopyActorPosAllAdd(player, &feed->worldPos);
+    feed->gridX = gpos.x;
+    feed->gridY = gpos.y;
+    feed->gridZ = gpos.z;
+    feed->faceDir = GetActorFaceDir(player);
+    /* Step progress: the fraction of the current tile the player has
+     * crossed along the facing axis, from the world position. */
+    {
+        const fx32 tile = 16 * FX32_ONE;
+        fx32 along = (feed->faceDir == DIR_LEFT || feed->faceDir == DIR_RIGHT)
+            ? feed->worldPos.x : feed->worldPos.z;
+        fx32 frac = along & (tile - 1);
+        if (feed->faceDir == DIR_UP || feed->faceDir == DIR_LEFT) {
+            frac = tile - frac;
+            if (frac == tile) frac = 0;
+        }
+        feed->stepProgress = frac;
+    }
+    feed->zoneId = field->zoneId;
+    /* Terrain class at the follower's tile: one tile behind the
+     * player, against the facing direction. Raw tile type -- the
+     * behaviour layer (Stage 6B) owns the class table. */
+    {
+        VecFx32 behind = feed->worldPos;
+        const fx32 tile = 16 * FX32_ONE;
+        if (feed->faceDir == DIR_UP) behind.z += tile;
+        else if (feed->faceDir == DIR_DOWN) behind.z -= tile;
+        else if (feed->faceDir == DIR_LEFT) behind.x += tile;
+        else if (feed->faceDir == DIR_RIGHT) behind.x -= tile;
+        feed->terrainAtFollower = GetTileTypeAtPos(field->g3DMapper, &behind);
+    }
+    feed->weatherId = GetNowWeather(field->gameData);
+    feed->dayPeriod = Field_GetDayPeriod(field);
+    feed->exState = FieldPlayer_GetExState(field->player);
+    feed->scriptOwnsField = GSYS_GetEventRunningFlag(gsys) || GSYS_GetNowEvent(gsys) != NULL;
+    if (partyCadence-- == 0) {
+        partyCadence = 30;
+        PokeParty *party = GameData_GetParty(field->gameData);
+        int count = party != NULL ? PokeParty_GetPkmCount(party) : 0;
+        feed->partyCount = (u8)count;
+        feed->leadSlot = 0xff;
+        for (int i = 0; i < PBW2_FOLLOWER_PARTY_SLOTS; ++i) {
+            PbW2FollowerPartySlot *slot = &feed->party[i];
+            slot->present = 0;
+            if (party == NULL || i >= count) continue;
+            PartyPkm *pkm = PokeParty_GetPkm(party, i);
+            if (pkm == NULL) continue;
+            slot->present = 1;
+            slot->species = (u16)PokeParty_GetParam(pkm, PKM_PARAM_SPECIES, NULL);
+            slot->form = (u8)PokeParty_GetParam(pkm, PKM_PARAM_FORM, NULL);
+            slot->sex = PokeParty_GetSex(pkm);
+            slot->shiny = PokeParty_IsRare(pkm);
+            slot->egg = PokeParty_GetParam(pkm, PKM_PARAM_IS_EGG, NULL) != 0;
+            slot->status = PokeParty_GetParam(pkm, PKM_PARAM_STATUS, NULL);
+            slot->hp = (u16)PokeParty_GetParam(pkm, PKM_PARAM_HP, NULL);
+            slot->maxHp = (u16)PokeParty_GetParam(pkm, PKM_PARAM_MAX_HP, NULL);
+            slot->happiness = (u8)PokeParty_GetParam(pkm, PKM_PARAM_HAPPINESS, NULL);
+            if (feed->leadSlot == 0xff && !slot->egg && slot->hp > 0) feed->leadSlot = (u8)i;
+        }
+    }
+    feed->frame++;
+    feed->valid = TRUE;
+}
+#endif
+
 u32 FieldRoutine_Run(GameSystem *gsys, Field *field) {
     if (GSYS_GetNowEvent(field->gameSystem) == NULL) {
         FieldStatus_SetBusyFlag(GameData_GetFieldStatus(field->gameData), FLD_STATUS_BUSY_NONE);
@@ -565,6 +652,9 @@ u32 FieldRoutine_Run(GameSystem *gsys, Field *field) {
         FldActSys_Update(field->actorSystem);
         MI_SetMainMemoryPriority(MI_PROCESSOR_ARM7);
     }
+#ifdef PBW2_N3DS
+    PbW2_FollowerPublish(gsys, field);
+#endif
     Field_UpdateGimmick(field);
     FieldEffects_Update(field->fieldEffects);
     if (field->unionEffect != NULL) {
@@ -1438,6 +1528,13 @@ void FieldRenderPhase2_Fieldmap(Field *field) {
     FieldEffects_Draw(field->fieldEffects);
     FieldG3DObjSystem_Draw(field->g3DObjSystem);
     BillboardActorSys_Draw(field->actorBillboardActor, field->g3dCamera, field->g3dLights);
+#ifdef PBW2_N3DS
+    /* Followers Stage 1: the port-layer render-only follower draws
+     * right after the actor billboards, through the same G3 path
+     * (followers-design.md SS6.1). It is not an actor: no collision,
+     * no script visibility, no save state. */
+    PbW2_FollowerDraw();
+#endif
     BillboardActorSys_Draw(field->wildEffectBillboardActor, field->g3dCamera, field->g3dLights);
     if (field->unionEffect != NULL) {
         UnionEff_Draw(field->unionEffect);
