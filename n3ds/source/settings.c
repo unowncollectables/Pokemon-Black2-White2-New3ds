@@ -89,6 +89,7 @@ static uint32_t s_display;
 static int s_fpsOverride = -1;
 static char s_oldPath[160];
 static char s_cfgPath[160];
+static char s_loggerPath[160];
 static const char s_configHeader[] = "PBW2-DISPLAY 1\n";
 static const char s_hex[] = "0123456789abcdef";
 
@@ -138,7 +139,7 @@ enum RowKind {
     ROW_NOTE,     /* empty-state note (BATTLE / PLAY), no pill */
 };
 
-enum { ROW_SPECIAL_NONE = 0, ROW_SPECIAL_SCALE = 1 };
+enum { ROW_SPECIAL_NONE = 0, ROW_SPECIAL_SCALE = 1, ROW_SPECIAL_LOGMODE = 2 };
 
 typedef struct {
     const char *label;
@@ -152,6 +153,7 @@ typedef struct {
 static const char *const kBoolLabels[] = { "OFF", "ON" };
 static const char *const kScaleLabels[] = { "1:1", "FIT", "TOP FIT" };
 static const char *const kExportLabels[] = { "A: EXPORT", "EXPORT ON CLOSE" };
+static const char *const kLogModeLabels[] = { "QUIET", "VERBOSE" };
 
 enum {
     TAB_LOOK = 0, TAB_BATTLE = 1, TAB_PLAY = 2, TAB_SYSTEM = 3, TAB_DEBUG = 4,
@@ -162,7 +164,8 @@ static const char *const s_tabNames[TAB_COUNT] = { "LOOK", "BATTLE", "PLAY", "SY
 
 /* Rehousing map (menu-parity.md SS4.1): display rows -> LOOK, Export
  * save -> SYSTEM #1 (SS's SYSTEM export slot), FPS counter -> DEBUG
- * #1 and Save backups -> DEBUG #2 (their exact SS slots), the old
+ * #1 and Save backups -> DEBUG #2 (their exact SS slots), Log mode
+ * -> DEBUG #3 (P4, backed by logger.cfg - see s_debugRows), the old
  * System diagnostics -> DEBUG as read-only rows. BATTLE ships with
  * Nate's note row only - no functional battle rows yet, and the
  * must-NOT-copy list binds (no SELECT=reset, no skip-intro, no shiny
@@ -181,6 +184,17 @@ static const RowDef s_systemRows[] = {
 static const RowDef s_debugRows[] = {
     { "FPS counter", "fps_counter", kBoolLabels, 2, ROW_VALUE, ROW_SPECIAL_NONE },
     { "Save backups", "save_backup", kBoolLabels, 2, ROW_VALUE, ROW_SPECIAL_NONE },
+    /* Log mode (P4): NOT a config-store key. It stages like every
+     * other row but commits on close to logger.cfg, the hardware-test
+     * logger's own file contract (logger-hwtest-design.md SS4:
+     * mode=quiet|verbose, read once at boot). The logger code itself
+     * lives on ghost/b2w2-logger-hwtest and is not in this branch -
+     * this row speaks to its file, never to its code, and the choice
+     * takes effect at the next launch, which the note row under it
+     * says in the menu's current text path (the top-screen card that
+     * will carry row descriptions is P5). */
+    { "Log mode", NULL, kLogModeLabels, 2, ROW_VALUE, ROW_SPECIAL_LOGMODE },
+    { "Takes effect at next launch", NULL, NULL, 0, ROW_NOTE, ROW_SPECIAL_NONE },
     { "Config store", NULL, NULL, 0, ROW_READONLY, ROW_SPECIAL_NONE },
     { "Config file reads", NULL, NULL, 0, ROW_READONLY, ROW_SPECIAL_NONE },
     { "Display flags", NULL, NULL, 0, ROW_READONLY, ROW_SPECIAL_NONE },
@@ -210,9 +224,82 @@ static int scale_value(void) {
     return 0;
 }
 
+/* ---------------- Log mode file contract (P4) ---------------- */
+/* The hardware-test logger (branch ghost/b2w2-logger-hwtest, design
+ * logger-hwtest-design.md SS4) owns logger.cfg in the game's SD dir:
+ * one line, mode=quiet or mode=verbose, read once at boot. That code
+ * is not in this branch, so the DEBUG Log mode row integrates through
+ * the file only: it parses the file at menu open, stages QUIET/
+ * VERBOSE like any other multi-state row, and writes the file on
+ * close (staged .tmp + rename, the config store's own pattern) when
+ * the staged value differs from the open-time value. config.txt is
+ * never touched by this row - there is deliberately no log_mode key
+ * in the config store. */
+
+/* The logger's platform default when logger.cfg is absent or holds
+ * no usable mode line: verbose on emulator test builds
+ * (PBW2_NO_SPEEDUP - the flag that already marks a build as
+ * emulator-only), quiet on hardware builds. Determinable at compile
+ * time, so the row honestly shows the effective mode, never a
+ * placeholder. Must match the logger branch's own default when it
+ * lands; REQ-15 verifies that side. */
+static int logger_default_mode(void) {
+#ifdef PBW2_NO_SPEEDUP
+    return 1; /* VERBOSE */
+#else
+    return 0; /* QUIET */
+#endif
+}
+
+/* 0 = QUIET, 1 = VERBOSE, -1 = file absent / no usable mode line. */
+static int logger_file_mode(void) {
+    FILE *file = fopen(s_loggerPath, "rb");
+    if (!file) return -1;
+    int mode = -1;
+    char line[128];
+    while (fgets(line, sizeof line, file)) {
+        const char *p = line;
+        while (*p == ' ' || *p == '\t') ++p;
+        if (strncmp(p, "mode=", 5) != 0) continue;
+        p += 5;
+        while (*p == ' ' || *p == '\t') ++p;
+        size_t len = strlen(p);
+        while (len > 0 && (p[len - 1] == '\n' || p[len - 1] == '\r' || p[len - 1] == ' ' || p[len - 1] == '\t')) --len;
+        if (len == 5 && strncmp(p, "quiet", 5) == 0) mode = 0;
+        if (len == 7 && strncmp(p, "verbose", 7) == 0) mode = 1;
+    }
+    fclose(file);
+    return mode;
+}
+
+static void write_logger_mode(int mode) {
+    char tempPath[168];
+    snprintf(tempPath, sizeof tempPath, "%s.tmp", s_loggerPath);
+    FILE *file = fopen(tempPath, "wb");
+    if (!file) {
+        Log_Line("CFG", "logger.cfg staged write failed");
+        return;
+    }
+    fprintf(file, "mode=%s\n", mode ? "verbose" : "quiet");
+    if (fclose(file) != 0) {
+        Log_Line("CFG", "logger.cfg staged close failed");
+        return;
+    }
+    remove(s_loggerPath);
+    if (rename(tempPath, s_loggerPath) != 0) {
+        Log_Line("CFG", "logger.cfg commit rename failed");
+        return;
+    }
+    Log_Line("CFG", "logger.cfg mode=%s written; applies at next launch", mode ? "verbose" : "quiet");
+}
+
 static int row_value(const RowDef *row) {
     if (row->kind == ROW_ACTION) return 0; /* actions always open disarmed */
     if (row->special == ROW_SPECIAL_SCALE) return scale_value();
+    if (row->special == ROW_SPECIAL_LOGMODE) {
+        int fileMode = logger_file_mode();
+        return fileMode >= 0 ? fileMode : logger_default_mode();
+    }
     if (row->key) return PbW2_ConfigGetInt(row->key, 0);
     return 0;
 }
@@ -281,6 +368,7 @@ void Settings_Init(const char *dir) {
     s_lookRows[ROWS].special = ROW_SPECIAL_SCALE;
 
     snprintf(s_cfgPath, sizeof s_cfgPath, "%s/config.txt", dir);
+    snprintf(s_loggerPath, sizeof s_loggerPath, "%s/logger.cfg", dir);
     snprintf(s_oldPath, sizeof s_oldPath, "%s/display.cfg", dir);
     PbW2_ConfigInit(s_cfgPath);
     /* One-way migration: if the config store has none of the display
@@ -365,6 +453,10 @@ static void commit_stage(void) {
             if (row->special == ROW_SPECIAL_SCALE) {
                 PbW2_ConfigSetBool("lcd_fit", s_stage[t][i] == 1);
                 PbW2_ConfigSetBool("top_fit", s_stage[t][i] == 2);
+            } else if (row->special == ROW_SPECIAL_LOGMODE) {
+                /* File contract only: logger.cfg on close, never
+                 * the config store (see the P4 block above). */
+                write_logger_mode(s_stage[t][i]);
             } else if (row->key) {
                 PbW2_ConfigSetInt(row->key, s_stage[t][i]);
             }
@@ -613,9 +705,9 @@ static int cv_pill(int xr, int y0, const char *text, u16 fill, u16 ink) {
 static const char *readonly_value(unsigned tab, unsigned row, char *buf, size_t size) {
     (void)tab;
     /* DEBUG read-only rows, in s_debugRows order after the two
-     * config-backed rows. */
-    if (row == 2) return "config.txt";
-    if (row == 3) {
+     * config-backed rows, the Log mode row and its note row. */
+    if (row == 4) return "config.txt";
+    if (row == 5) {
         snprintf(buf, size, "%u", PbW2_ConfigFileReads());
         return buf;
     }
