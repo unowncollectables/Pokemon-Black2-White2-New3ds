@@ -15,6 +15,9 @@ void WaveOut_Shutdown(void);
 struct NNSSndWaveOut;
 /* Sequence handles take the Nitro channel volume and shift packed together. */
 struct NNSSndWaveOut *WaveOut_AllocSequenceChannel(int channel);
+/* Host overflow voices (NDSP 17..23, past the DS channel map and
+ * the cry reserve): overflow index 0..6. Sequence player only. */
+struct NNSSndWaveOut *WaveOut_AllocSequenceOverflowChannel(int overflow);
 void WaveOut_SetPan(struct NNSSndWaveOut *handle, int pan);
 #endif
 
