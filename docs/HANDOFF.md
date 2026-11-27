@@ -13,8 +13,9 @@ the original 256 columns for HUD placement and DS display capture. Eligible
 PICA200 frames rasterize the world at the LCD's 400x240 resolution. The
 compositor preserves foreground 2D layers over that geometry. The software
 fallback scales a 320x192 picture with equal scaling on both axes.
-Scenes using DS windows, layer blending or capture use centered 4:3
-presentation. The default-off Sharp game text option draws eligible glyphs in
+DS window scenes keep widescreen through the scaled compositor and honor
+BG0 visibility at the screen edges. Layer blending and capture can still
+use centered 4:3 presentation. Display toggles are saved when changed. The default-off Sharp game text option draws eligible glyphs in
 scaled DS BG windows at one LCD pixel per font pixel, including foreground
 text over native 3D. It restores the recorded opaque background during
 presentation and keeps DS window data intact. Glyph pixels with transparent
@@ -23,6 +24,8 @@ Text baked into OBJ sprites remains open.
 
 Ordinary PICA200 frames use a 256-column render target and readback.
 Widescreen and wide capture share a separate 400-column allocation.
+Texture addresses wrap across slot 3 and cache revisions include wrapped
+texels. Identical LCDC uploads preserve existing textures and queued geometry.
 
 The LCD presenter retains an unchanged bottom image after both physical
 buffers have received it. It skips the bottom redraw and data-cache flush

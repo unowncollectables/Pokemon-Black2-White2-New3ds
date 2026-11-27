@@ -68,16 +68,19 @@ static const char *check_preferences(void) {
         return "launch created a preferences file";
     }
 
-    toggle_lcd_fit();
+    Settings_Handle(KEY_Y, KEY_L | KEY_R | KEY_Y);
+    Settings_Handle(KEY_A, KEY_A);
+    if (!Settings_Open()) return "preferences menu stays open after a toggle";
     Settings_Init(path);
-    if (Settings_DisplayFlags() != DISPLAY_LCD_FIT) return "selection survives restart";
+    if (Settings_DisplayFlags() != DISPLAY_LCD_FIT) return "selection is saved before closing the menu";
+    Settings_Handle(KEY_B, KEY_B);
     toggle_lcd_fit();
     Settings_Init(path);
     if (Settings_DisplayFlags()) return "a new selection replaces old settings";
 
     file = fopen(pending, "wb");
     if (!file) return "open staged preferences";
-    fputs("PBW2-DISPLAY 1\ne4\n", file);
+    fputs("PBW2-DISPLAY 1\n84\n", file);
     if (fclose(file)) return "close staged preferences";
     Settings_Init(path);
     if (Settings_DisplayFlags() != DISPLAY_SHARP_PIXELS) return "complete staged preferences supersede the old file";

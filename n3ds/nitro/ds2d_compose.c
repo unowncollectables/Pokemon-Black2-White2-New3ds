@@ -851,12 +851,12 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
             }
             if (bg == 0 && !is_sub && (dc & REG_GX_DISPCNT_BG02D3D_MASK)) {
                 bool extend = PbW2_G3WideCamera() && ((dc >> 16) & 3) == 1 &&
-                              !window && !layerBrightness && !layerAlpha &&
+                              !layerBrightness && !layerAlpha &&
                               !(reg_GX_DISPCAPCNT & REG_GX_DISPCAPCNT_E_MASK);
                 if (extend) memcpy(underGeometry, out, sizeof underGeometry);
                 s_haveSides = PbW2_G3RasterComposite(out, window, bg_blend.track ? bg_blend.planes : NULL,
                                                      layerAlpha ? bg_blend.colors : NULL, extend ? s_sides : NULL,
-                                                     backdrop, extend ? s_nativeTop : NULL, &s_haveNativeTop, bg_blend.ink);
+                                                     backdrop, extend && !window ? s_nativeTop : NULL, &s_haveNativeTop, bg_blend.ink);
                 if (s_haveNativeTop) {
                     /* Subsequent layers sit in front of the 3D layer. */
                     bg_blend.track = true;

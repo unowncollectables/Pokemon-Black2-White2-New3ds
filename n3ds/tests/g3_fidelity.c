@@ -926,6 +926,17 @@ static bool check_wide_frame(bool gpu, bool capture) {
     if (!wide || sides[96 * 64 + 16] != 0xf800 || sides[96 * 64 + 48] || s_gpuFrames != before + gpu)
         return false;
 
+    PBW2_VU16(0x0400006c) = 0;
+    reg_GX_DISPCNT |= 1u << 13; /* Window 0, with an empty rectangle. */
+    PBW2_VU16(0x0400004a) = GX_WND_PLANEMASK_BG0;
+    PbW2_ComposeScreens(pixels, NULL);
+    const u16 *windowedSides = PbW2_TopSides();
+    if (!windowedSides || windowedSides[96 * 64 + 16] != 0xf800 || PbW2_NativeTop()) return false;
+    PBW2_VU16(0x0400004a) = 0;
+    PbW2_ComposeScreens(pixels, NULL);
+    if (PbW2_TopSides()[96 * 64 + 16] != 0x001f) return false;
+    reg_GX_DISPCNT &= ~(1u << 13);
+
     if (gpu) {
         reg_GX_DISPCNT |= 0x200u;
         PBW2_VU16(0x0400006c) = 0;
@@ -985,6 +996,39 @@ static bool check_sharp_text(void) {
     return ink[0] == 0;
 }
 
+static bool check_wrapped_texture(void) {
+    const unsigned center = 96 * 256 + 128;
+    u16 texels[] = {0x801f, 0x801f};
+    memset(pbw2_io, 0, sizeof pbw2_io);
+    PbW2_VramHostInit();
+    PbW2_G3InterceptInit();
+    PbW2_PicaSetOptions(true, false);
+    reg_GX_VRAMCNT_A = GX_VRAMCNT(3, 0);
+    reg_GX_VRAMCNT_D = GX_VRAMCNT(3, 3);
+    reg_G3X_CLEAR_DEPTH = 0x7fff;
+    void *address = (void *)(HW_LCDC_VRAM_A + 8);
+    if (!PbW2_TryDmaCopy32(texels, address, sizeof texels)) return false;
+    u32 revision = PbW2_VramBankRevision(0);
+    if (!PbW2_TryDmaCopy32(texels, address, sizeof texels) || PbW2_VramBankRevision(0) != revision)
+        return false;
+
+    unsigned before = s_gpuFrames;
+    cmd(G3OP_TEXIMAGE_PARAM, (GX_TEXFMT_DIRECT << 26) | 0xffffu);
+    cmd(G3OP_TEXCOORD, 16u << 16);
+    triangle(0x7fff, 0);
+    cmd(0x50, 0);
+    PbW2_G3RasterCapture(pixels);
+    if (pixels[center] != 0x801f) return false;
+
+    texels[0] = texels[1] = 0xfc00;
+    if (!PbW2_TryDmaCopy32(texels, address, sizeof texels) || PbW2_VramBankRevision(0) == revision)
+        return false;
+    triangle(0x7fff, 0);
+    cmd(0x50, 0);
+    PbW2_G3RasterCapture(pixels);
+    return pixels[center] == 0xfc00 && s_gpuFrames == before + 2;
+}
+
 extern void gfxInitDefault(void);
 int main(void) {
     gfxInitDefault();
@@ -1007,6 +1051,7 @@ int main(void) {
         fprintf(f, "Wide camera PICA200 %s\n", check_wide_frame(true, false) ? "PASS" : "FAIL");
         fprintf(f, "Wide camera capture %s\n", check_wide_frame(true, true) ? "PASS" : "FAIL");
         fprintf(f, "Sharp text tiles %s\n", check_sharp_text() ? "PASS" : "FAIL");
+        fprintf(f, "Wrapped texture and upload reuse %s\n", check_wrapped_texture() ? "PASS" : "FAIL");
         fclose(f);
     }
     for (;;)

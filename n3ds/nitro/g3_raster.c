@@ -293,8 +293,8 @@ static Texture texture_state(void) {
 }
 
 static u8 texture_byte(const Texture *t, unsigned addr) {
-    unsigned slot = addr >> 17;
-    return slot < 4 && t->tiles[slot] ? t->tiles[slot][addr & 0x1ffff] : 0;
+    unsigned slot = (addr >> 17) & 3;
+    return t->tiles[slot] ? t->tiles[slot][addr & 0x1ffff] : 0;
 }
 
 static u16 palette_color(const Texture *t, unsigned addr) {
@@ -327,7 +327,7 @@ static int texture_coord(float coord, int size, unsigned repeat, unsigned flip) 
 }
 
 static unsigned descriptor_address(unsigned block) {
-    return 0x20000 + ((block & 0x1ffff) >> 1) + ((block & 0x40000) ? 0x10000 : 0);
+    return 0x20000 + ((block & 0x1fffc) >> 1) + ((block & 0x40000) ? 0x10000 : 0);
 }
 
 static u16 texture_pixel(const Texture *t, unsigned x, unsigned y, unsigned *alpha) {
@@ -348,7 +348,10 @@ static u16 texture_pixel(const Texture *t, unsigned x, unsigned y, unsigned *alp
         unsigned descriptor = texture_byte(t, info) | (texture_byte(t, info + 1) << 8);
         unsigned addr = t->paletteAddress + (descriptor & 0x3fff) * 4;
         unsigned mode = descriptor >> 14;
-        index = (texture_byte(t, block + (y & 3)) >> (2 * (x & 3))) & 3;
+        /* Slot 1 holds descriptors and returns zero when addressed as a
+         * compressed texel stream. Texture addresses wrap after slot 3. */
+        u8 texels = (block & 0x60000) == 0x20000 ? 0 : texture_byte(t, block + (y & 3));
+        index = (texels >> (2 * (x & 3))) & 3;
         if (index == 3 && mode < 2) { *alpha = 0; return 0; }
         if (index >= 2 && (mode & 1)) {
             u16 a = palette_color(t, addr), b = palette_color(t, addr + 2);
@@ -668,7 +671,13 @@ static PicaTextureKey texture_cache_key(const Texture *tex, unsigned material) {
     case GX_TEXFMT_DIRECT: bytes = 2 * count; break;
     case GX_TEXFMT_COMP4x4: bytes = count / 4; break;
     }
-    key.revision[0] = range_revision(tex->tiles, 0x20000, 4, tex->address, bytes);
+    unsigned firstChunk = 0x80000 - tex->address;
+    if (firstChunk > bytes) firstChunk = bytes;
+    key.revision[0] = range_revision(tex->tiles, 0x20000, 4, tex->address, firstChunk);
+    if (firstChunk < bytes) {
+        u32 wrapped = range_revision(tex->tiles, 0x20000, 4, 0, bytes - firstChunk);
+        if (wrapped > key.revision[0]) key.revision[0] = wrapped;
+    }
     if (tex->format == GX_TEXFMT_COMP4x4) {
         /* Each compressed block names its own palette. Track the referenced
          * interval and the descriptor table as well as the texel indices. */
@@ -1145,7 +1154,9 @@ bool PbW2_G3RasterComposite(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawC
         if (sides && s_displayWidth == WIDE_WIDTH) {
             for (int x = 0; x < 64; ++x) {
                 u16 p = row[x < 32 ? x - 32 : WIDTH + x - 32];
-                sides[y * 64 + x] = p & 0x8000 ? ((p & 31) << 11) | ((p & 0x3e0) << 1) | ((p >> 10) & 31) : backdrop;
+                unsigned edge = x < 32 ? 0 : WIDTH - 1;
+                bool visible = !window || (window[y * WIDTH + edge] & GX_WND_PLANEMASK_BG0);
+                sides[y * 64 + x] = visible && (p & 0x8000) ? ((p & 31) << 11) | ((p & 0x3e0) << 1) | ((p >> 10) & 31) : backdrop;
             }
         }
         for (unsigned x = 0; x < WIDTH; ++x) {
