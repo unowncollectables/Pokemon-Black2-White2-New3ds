@@ -71,14 +71,23 @@
 /* Host overflow voices (polyphony lift): the game's channel
  * requests stay SEQ_DS_CHANNELS wide — that width is game design.
  * The HOST voice pool is wider: past the DS-mapped voices sit
- * SEQ_OVERFLOW_CHANNELS extra voices on NDSP 17..23 (wave_out.c),
- * for 15 DS-mapped usable (cry channel excluded) + 7 overflow = 22
- * usable sequence voices against NDSP's 24 (stream ch 0 and the
- * cry reserve excluded). A voice slot indexes s_channels: slots
- * 0..SEQ_DS_CHANNELS-1 are DS channels, the rest are overflow.
+ * SEQ_OVERFLOW_CHANNELS extra voices on NDSP 17..23 (wave_out.c).
+ * How many voices a player can actually sound at once is
+ * mask-dependent: the DS voices its alloc mask names (cry channel
+ * excluded) + the 7 overflow + any DS voices its mask does NOT
+ * name ("spare" voices, see seq_voice_spare — their NDSP channels
+ * are physically idle for this player). Player 0's mask is
+ * 0xbffe (DS 1..13 + the cry reserve), so its true total is
+ * 13 + 7 + 2 spare = 22 — the first lift counted 15 DS voices
+ * and silently gave seq 1104 only 20, which is the residual
+ * REQ-21 measured (~6 channel-drops/pass; REQ-21 residual fix).
+ * A voice slot indexes s_channels: slots 0..SEQ_DS_CHANNELS-1
+ * are DS channels, the rest are overflow.
  * Priority-stealing remains the valve, but only ABOVE this cap:
- * a note steals only when no DS voice, no finished voice and no
- * overflow voice is free.
+ * a note steals only when no DS voice, no finished voice, no
+ * overflow voice and no spare voice is free; below that, the
+ * final resort is truncating the faintest ADSR release tail
+ * (seq_alloc_channel step 5).
  *
  * Frame-rate decoupling (Nate, Nov 27): this pool is managed only
  * from seq_note_on / seq_note_off, reached from SeqPlayer_Tick —
@@ -442,6 +451,19 @@ static bool seq_voice_eligible(int voice, u32 allowed) {
     return voice >= SEQ_DS_CHANNELS || (allowed & (1u << voice)) != 0;
 }
 
+/* A DS voice the requesting player's mask does NOT name (and not the
+ * cry reserve) is spare for that player: the mask keeps the game's
+ * own allocator off it, so its NDSP channel sits idle while sibling
+ * channels saturate. The host pool may claim a spare voice exactly
+ * like an overflow voice — free or finished only, never stolen from
+ * a sounding note — and a player whose mask DOES name the channel
+ * keeps its normal reclaim/steal rights over it. (`allowed` already
+ * has the cry bit cleared, hence the explicit cry check.) */
+static bool seq_voice_spare(int voice, u32 allowed) {
+    return voice < SEQ_DS_CHANNELS && voice != SEQ_CRY_CHANNEL &&
+           !(allowed & (1u << voice));
+}
+
 static NNSSndWaveOutHandle seq_alloc_channel(SeqSlot *slot, int trackIdx, int noteIdx, int priority) {
     u32 mask = s_allocChBitFlag[slot->playerNo];
     /* NitroSystem leaves the default channel mask in place for zero. */
@@ -458,10 +480,11 @@ static NNSSndWaveOutHandle seq_alloc_channel(SeqSlot *slot, int trackIdx, int no
 
     /* 2. A voice whose wave already finished, DS slots first, then
      * overflow — reclaiming one keeps the overflow pool in reserve
-     * for genuinely simultaneous notes. */
+     * for genuinely simultaneous notes. Spare DS voices (below) are
+     * reclaimable on the same terms. */
     for (int ch = 0; ch < SEQ_VOICE_SLOTS; ++ch) {
         SeqChannel *channel = &s_channels[ch];
-        if (!seq_voice_eligible(ch, allowed) || !channel->inUse) continue;
+        if (!(seq_voice_eligible(ch, allowed) || seq_voice_spare(ch, allowed)) || !channel->inUse) continue;
         if (NNS_SndWaveOutIsPlaying(seq_channel_note(channel)->wave)) continue;
         seq_free_channel(ch);
         wave = seq_claim_channel(slot, trackIdx, noteIdx, priority, ch);
@@ -472,6 +495,16 @@ static NNSSndWaveOutHandle seq_alloc_channel(SeqSlot *slot, int trackIdx, int no
      * that used to drop as channel-unavailable sound here instead. */
     for (int ch = SEQ_DS_CHANNELS; ch < SEQ_VOICE_SLOTS; ++ch) {
         if (s_channels[ch].inUse) continue;
+        wave = seq_claim_channel(slot, trackIdx, noteIdx, priority, ch);
+        if (wave) return wave;
+    }
+
+    /* 3b. A free spare DS voice (see seq_voice_spare): claimed only
+     * after every mask-named and overflow voice is spoken for, so
+     * the channels other players name stay untouched while any
+     * dedicated host voice remains. */
+    for (int ch = 0; ch < SEQ_DS_CHANNELS; ++ch) {
+        if (!seq_voice_spare(ch, allowed) || s_channels[ch].inUse) continue;
         wave = seq_claim_channel(slot, trackIdx, noteIdx, priority, ch);
         if (wave) return wave;
     }
@@ -487,6 +520,35 @@ static NNSSndWaveOutHandle seq_alloc_channel(SeqSlot *slot, int trackIdx, int no
         if (victim < 0 || channel->priority < s_channels[victim].priority ||
             (channel->priority == s_channels[victim].priority && channel->order < s_channels[victim].order))
             victim = ch;
+    }
+
+    if (victim < 0) {
+        /* 5. Final resort: truncate the FAINTEST voice that is already
+         * in its ADSR release phase. A releasing voice is past its
+         * gate — all that remains is a decaying tail — so trading the
+         * quietest tail for a note that would otherwise drop outright
+         * loses the least music. Gated (still-sounding) notes are
+         * never touched here, and the priority rule above is
+         * unchanged: this fires only when it found no victim, i.e.
+         * when every alternative is a dropped note. envLevel is the
+         * envelope gain the owning note itself maintains, so the
+         * choice needs no cross-slot tick comparison. */
+        float bestLevel = 0.0f;
+        for (int ch = 0; ch < SEQ_VOICE_SLOTS; ++ch) {
+            SeqChannel *channel = &s_channels[ch];
+            SeqNote *note;
+            if (!channel->inUse) continue;
+            note = seq_channel_note(channel);
+            if (!note->releasing || !note->wave) continue;
+            if (!NNS_SndWaveOutIsPlaying(note->wave)) continue;
+            if (victim < 0 || note->envLevel < bestLevel ||
+                (note->envLevel == bestLevel && channel->priority < s_channels[victim].priority) ||
+                (note->envLevel == bestLevel && channel->priority == s_channels[victim].priority &&
+                 channel->order < s_channels[victim].order)) {
+                victim = ch;
+                bestLevel = note->envLevel;
+            }
+        }
     }
 
     if (victim < 0) return NULL;

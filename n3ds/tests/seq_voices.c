@@ -174,6 +174,47 @@ static const char *check_overflow_pool(void) {
     return NULL;
 }
 
+static const char *check_residual_pool(void) {
+    /* REQ-21 residual: player 0's real SDAT mask is 0xbffe — DS
+     * channels 1..13 plus the cry reserve. The lift's first count
+     * assumed all 15 non-cry DS voices, so seq 1104 actually got
+     * 13 + 7 overflow = 20 voices and kept ~6 channel-drops/pass.
+     * The mask-excluded DS voices (0 and 14) are spare: physically
+     * idle NDSP channels the host pool may claim free/finished. */
+    memset(s_slots, 0, sizeof s_slots);
+    memset(s_channels, 0, sizeof s_channels);
+    memset(s_dspVoices, 0, sizeof s_dspVoices);
+    s_channelOrder = 0;
+    s_allocChBitFlag[0] = 0xbffe;
+
+    /* 13 mask-named DS voices first (slots 1..13), cry untouched. */
+    for (int i = 0; i < 13; ++i) {
+        if (note_on(i, 50) != &s_dspVoices[1 + i]) return "mask-named DS voices fill first";
+    }
+    /* Then the 7 overflow voices. */
+    for (int i = 0; i < SEQ_OVERFLOW_CHANNELS; ++i) {
+        if (note_on(13 + i, 50) != &s_dspVoices[SEQ_DS_CHANNELS + i]) return "overflow voices fill second";
+    }
+    /* Then the 2 spare DS voices, in channel order: 0, then 14. */
+    if (note_on(20, 50) != &s_dspVoices[0]) return "spare DS voice 0 claimed";
+    if (note_on(21, 50) != &s_dspVoices[14]) return "spare DS voice 14 claimed";
+    if (s_dspVoices[SEQ_CRY_CHANNEL].allocated) return "cry channel stays reserved at full pool";
+    /* Pool is now genuinely full at 22: a quiet note can neither
+     * steal (all voices outrank it) nor find a releasing tail. */
+    if (note_on(22, 10)) return "low priority note cannot steal above the real cap";
+    /* Release valve: with two tails releasing, the quiet note takes
+     * the FAINTEST tail's voice instead of dropping, and the louder
+     * tail keeps sounding. */
+    s_slots[0].tracks[0].notes[0].releasing = true;
+    s_slots[0].tracks[0].notes[0].envLevel = 0.05f;
+    s_slots[1].tracks[0].notes[0].releasing = true;
+    s_slots[1].tracks[0].notes[0].envLevel = 0.5f;
+    if (note_on(23, 10) != &s_dspVoices[1] || s_slots[0].tracks[0].notes[0].active ||
+        !s_slots[1].tracks[0].notes[0].active)
+        return "release valve truncates the faintest tail instead of dropping";
+    return NULL;
+}
+
 int main(void) {
     archiveMountSdmc();
     const char *failure = check_voices();
@@ -181,6 +222,7 @@ int main(void) {
     if (!failure) failure = check_tied_sample();
     if (!failure) failure = check_synth_release();
     if (!failure) failure = check_overflow_pool();
+    if (!failure) failure = check_residual_pool();
     FILE *out = fopen("sdmc:/seq-voices-test.txt", "w");
     if (out) {
         fprintf(out, "%s\n", failure ? failure : "PASS");
