@@ -19,4 +19,5 @@ static inline unsigned PbW2_TextSourceCoordinate(unsigned lcd) {
     return (4 * lcd + 2) / 5;
 }
 
-u8 PbW2_TextTileRow(const u8 *tile, unsigned size, unsigned row, u32 details[8]);
+u32 PbW2_TextVramRevision(void);
+u8 PbW2_TextTileRow(const u8 *tile, const u8 *liveAddress, unsigned size, unsigned row, u32 details[8]);

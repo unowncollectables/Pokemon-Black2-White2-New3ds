@@ -1116,6 +1116,54 @@ static bool check_clipped_objs(void) {
            pixels[5 * 256 + 5] == 0x07c0 && !pixels[6 * 256] && !pixels[6];
 }
 
+static bool check_sub_cache(void) {
+    static u16 bottom[256 * 192];
+    static u32 ink[256 * 192];
+    u8 glyphPixels[32] = {0x01};
+    u8 windowPixels[32] = {0x22};
+    GFLBitmap glyph = {glyphPixels, 8, 8, 32, GFL_BITMAP_WRAPPED};
+    GFLBitmap window = {windowPixels, 8, 8, 32, GFL_BITMAP_WRAPPED};
+    memset(pbw2_io, 0, sizeof pbw2_io);
+    PbW2_VramHostInit();
+    PBW2_VU16(0x04000304) = 0x8000;
+    PBW2_VU32(0x04001000) = (1u << REG_GX_DISPCNT_MODE_SHIFT) | 0x1010u | 0x100u;
+    PBW2_VU16(0x04001008) = 2u << REG_G2_BG0CNT_SCREENBASE_SHIFT;
+
+    u16 *oam = PbW2_VramMap((void *)HW_DB_OAM);
+    for (unsigned i = 0; i < 128; ++i) oam[i * 4] = 0x0200;
+    u8 *vram = PbW2_VramMap((void *)HW_DB_BG_VRAM);
+    u16 *map = (u16 *)(vram + 0x1000);
+    map[0] = 1;
+    u16 *palette = PbW2_VramMap((void *)HW_DB_BG_PLTT);
+    palette[1] = GX_RGB(31, 0, 0);
+    palette[2] = GX_RGB(0, 31, 0);
+    vram[32] = 0x21;
+    PbW2_ComposeScreensWithText(NULL, bottom, NULL, ink);
+    if (bottom[0] != 0xf800 || ink[0]) return false;
+    PbW2_ComposeScreensWithText(NULL, bottom, NULL, ink);
+
+    /* Glyph metadata can change while the displayed VRAM bytes stay identical. */
+    PbW2_TextMarkGlyph(&window, &glyph, 0, 0, 8, 8);
+    windowPixels[0] = 0x21;
+    PbW2_TextUpload(&window, vram, 1, sizeof windowPixels);
+    PbW2_ComposeScreensWithText(NULL, bottom, NULL, ink);
+    if (bottom[0] != 0xf800 || !(ink[0] & PBW2_TEXT_NATIVE)) return false;
+    PbW2_ComposeScreensWithText(NULL, bottom, NULL, ink);
+
+    vram[32] = 0x22; /* Direct VRAM mutation must invalidate cached pixels. */
+    PbW2_ComposeScreensWithText(NULL, bottom, NULL, ink);
+    if (bottom[0] != 0x07c0 || ink[0]) return false;
+
+    u8 *obj = PbW2_VramMap((void *)HW_DB_OBJ_VRAM);
+    u16 *objPalette = PbW2_VramMap((void *)HW_DB_OBJ_PLTT);
+    objPalette[1] = GX_RGB(0, 0, 31);
+    obj[0] = 0x11;
+    oam[0] = 0;
+    PbW2_ComposeScreensWithText(NULL, bottom, NULL, ink);
+    PbW2_TextForgetBitmap(&window);
+    return bottom[0] == 0x001f;
+}
+
 int main(void) {
     gfxInitDefault();
     archiveMountSdmc();
@@ -1141,6 +1189,7 @@ int main(void) {
         fprintf(f, "PICA texture allocation reuse %s\n", check_pica_storage_reuse() ? "PASS" : "FAIL");
         fprintf(f, "Pinned native frame %s\n", check_pinned_native_frame() ? "PASS" : "FAIL");
         fprintf(f, "Clipped OBJ priority %s\n", check_clipped_objs() ? "PASS" : "FAIL");
+        fprintf(f, "Sub-screen input cache %s\n", check_sub_cache() ? "PASS" : "FAIL");
         fclose(f);
     }
     for (;;)

@@ -32,20 +32,48 @@ static u32 reg_u32(const u8 *regs, u32 off) {
     return *(const u32 *)(regs + off);
 }
 
+enum { SUB_BG_CACHE_BYTES = 0x20000, OBJ_VRAM_BYTES = 0x40000, ENGINE_PIXELS = 256 * 192 };
+typedef struct {
+    u32 regs[0x70 / sizeof(u32)];
+    u32 bgAddress, bgBytes, objAddress, textRevision, hasText;
+} SubInputs;
+
+static struct {
+    SubInputs inputs;
+    u8 bg[SUB_BG_CACHE_BYTES], obj[OBJ_VRAM_BYTES];
+    u16 palette[512], oam[512], pixels[ENGINE_PIXELS];
+    u32 ink[ENGINE_PIXELS];
+    bool valid, replay;
+    unsigned cooldown, misses;
+} s_subCache;
+
+static const u8 *live_vram_ptr(u32 addr) {
+    return PbW2_VramMap((void *)(uintptr_t)addr);
+}
+
 static const u8 *vram_ptr(u32 addr) {
-    return (const u8 *)(void *)PbW2_VramMap((void *)(uintptr_t)addr);
+    if (s_subCache.replay) {
+        const SubInputs *in = &s_subCache.inputs;
+        if (addr == HW_DB_BG_PLTT) return (const u8 *)s_subCache.palette;
+        if (addr == HW_DB_OBJ_PLTT) return (const u8 *)(s_subCache.palette + 256);
+        if (addr == HW_DB_OAM) return (const u8 *)s_subCache.oam;
+        if (in->objAddress && addr == in->objAddress) return s_subCache.obj;
+        if (addr >= in->bgAddress && addr - in->bgAddress < in->bgBytes)
+            return s_subCache.bg + addr - in->bgAddress;
+    }
+    return live_vram_ptr(addr);
 }
 
 static const u16 *engine_bg_pltt(int is_sub) {
     if (is_sub) {
-        return (const u16 *)(void *)PbW2_VramMap((void *)HW_DB_BG_PLTT);
+        return (const u16 *)vram_ptr(HW_DB_BG_PLTT);
     }
     return (const u16 *)(void *)PbW2_VramMap((void *)HW_BG_PLTT);
 }
 
 static const u16 *engine_obj_pltt(int is_sub) {
     if (is_sub) {
-        return (const u16 *)(void *)PbW2_VramMap((void *)HW_DB_OBJ_PLTT);
+        return (const u16 *)vram_ptr(HW_DB_OBJ_PLTT);
     }
     return (const u16 *)(void *)PbW2_VramMap((void *)HW_OBJ_PLTT);
 }
@@ -262,7 +290,9 @@ static void compose_text_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmo
     int pw = ((cnt >> 14) & 1) ? 64 : 32;
     int ph = ((cnt >> 14) & 2) ? 64 : 32;
     const u16 *map = (const u16 *)(void *)vram_ptr(bg_screen_addr(dc, cnt, is_sub, bgmode, bg));
-    const u8 *chars = vram_ptr(bg_char_addr(dc, cnt, is_sub));
+    u32 charAddress = bg_char_addr(dc, cnt, is_sub);
+    const u8 *chars = vram_ptr(charAddress);
+    const u8 *liveChars = live_vram_ptr(charAddress);
     const u16 *pltt = bg_layer_pltt(dc, cnt, is_sub, bg);
     u32 hofs_base = reg_u16(regs, 0x10u + (u32)bg * 4u) & 0x1ffu;
     u32 vofs_base = reg_u16(regs, 0x12u + (u32)bg * 4u) & 0x1ffu;
@@ -300,7 +330,7 @@ static void compose_text_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmo
                 memcpy(words, source, sizeof words);
                 if (!(words[0] | words[1])) continue;
                 u32 details[8];
-                u8 ink = blend && blend->ink ? PbW2_TextTileRow(source - ty * 8, 64, ty, details) : 0;
+                u8 ink = blend && blend->ink ? PbW2_TextTileRow(source - ty * 8, liveChars + tile * 64, 64, ty, details) : 0;
                 bool unflipped = (sc & 0x0c00) == 0;
                 unsigned tx = begin ^ flip;
                 int step = flip ? -1 : 1;
@@ -323,7 +353,7 @@ static void compose_text_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmo
                 memcpy(&nibbles, source, sizeof nibbles);
                 if (!nibbles) continue;
                 u32 details[8];
-                u8 ink = blend && blend->ink ? PbW2_TextTileRow(source - ty * 4, 32, ty, details) : 0;
+                u8 ink = blend && blend->ink ? PbW2_TextTileRow(source - ty * 4, liveChars + tile * 32, 32, ty, details) : 0;
                 bool unflipped = (sc & 0x0c00) == 0;
                 const u16 *palette = colors + (sc >> 12) * 16;
                 for (unsigned i = 0; i < count; i++) {
@@ -505,6 +535,7 @@ static u32 engine_obj_vram_mapped(int is_sub) {
     u32 map;
 
     if (is_sub) {
+        if (s_subCache.replay) return s_subCache.inputs.objAddress;
         vramcnt = *(const u32 *)(pbw2_io + 0x240);
         bank = (u8)((vramcnt >> 24) & 0xffu);
         map = vramcnt_map_addr(bank, 3);
@@ -903,6 +934,89 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
     apply_master_bright(out, 256 * 192, reg_u16(regs, 0x6cu));
 }
 
+static bool sub_inputs(SubInputs *in, const u8 *regs, bool hasText) {
+    memset(in, 0, sizeof(*in));
+    memcpy(in->regs, regs, sizeof in->regs);
+    const u8 *snapshot = (const u8 *)in->regs;
+    u32 dc = in->regs[0];
+    if ((dc & (REG_GX_DISPCNT_BGMODE_MASK | REG_GX_DISPCNT_MODE_MASK | REG_GX_DISPCNT_BG_MASK |
+               REG_GX_DISPCNT_O_MASK | REG_GX_DISPCNT_BG02D3D_MASK | 0x80u)) !=
+        (1u << REG_GX_DISPCNT_MODE_SHIFT)) return false;
+
+    unsigned first = 0xffffffffu, end = 0;
+    for (int bg = 0; bg < 4; ++bg) {
+        if (!(dc & (0x100u << bg))) continue;
+        u16 cnt = reg_u16(snapshot, 8 + bg * 2);
+        unsigned map = bg_screen_addr(dc, cnt, 1, 0, bg);
+        unsigned chars = bg_char_addr(dc, cnt, 1);
+        unsigned mapEnd = map + 2048 * (1 + ((cnt >> 14) & 1)) * (1 + (cnt >> 15));
+        unsigned charsEnd = chars + ((cnt & 0x80u) ? 65536 : 32768);
+        if (chars < first) first = chars;
+        if (map < first) first = map;
+        if (charsEnd > end) end = charsEnd;
+        if (mapEnd > end) end = mapEnd;
+    }
+    if (end) {
+        in->bgAddress = first;
+        in->bgBytes = end - first;
+        if (in->bgBytes > SUB_BG_CACHE_BYTES) return false;
+    }
+    in->objAddress = (dc & 0x1000u) ? engine_obj_vram_mapped(1) : 0;
+    in->hasText = hasText;
+    in->textRevision = hasText ? PbW2_TextVramRevision() : 0;
+    return true;
+}
+
+static bool same_sub_inputs(const SubInputs *in) {
+    return !memcmp(in, &s_subCache.inputs, sizeof(*in)) &&
+           !memcmp(s_subCache.palette, live_vram_ptr(HW_DB_BG_PLTT), sizeof s_subCache.palette) &&
+           (!in->objAddress || (!memcmp(s_subCache.oam, live_vram_ptr(HW_DB_OAM), sizeof s_subCache.oam) &&
+                                !memcmp(s_subCache.obj, live_vram_ptr(in->objAddress), sizeof s_subCache.obj))) &&
+           (!in->bgBytes || !memcmp(s_subCache.bg, live_vram_ptr(in->bgAddress), in->bgBytes));
+}
+
+static void compose_sub(const u8 *regs, u16 *out, u32 *ink) {
+    SubInputs in;
+    if (s_subCache.cooldown) {
+        --s_subCache.cooldown;
+        compose_engine(regs, 1, out, ink);
+        return;
+    }
+    if (!sub_inputs(&in, regs, ink != NULL)) {
+        s_subCache.valid = false;
+        compose_engine(regs, 1, out, ink);
+        return;
+    }
+    if (s_subCache.valid && same_sub_inputs(&in) &&
+        (!ink || in.textRevision == PbW2_TextVramRevision())) {
+        s_subCache.misses = 0;
+    } else {
+        /* Give animated screens a few frames before trying to cache again. */
+        if (++s_subCache.misses == 3) {
+            s_subCache.misses = 0;
+            s_subCache.cooldown = 6;
+            s_subCache.valid = false;
+            compose_engine(regs, 1, out, ink);
+            return;
+        }
+        s_subCache.inputs = in;
+        memcpy(s_subCache.palette, live_vram_ptr(HW_DB_BG_PLTT), sizeof s_subCache.palette);
+        if (in.bgBytes) memcpy(s_subCache.bg, live_vram_ptr(in.bgAddress), in.bgBytes);
+        if (in.objAddress) {
+            memcpy(s_subCache.oam, live_vram_ptr(HW_DB_OAM), sizeof s_subCache.oam);
+            memcpy(s_subCache.obj, live_vram_ptr(in.objAddress), sizeof s_subCache.obj);
+        }
+        if (ink) memset(s_subCache.ink, 0, sizeof s_subCache.ink);
+        /* Compose from the captured bytes so the cache always describes its own output. */
+        s_subCache.replay = true;
+        compose_engine((const u8 *)in.regs, 1, s_subCache.pixels, ink ? s_subCache.ink : NULL);
+        s_subCache.replay = false;
+        s_subCache.valid = !ink || in.textRevision == PbW2_TextVramRevision();
+    }
+    memcpy(out, s_subCache.pixels, sizeof s_subCache.pixels);
+    if (ink) memcpy(ink, s_subCache.ink, sizeof s_subCache.ink);
+}
+
 void PbW2_ComposeScreensWithText(u16 *top_rgb565, u16 *bottom_rgb565, u32 *topInk, u32 *bottomInk) {
     int main_upper = (*(const u16 *)(pbw2_io + 0x304) & 0x8000u) != 0;
     u16 *main_fb;
@@ -927,7 +1041,8 @@ void PbW2_ComposeScreensWithText(u16 *top_rgb565, u16 *bottom_rgb565, u32 *topIn
         compose_engine(pbw2_io + 0, 0, captureMain, NULL);
     }
     if (sub_fb) {
-        compose_engine(pbw2_io + 0x1000, 1, sub_fb, main_upper ? bottomInk : topInk);
+        if (main_upper) compose_sub(pbw2_io + 0x1000, sub_fb, bottomInk);
+        else compose_engine(pbw2_io + 0x1000, 1, sub_fb, topInk);
     }
 }
 

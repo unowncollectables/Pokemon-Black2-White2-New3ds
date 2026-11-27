@@ -24,6 +24,11 @@ typedef struct {
 static BitmapTile s_bitmapTiles[TILE_RECORDS];
 static TextTile s_vramTiles[TILE_RECORDS];
 static unsigned char s_vramLock;
+static u32 s_vramRevision;
+
+u32 PbW2_TextVramRevision(void) {
+    return __atomic_load_n(&s_vramRevision, __ATOMIC_ACQUIRE);
+}
 
 static unsigned slot_for(const void *tile) {
     uintptr_t address = (uintptr_t)tile;
@@ -103,18 +108,20 @@ void PbW2_TextUpload(const GFLBitmap *bitmap, const void *base, unsigned first, 
             memcpy(record->details, source->details, sizeof record->details);
             record->signature = signature;
             __atomic_store_n(&record->address, (uintptr_t)dest, __ATOMIC_RELAXED);
+            __atomic_add_fetch(&s_vramRevision, 1, __ATOMIC_RELEASE);
         } else if (record->address == (uintptr_t)dest) {
             __atomic_store_n(&record->address, 0, __ATOMIC_RELAXED);
+            __atomic_add_fetch(&s_vramRevision, 1, __ATOMIC_RELEASE);
         }
         __atomic_clear(&s_vramLock, __ATOMIC_RELEASE);
     }
 }
 
-u8 PbW2_TextTileRow(const u8 *tile, unsigned size, unsigned row, u32 details[8]) {
-    TextTile *record = &s_vramTiles[slot_for(tile)];
-    if (__atomic_load_n(&record->address, __ATOMIC_RELAXED) != (uintptr_t)tile) return 0;
+u8 PbW2_TextTileRow(const u8 *tile, const u8 *liveAddress, unsigned size, unsigned row, u32 details[8]) {
+    TextTile *record = &s_vramTiles[slot_for(liveAddress)];
+    if (__atomic_load_n(&record->address, __ATOMIC_RELAXED) != (uintptr_t)liveAddress) return 0;
     while (__atomic_test_and_set(&s_vramLock, __ATOMIC_ACQUIRE)) {}
-    u8 ink = record->address == (uintptr_t)tile ? record->ink >> (row * 8) : 0;
+    u8 ink = record->address == (uintptr_t)liveAddress ? record->ink >> (row * 8) : 0;
     if (ink) memcpy(details, record->details + row * 8, 8 * sizeof(*details));
     u32 signature = record->signature;
     __atomic_clear(&s_vramLock, __ATOMIC_RELEASE);

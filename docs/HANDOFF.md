@@ -37,6 +37,13 @@ buffers have received it. It skips the bottom redraw and data-cache flush
 while the composed pixels, text metadata, and scaling options match.
 Settings invalidates that reuse when it takes over the bottom LCD.
 
+For ordinary sub-engine text modes, the compositor also keeps a snapshot of
+the registers, palettes, OAM, relevant BG/OBJ VRAM and glyph metadata revision.
+A matching snapshot skips 2D composition. Animated screens pause cache
+attempts after repeated misses. The stationary 24-frame Azahar benchmark
+used 86.6 percent fewer ticks with pixel-identical output; hardware timing
+is pending.
+
 The CPU OBJ compositor snapshots OAM once per engine, groups sprites by
 priority and clips their destination rectangles before sampling. Sprite
 windows use the same snapshot and keep hardware ordering.
