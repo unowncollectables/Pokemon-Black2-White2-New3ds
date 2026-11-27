@@ -106,6 +106,7 @@ static struct {
 } s_gpuTriangles[GPU_TRIANGLES_MAX];
 static Texture s_gpuMaterials[GPU_TEXTURES_MAX];
 static unsigned s_gpuCount, s_gpuMaterialCount, s_lastMaterial;
+static unsigned s_sceneSwaps;
 static u32 s_gpuSourceBanks;
 static bool s_gpuFrame;
 enum {
@@ -165,6 +166,7 @@ void PbW2_G3RasterReset(void) {
     s_frameStarted = s_inPrimitive = 0;
 #ifdef PBW2_GPU_GEOMETRY
     s_gpuCount = 0;
+    s_sceneSwaps = 0;
 #endif
     s_count = 0;
     memset(s_xyz, 0, sizeof s_xyz);
@@ -737,6 +739,8 @@ static bool render_with_pica(void) {
     if (!s_gpuCount || !PbW2_PicaBegin(s_alphaRef)) return false;
     int gpuSlots[GPU_TEXTURES_MAX];
     float invWidth[GPU_TEXTURES_MAX], invHeight[GPU_TEXTURES_MAX];
+    bool trace = s_sceneSwaps < 4 || s_sceneSwaps == 7;
+    unsigned formats = 0, textured = 0, blank = 0;
     for (unsigned i = 0; i < s_gpuMaterialCount; ++i) {
         const Texture *tex = &s_gpuMaterials[i];
         gpuSlots[i] = -1;
@@ -753,6 +757,11 @@ static bool render_with_pica(void) {
             PicaTexture image = {tex->width, tex->height, tex->param, tex, gpu_texel, texture_cache_key(tex, i)};
             gpuSlots[i] = PbW2_PicaUpload(&image);
             if (gpuSlots[i] < 0) return false;
+            if (trace) {
+                formats |= 1u << tex->format;
+                ++textured;
+                if (!PbW2_PicaTextureAlpha(gpuSlots[i])) ++blank;
+            }
         }
     }
     for (unsigned i = 0; i < s_gpuCount; ++i) {
@@ -820,6 +829,11 @@ static bool render_with_pica(void) {
                 | (((clear >> 10) & 31) * 255 / 31) << 8 | ((clear >> 16) & 31) * 255 / 31;
     s_nativeFrame = s_width == WIDE_WIDTH && !(reg_GX_DISPCAPCNT & REG_GX_DISPCAPCNT_E_MASK);
     PbW2_PicaSetFrameWidth(s_width, s_nativeFrame ? s_nativeFrames[s_nativeDisplayed ^ 1] : NULL);
+    if (trace) {
+        Log_Line("GPU", "scene frame %u: %u triangles, %u/%u materials textured (%u transparent), formats=%02x, width=%u%s",
+                 s_sceneSwaps + 1, s_gpuCount, textured, s_gpuMaterialCount, blank, formats, s_width,
+                 s_nativeFrame ? " native" : "");
+    }
     return PbW2_PicaFinish(color, s_clearDepth / 32767.0f, s_drawing.color);
 }
 #endif
@@ -1121,6 +1135,9 @@ void PbW2_G3RasterCommand(u32 op, const u32 *p, const MtxFx44 *clip,
             apply_fog((p[0] & (GX_BUFFERMODE_W << 1)) != 0);
 #ifdef PBW2_GPU_GEOMETRY
         }
+        if (!s_gpuFrame && (s_sceneSwaps < 4 || s_sceneSwaps == 7))
+            Log_Line("GPU", "scene frame %u: software, width=%u", s_sceneSwaps + 1, s_width);
+        if (s_sceneSwaps < 8) ++s_sceneSwaps;
         report_geometry_rate(s_gpuFrame);
 #endif
         lock_display();

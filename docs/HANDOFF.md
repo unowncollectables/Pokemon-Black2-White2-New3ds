@@ -15,8 +15,8 @@ compositor preserves foreground 2D layers over that geometry. The software
 fallback scales a 320x192 picture with equal scaling on both axes.
 DS window scenes keep widescreen through the scaled compositor and honor
 BG0 visibility at the screen edges. Layer blending and capture can still
-use centered 4:3 presentation. Display toggles are saved when changed. The default-off Sharp game text option draws eligible glyphs in
-scaled DS BG windows at one LCD pixel per font pixel, including foreground
+use centered 4:3 presentation. Display toggles are saved when changed.
+The default-off Sharp game text option draws eligible glyphs in scaled DS BG windows at one LCD pixel per font pixel, including foreground
 text over native 3D. It restores the recorded opaque background during
 presentation and keeps DS window data intact. Glyph pixels with transparent
 backgrounds, incompatible effects or clipping use the existing sampling path.
