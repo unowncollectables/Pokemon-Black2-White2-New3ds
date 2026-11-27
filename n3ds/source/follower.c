@@ -743,13 +743,22 @@ void PbW2_FollowerDraw(void) {
     if (fol_abs(s_fol.cur.x - pos.x) < 4 * FX32_ONE && fol_abs(s_fol.cur.z - pos.z) < 4 * FX32_ONE && !s_fol.moving) return;
     s_fol.anim++;
 
-    /* Draw a bottom-centred quad at the follower's feet, one world unit per
-     * texel. The strip stores up, down, right and left frame pairs. */
+    /* Draw a bottom-centred quad at the follower's feet, sized like the
+     * game's own billboards (below). The strip stores up, down, right
+     * and left frame pairs. */
     static const int kFrameBase[4] = { 0, 2, 6, 4 }; /* DIR_UP, DOWN, LEFT, RIGHT */
     int dir = s_fol.dir & 3;
     int frame = kFrameBase[dir] + ((s_fol.anim >> (s_fol.moving ? 3 : 4)) & 1);
     VecFx32 centre = s_fol.cur, view;
-    fx32 half = (s_frameSize / 2) * FX32_ONE;
+    /* The game's billboard actors (src/gfl/billboard.c, field scene in
+     * field_actor_billboard.c) draw an N-texel face at BILLBOARD_SCALES
+     * N/16 times the 7.0 scene scale across a 2-unit quad: N * 7/8
+     * world units. One world unit per texel (the old code) rendered
+     * every follower 8/7 the size of the game's own actor for the same
+     * frame — and floor-tier battle art is fitted edge-to-edge, so it
+     * read larger still (Nate, Run 4: the Snivy towers over the
+     * player). Half-extent = N * 7/16, exact for N = 32 and 64. */
+    fx32 half = (fx32)((s_frameSize * 7 / 16) * FX32_ONE);
     centre.y += half;
     MTX_MultVec43(&centre, &NNS_G3dGlb.cameraMtx, &view);
     view.y += 3 * FX32_ONE; /* field sprites sit ~3 px lower in their cell */
