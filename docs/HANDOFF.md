@@ -37,6 +37,10 @@ buffers have received it. It skips the bottom redraw and data-cache flush
 while the composed pixels, text metadata, and scaling options match.
 Settings invalidates that reuse when it takes over the bottom LCD.
 
+The CPU OBJ compositor snapshots OAM once per engine, groups sprites by
+priority and clips their destination rectangles before sampling. Sprite
+windows use the same snapshot and keep hardware ordering.
+
 ## 0. Nov 24 follow-up — New 3DS boot and map loading
 
 - Black 2 passes `FieldRoutine_Open` and `FieldRoutine_MapLoad` in Azahar

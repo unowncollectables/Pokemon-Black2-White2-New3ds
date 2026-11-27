@@ -1092,6 +1092,30 @@ static bool check_pinned_native_frame(void) {
     return correct;
 }
 
+static bool check_clipped_objs(void) {
+    memset(pbw2_io, 0, sizeof pbw2_io);
+    PbW2_VramHostInit();
+    PBW2_VU16(0x04000304) = 0x8000;
+    reg_GX_DISPCNT = (1u << REG_GX_DISPCNT_MODE_SHIFT) | 0x1010u;
+    u16 *oam = PbW2_VramMap((void *)HW_OAM);
+    for (unsigned i = 0; i < 128; ++i) oam[4 * i] = 0x0200;
+    u8 *tiles = PbW2_VramMap((void *)HW_OBJ_VRAM);
+    u16 *palette = PbW2_VramMap((void *)HW_OBJ_PLTT);
+    palette[1] = GX_RGB(31, 0, 0);
+    palette[2] = GX_RGB(0, 31, 0);
+    tiles[2 * 4 + 2] = 0x10; /* Flipped source (5,2) at LCD position (0,0). */
+    memset(tiles + 32, 0x22, 32);
+    oam[0] = 254;
+    oam[1] = 510 | 0x1000;
+    oam[2] = 0;
+    oam[4] = 254;
+    oam[5] = 510;
+    oam[6] = 1;
+    PbW2_ComposeScreens(pixels, NULL);
+    return pixels[0] == 0xf800 && pixels[1] == 0x07c0 &&
+           pixels[5 * 256 + 5] == 0x07c0 && !pixels[6 * 256] && !pixels[6];
+}
+
 int main(void) {
     gfxInitDefault();
     archiveMountSdmc();
@@ -1116,6 +1140,7 @@ int main(void) {
         fprintf(f, "Wrapped texture and upload reuse %s\n", check_wrapped_texture() ? "PASS" : "FAIL");
         fprintf(f, "PICA texture allocation reuse %s\n", check_pica_storage_reuse() ? "PASS" : "FAIL");
         fprintf(f, "Pinned native frame %s\n", check_pinned_native_frame() ? "PASS" : "FAIL");
+        fprintf(f, "Clipped OBJ priority %s\n", check_clipped_objs() ? "PASS" : "FAIL");
         fclose(f);
     }
     for (;;)

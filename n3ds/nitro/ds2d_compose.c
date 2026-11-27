@@ -522,54 +522,50 @@ static u32 engine_obj_vram_mapped(int is_sub) {
     return HW_OBJ_VRAM;
 }
 
-static void draw_obj_layer(u32 dc, int is_sub, u16 *out, u8 *window, u8 inside, unsigned priority, BgBlend *blend) {
+enum { OBJ_WINDOW_LIST = 4, OBJ_LISTS = 5, OBJ_COUNT = 128 };
+
+typedef struct {
+    u16 oam[OBJ_COUNT * 4];
+    const u16 *palette;
+    const u8 *vram;
+    unsigned count[OBJ_LISTS];
+    u8 index[OBJ_LISTS][OBJ_COUNT];
+    bool oneDimensional;
+    unsigned tileShift;
+} ObjScene;
+
+static void prepare_obj_scene(ObjScene *scene, u32 dc, int is_sub) {
+    memset(scene->count, 0, sizeof scene->count);
+    if (!(dc & 0x1000u)) return;
+    memcpy(scene->oam, vram_ptr(is_sub ? HW_DB_OAM : HW_OAM), sizeof scene->oam);
+    scene->vram = vram_ptr(engine_obj_vram_mapped(is_sub));
+    scene->palette = (dc & REG_GX_DISPCNT_O_MASK) ? (const u16 *)vram_ptr(HW_LCDC_VRAM_G) : engine_obj_pltt(is_sub);
+    scene->oneDimensional = (dc & REG_GX_DISPCNT_OBJMAP_CH_MASK) != 0;
+    scene->tileShift = 5 + (scene->oneDimensional ? (dc >> REG_GX_DISPCNT_EXOBJ_SHIFT) & 3u : 0);
+    /* Descending OAM order leaves the lower index on top at a priority tie. */
+    for (int i = OBJ_COUNT - 1; i >= 0; --i) {
+        const u16 *attributes = scene->oam + i * 4;
+        if ((attributes[0] >> 14) > 2 || (attributes[0] & 0x300) == 0x200) continue;
+        unsigned mode = (attributes[0] >> 10) & 3;
+        unsigned list = mode == GX_OAM_MODE_OBJWND ? OBJ_WINDOW_LIST : (attributes[2] >> 10) & 3;
+        scene->index[list][scene->count[list]++] = i;
+    }
+}
+
+static void draw_obj_layer(const ObjScene *scene, u16 *out, u8 *window, u8 inside, unsigned list, BgBlend *blend) {
     static const u8 spw[3][4] = {{8, 16, 32, 64}, {16, 32, 32, 64}, {8, 8, 16, 32}};
     static const u8 sph[3][4] = {{8, 16, 32, 64}, {8, 8, 16, 32}, {16, 32, 32, 64}};
-    u32 oam_base = is_sub ? HW_DB_OAM : HW_OAM;
-    const u16 *oam = (const u16 *)(void *)PbW2_VramMap((void *)(uintptr_t)oam_base);
-    const u8 *ovram = vram_ptr(engine_obj_vram_mapped(is_sub));
-    const u16 *pltt = (dc & REG_GX_DISPCNT_O_MASK) != 0 ? (const u16 *)(void *)vram_ptr(HW_LCDC_VRAM_G)
-                                                      : engine_obj_pltt(is_sub);
-    u32 obj1d = (dc & REG_GX_DISPCNT_OBJMAP_CH_MASK) != 0u;
-    u32 obj1d_shift = (dc >> REG_GX_DISPCNT_EXOBJ_SHIFT) & 3u;
-    int i;
-
-    if ((dc & 0x1000u) == 0) {
-        return;
-    }
-    for (i = 127; i >= 0; i--) {
-        const u16 *a = oam + i * 4;
-        u32 shape = a[0] >> 14;
-        u32 size = a[1] >> 14;
-        int width;
-        int height;
-        int xs;
-        int ypos;
-        int xo;
-        int yo;
-        u32 tile_bytes;
-        u32 tile_base;
-        u32 tile_row_bytes;
-        int bpp8;
-
-        if (shape > 2) {
-            continue;
-        }
-        if ((a[0] & 0x300) == 0x200) {
-            continue;
-        }
-        if (out && ((a[2] >> 10) & 3) != priority) {
-            continue;
-        }
-        unsigned mode = (a[0] >> 10) & 3;
-        if ((mode == GX_OAM_MODE_OBJWND) != (out == NULL)) continue;
-        width = spw[shape][size];
-        height = sph[shape][size];
+    for (unsigned i = 0; i < scene->count[list]; ++i) {
+        const u16 *a = scene->oam + scene->index[list][i] * 4;
+        unsigned shape = a[0] >> 14;
+        unsigned size = a[1] >> 14;
+        int width = spw[shape][size];
+        int height = sph[shape][size];
         bool affine = (a[0] & 0x0100u) != 0;
         bool doubleSize = affine && (a[0] & 0x0200u);
         int boxWidth = doubleSize ? 2 * width : width;
         int boxHeight = doubleSize ? 2 * height : height;
-        const u16 *matrix = oam + 16 * ((a[1] >> 9) & 31);
+        const u16 *matrix = scene->oam + 16 * ((a[1] >> 9) & 31);
         int pa = affine ? (s16)matrix[3] : (a[1] & 0x1000u) ? -256 : 256;
         int pb = affine ? (s16)matrix[7] : 0;
         int pc = affine ? (s16)matrix[11] : 0;
@@ -578,44 +574,42 @@ static void draw_obj_layer(u32 dc, int is_sub, u16 *out, u8 *window, u8 inside, 
         int yCenter = affine ? height * 128 : pd < 0 ? (height - 1) * 256 : 0;
         int xOrigin = affine ? -boxWidth / 2 : 0;
         int yOrigin = affine ? -boxHeight / 2 : 0;
-        bpp8 = (a[0] & 0x2000) != 0;
-        tile_bytes = bpp8 ? 64u : 32u;
-        tile_base = (u32)(a[2] & 0x3ffu) << (5u + (obj1d ? obj1d_shift : 0u));
-        tile_row_bytes = obj1d ? (u32)(width >> 3) * tile_bytes : 0x400u;
-        xs = a[1] & 0x1ff;
-        ypos = a[0] & 255;
-        if (xs >= 256) {
-            xs -= 512;
-        }
-        if (ypos >= 192) {
-            ypos -= 256;
-        }
-        for (yo = 0; yo < boxHeight; yo++) {
+        bool bpp8 = (a[0] & 0x2000) != 0;
+        unsigned tile_bytes = bpp8 ? 64 : 32;
+        unsigned tile_base = (a[2] & 0x3ffu) << scene->tileShift;
+        unsigned tile_row_bytes = scene->oneDimensional ? (width >> 3) * tile_bytes : 0x400;
+        int xs = a[1] & 0x1ff;
+        int ypos = a[0] & 255;
+        if (xs >= 256) xs -= 512;
+        if (ypos >= 192) ypos -= 256;
+        /* Clip screen bounds once per sprite. Advance the affine origin to
+         * the first visible pixel so offscreen work never enters the loop. */
+        int left = xs < 0 ? -xs : 0;
+        int right = xs + boxWidth > 256 ? 256 - xs : boxWidth;
+        int top = ypos < 0 ? -ypos : 0;
+        int bottom = ypos + boxHeight > 192 ? 192 - ypos : boxHeight;
+        if (left >= right || top >= bottom) continue;
+        int sxAtLeft = xCenter + (xOrigin + left) * pa;
+        int syAtLeft = yCenter + (xOrigin + left) * pc;
+        for (int yo = top; yo < bottom; ++yo) {
             int y = ypos + yo;
-            if (y < 0 || y >= 192) {
-                continue;
-            }
-            int sx = xCenter + xOrigin * pa + (yOrigin + yo) * pb;
-            int sy = yCenter + xOrigin * pc + (yOrigin + yo) * pd;
-            for (xo = 0; xo < boxWidth; xo++, sx += pa, sy += pc) {
+            int sx = sxAtLeft + (yOrigin + yo) * pb;
+            int sy = syAtLeft + (yOrigin + yo) * pd;
+            for (int xo = left; xo < right; ++xo, sx += pa, sy += pc) {
                 int x = xs + xo;
-                u32 addr;
+                unsigned addr;
                 unsigned px = sx >> 8, py = sy >> 8;
-                u8 nib;
-                u32 ci, paletteIndex;
-
-                if (x < 0 || x >= 256 || px >= (unsigned)width || py >= (unsigned)height) {
-                    continue;
-                }
+                unsigned ci, paletteIndex;
+                if (affine && (px >= (unsigned)width || py >= (unsigned)height)) continue;
                 addr = tile_base + (py >> 3) * tile_row_bytes + (py & 7u) * (tile_bytes >> 3)
                      + (px >> 3) * tile_bytes;
                 if (bpp8) {
                     addr += px & 7u;
-                    ci = ovram[addr & 0x3ffffu];
+                    ci = scene->vram[addr & 0x3ffffu];
                     paletteIndex = ci;
                 } else {
                     addr += (px & 7u) >> 1;
-                    nib = ovram[addr & 0x3ffffu];
+                    u8 nib = scene->vram[addr & 0x3ffffu];
                     ci = (px & 1) ? (nib >> 4) : (nib & 0x0f);
                     paletteIndex = (a[2] >> 12) * 16u + ci;
                 }
@@ -623,7 +617,7 @@ static void draw_obj_layer(u32 dc, int is_sub, u16 *out, u8 *window, u8 inside, 
                 unsigned pixel = y * 256 + x;
                 if (!out) window[pixel] = inside;
                 else if (!window || (window[pixel] & GX_WND_PLANEMASK_OBJ)) {
-                    u16 color = rgb555_to_565(pltt[paletteIndex]);
+                    u16 color = rgb555_to_565(scene->palette[paletteIndex]);
                     out[pixel] = color;
                     if (blend && blend->ink) blend->ink[pixel] = 0;
                     if (blend && blend->track) {
@@ -653,13 +647,13 @@ static void apply_window_rect(u8 *window, u16 xBounds, u16 yBounds, u8 mask) {
     }
 }
 
-static u8 *build_window_mask(const u8 *regs, u32 dc, int is_sub) {
+static u8 *build_window_mask(const u8 *regs, u32 dc, const ObjScene *objects) {
     static u8 window[256 * 192];
     unsigned enabled = (dc >> 13) & 7;
     if (!enabled) return NULL;
     u16 outside = reg_u16(regs, 0x4a);
     memset(window, outside & 0x3f, sizeof window);
-    if (enabled & GX_WNDMASK_OW) draw_obj_layer(dc, is_sub, NULL, window, (outside >> 8) & 0x3f, 0, NULL);
+    if (enabled & GX_WNDMASK_OW) draw_obj_layer(objects, NULL, window, (outside >> 8) & 0x3f, OBJ_WINDOW_LIST, NULL);
     /* Window 0 takes precedence over window 1, then over the OBJ window. */
     u16 inside = reg_u16(regs, 0x48);
     if (enabled & GX_WNDMASK_W1) apply_window_rect(window, reg_u16(regs, 0x42), reg_u16(regs, 0x46), (inside >> 8) & 0x3f);
@@ -809,7 +803,9 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
     for (i = 0; i < 256u * 192u; i++) {
         out[i] = backdrop;
     }
-    u8 *window = build_window_mask(regs, dc, is_sub);
+    ObjScene objects;
+    prepare_obj_scene(&objects, dc, is_sub);
+    u8 *window = build_window_mask(regs, dc, &objects);
     u16 bldcnt = reg_u16(regs, 0x50);
     unsigned effect = bldcnt & REG_G2_BLDCNT_EFFECT_MASK;
     unsigned factor = reg_u16(regs, 0x54) & 31;
@@ -868,7 +864,7 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
                 draw_bg_layer(regs, dc, is_sub, bg, bgmode, out, blend);
             }
         }
-        draw_obj_layer(dc, is_sub, out, window, 0, pri, blend);
+        draw_obj_layer(&objects, out, window, 0, pri, blend);
     }
     if (nativeFrame) {
         for (unsigned y = 0; y < PBW2_NATIVE_TOP_HEIGHT; ++y) {
