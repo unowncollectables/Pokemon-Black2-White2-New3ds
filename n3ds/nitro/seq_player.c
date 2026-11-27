@@ -56,8 +56,9 @@
  * Slice A limits (see work-log.md for the sized remainder): no
  * arithmetic opcodes (0xA0-0xBF â€” none appear in any inventoried
  * sequence; a track that hits one stops instead of desyncing), no
- * ADSR envelope on sampled notes (notes play at constant volume
- * for their duration; the PSG/noise synth does apply an ADSR),
+ * ADSR envelope is implemented for sampled notes too (the same
+ * curve the PSG/noise synth bakes into its buffers, stepped on
+ * the tick and applied through the channel volume),
  * no modulation or portamento. Sampled notes follow track pitch and
  * pitch-bend changes. PSG/noise uses the pitch at note-on. */
 
@@ -80,6 +81,20 @@ typedef struct {
     int samplePitch;
     int key; /* MIDI note including transpose at note-on. */
     bool sampled, held;
+    /* ADSR envelope (sampled notes; the synth bakes its own into the
+     * generated buffer). attack/decay/sustain/release are the
+     * instrument's SNDInstParam bytes after track overrides. The
+     * curve is the synth's model (seq_synth_envelope): attack
+     * a/127*0.02 s, decay d/127*0.30 s, release r/127*0.30 s,
+     * sustain s/127 as a gain. envTime and gateSeconds are
+     * wall-clock seconds (gate uses the tempo at note-on). At the
+     * gate end the voice enters the release phase instead of
+     * cutting off, keeps its channel through the tail like the
+     * real player, and is freed at releaseEndTick. */
+    u8 attack, decay, sustain, release;
+    float envTime, gateSeconds, releaseSeconds, envLevel;
+    u32 releaseEndTick;
+    bool enveloped, releasing;
     BOOL active;
 } SeqNote;
 
@@ -440,6 +455,26 @@ static int seq_final_volume(SeqSlot *slot, SeqTrack *track, int velocity) {
     return SND_CalcChannelVolume(attenuation);
 }
 
+/* The one place a sounding note's channel volume is written: the
+ * sequence volume stack (velocity/track/expression/seq/player/
+ * fade) with the note's ADSR envelope gain multiplied in for
+ * sampled notes. Every volume change (track controls, fades, tie
+ * continuation, the envelope step itself) goes through here so an
+ * unrelated update never stomps the envelope. The packed channel
+ * volume keeps its shift bits; only the 0..127 part scales, which
+ * is the part wave_set_mix treats linearly. */
+static void seq_apply_note_volume(SeqSlot *slot, SeqTrack *track, SeqNote *note) {
+    int volume;
+    if (!note->wave) return;
+    volume = seq_final_volume(slot, track, note->velocity);
+    if (note->enveloped) {
+        int scaled = (int)((float)(volume & 127) * note->envLevel + 0.5f);
+        if (scaled > 127) scaled = 127;
+        volume = (volume & ~127) | scaled;
+    }
+    NNS_SndWaveOutSetVolume(note->wave, volume);
+}
+
 static int seq_note_pan(const SeqTrack *track, unsigned instrumentPan) {
     return track->pan + (int)instrumentPan - 64 + track->panOffset;
 }
@@ -457,8 +492,7 @@ static void seq_update_volume(SeqSlot *slot, unsigned trackMask) {
         SeqTrack *track = &slot->tracks[t];
         for (unsigned n = 0; n < SEQ_TRACK_NOTES; ++n) {
             SeqNote *note = &track->notes[n];
-            if (note->active && note->wave)
-                NNS_SndWaveOutSetVolume(note->wave, seq_final_volume(slot, track, note->velocity));
+            if (note->active && note->wave) seq_apply_note_volume(slot, track, note);
         }
     }
 }
@@ -522,6 +556,19 @@ static float seq_synth_envelope(float time, float noteSeconds, float attack, flo
     return release > 0.0f ? gain * (1.0f - (time - noteSeconds) / release) : 0.0f;
 }
 
+/* Live envelope gain for a sampled note at `time` seconds after
+ * note-on, using the same curve and time constants as the synth's
+ * baked envelope (seq_synth_envelope). A held (tied) note has no
+ * gate while it is held, so its gate is its own age and the gain
+ * stays on the attack/decay/sustain curve. */
+static float seq_note_envelope(const SeqNote *note, float time) {
+    float gate = note->held ? time : note->gateSeconds;
+    return seq_synth_envelope(time, gate, (float)note->attack / 127.0f * 0.02f,
+                              (float)note->decay / 127.0f * 0.30f,
+                              (float)note->release / 127.0f * 0.30f,
+                              (float)note->sustain / 127.0f);
+}
+
 static void seq_synth_apply_overrides(SeqWave *wave, const SeqTrack *track) {
     if (track->attack != 0xff) wave->attack = track->attack;
     if (track->decay != 0xff) wave->decay = track->decay;
@@ -580,7 +627,7 @@ static bool seq_continue_tied_note(SeqSlot *slot, int trackIdx, int note, int ve
         if (voice->wave) {
             s_channels[voice->dsCh].priority = track->priority;
             NNS_SndWaveOutSetSpeed(voice->wave, seq_sample_speed(voice->samplePitch + seq_track_pitch(track)));
-            NNS_SndWaveOutSetVolume(voice->wave, seq_final_volume(slot, track, velocity));
+            seq_apply_note_volume(slot, track, voice);
         }
         ++slot->noteCount;
         return true;
@@ -609,6 +656,7 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
     int loopStart, samples, rate, speed;
     int samplePitch = 0;
     u32 endTick;
+    float gateSeconds = 0.0f, releaseSeconds = 0.0f;
 
     if (track->muted) return;
     if (track->tie && seq_continue_tied_note(slot, trackIdx, note, velocity)) return;
@@ -636,6 +684,9 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
         slot->droppedNotes++;
         return;
     }
+    /* Track ADSR opcodes (0xD0-0xD3) override the instrument's
+     * envelope, for sampled and synthesized notes alike. */
+    seq_synth_apply_overrides(&wave, track);
     finalVol = seq_final_volume(slot, track, velocity);
     pan = seq_note_pan(track, wave.pan);
     endTick = slot->tick + duration;
@@ -648,12 +699,13 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
         loopStart = (int)wave.loopStart;
         samples = (int)wave.samples;
         rate = wave.rate;
+        gateSeconds = slot->tempo > 0 ? (float)duration / ((float)slot->tempo * 0.8f) : 0.0f;
+        releaseSeconds = (float)wave.release / 127.0f * 0.30f;
     } else {
-        /* PSG and noise use the instrument envelope with sequence overrides. */
-        seq_synth_apply_overrides(&wave, track);
+        /* PSG and noise bake the envelope into the generated buffer. */
         int pitch = track->transpose * 64 + seq_track_pitch(track);
         float noteSeconds = slot->tempo > 0 ? (float)duration / ((float)slot->tempo * 0.8f) : 0.0f;
-        float releaseSeconds = 0.0f;
+        releaseSeconds = 0.0f;
         u32 synthSamples = seq_synth_note(&wave, note, pitch, noteSeconds, &releaseSeconds);
         if (synthSamples == 0) {
             slot->synthesisFailed++;
@@ -676,7 +728,13 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
         .dsCh = -1, .note = (u8)note, .velocity = (u8)velocity, .instrumentPan = wave.pan,
         .endTick = endTick, .samplePitch = samplePitch, .key = note + track->transpose,
         .sampled = wave.kind == 0, .held = track->tie && wave.kind == 0,
+        .attack = wave.attack, .decay = wave.decay, .sustain = wave.sustain,
+        .release = wave.release, .gateSeconds = gateSeconds,
+        .releaseSeconds = releaseSeconds,
+        .releaseEndTick = endTick + (u32)(releaseSeconds * (float)slot->tempo * 0.8f),
+        .enveloped = wave.kind == 0,
     };
+    if (voice->enveloped) voice->envLevel = seq_note_envelope(voice, 0.0f);
     if (!Audio_IsNdspReady()) {
         /* Track timing still advances in the absence of a DSP. */
         if (!s_ndspDownLogged) {
@@ -703,6 +761,10 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
     }
     voice->active = TRUE;
     voice->wave = waveOut;
+    /* Start from the envelope's first gain rather than the full
+     * channel volume Start just set, so a slow attack does not blip
+     * at full volume until the first envelope step. */
+    if (voice->enveloped) seq_apply_note_volume(slot, track, voice);
 }
 
 /* Walk one track's events until a NOTE/REST sets a wait, or the track
@@ -939,7 +1001,16 @@ static void seq_advance(SeqSlot *slot, float ticks) {
             SeqTrack *track = &slot->tracks[t];
             for (n = 0; n < SEQ_TRACK_NOTES; ++n) {
                 SeqNote *note = &track->notes[n];
-                if (note->active && !note->held && slot->tick >= note->endTick) seq_note_off(slot, t, n);
+                if (!note->active || note->held || slot->tick < note->endTick) continue;
+                if (note->enveloped && !note->releasing && note->releaseSeconds > 0.0f) {
+                    /* Gate end: enter the release phase. The voice
+                     * keeps sounding (and keeps its channel, like
+                     * the real player) until the tail ends. */
+                    note->releasing = TRUE;
+                    note->endTick = note->releaseEndTick;
+                } else {
+                    seq_note_off(slot, t, n);
+                }
             }
         }
         for (t = 0; t < SEQ_TRACKS; ++t) {
@@ -991,6 +1062,30 @@ static void seq_start_fade(SeqSlot *slot, int target, int frames, BOOL stopAtEnd
     slot->stopAtFadeEnd = stopAtEnd;
 }
 
+/* Advance every sampled note's ADSR envelope by dt wall-clock
+ * seconds and re-apply its channel volume when the gain moved.
+ * Runs on the audio thread's tick cadence (the ~5 ms polls), the
+ * same cadence the sequence fades use. Synth notes are skipped:
+ * their envelope is baked into the generated buffer. */
+static void seq_envelope_step(SeqSlot *slot, float dt) {
+    int t, n;
+    if (dt <= 0.0f) return;
+    for (t = 0; t < SEQ_TRACKS; ++t) {
+        SeqTrack *track = &slot->tracks[t];
+        for (n = 0; n < SEQ_TRACK_NOTES; ++n) {
+            SeqNote *note = &track->notes[n];
+            float gain;
+            if (!note->active || !note->enveloped || !note->wave) continue;
+            note->envTime += dt;
+            gain = seq_note_envelope(note, note->envTime);
+            if (gain != note->envLevel) {
+                note->envLevel = gain;
+                seq_apply_note_volume(slot, track, note);
+            }
+        }
+    }
+}
+
 void SeqPlayer_Tick(void) {
     static u64 windowStart, longestGap;
     static unsigned cappedUpdates;
@@ -1017,6 +1112,7 @@ void SeqPlayer_Tick(void) {
         if (!slot->inUse) continue;
         if (slot->paused) continue;
         playing = true;
+        seq_envelope_step(slot, dt);
         ticks = dt * (float)slot->tempo * 0.8f * ((float)slot->tempoRatio / 256.0f);
         seq_advance(slot, ticks);
         if (slot->inUse && !seq_slot_has_tracks(slot)) seq_finish_slot(i);
