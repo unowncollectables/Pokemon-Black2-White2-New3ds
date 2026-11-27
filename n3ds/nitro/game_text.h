@@ -9,6 +9,12 @@ void PbW2_TextUpload(const GFLBitmap *bitmap, const void *base, unsigned first, 
 /* A visible glyph pixel and, when available, its original background and offset in the glyph. */
 #define PBW2_TEXT_INK (1u << 30)
 #define PBW2_TEXT_NATIVE (1u << 31)
+/* The glyph pixel sits over a transparent (palette index 0) bitmap pixel, so
+ * there is no in-bitmap background colour to restore: the compositor must
+ * substitute the composed colour beneath the text layer instead of
+ * palette[0], whose stored RGB is meaningless for a transparent entry.
+ * Only carried in the per-tile details word; never in a finished ink word. */
+#define PBW2_TEXT_CLEAR_UNDER (1u << 29)
 
 /* Every fitted game screen uses the same 5:4 scale on both axes. */
 static inline int PbW2_TextNativeCoordinate(int source, unsigned glyphOffset) {
