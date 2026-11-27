@@ -222,12 +222,18 @@ static BOOL GFL_HeapDebugCopyFileName(char *dest, const char *file) {
 
 static void GFL_HeapDumpAllocFailure(HeapID heapId, u32 size, const char *file, u16 line) {
     NNSFndHeapHandle heap = GFL_HeapGetValidHeapBase(heapId);
+    u32 totalFree = NNS_FndGetTotalFreeSizeForExpHeap(heap);
+    u32 largestBlock = NNS_FndGetAllocatableSizeForExpHeapEx(heap, 4);
 
 #ifdef PBW2_N3DS
     Log_Line("heap", "allocation failed heap=%u size=%u at %s:%u", heapId, size, file, line);
+    /* The retail code computed these and threw them away. They are the
+     * whole diagnosis: totalFree ~ 0 means the heap is genuinely full
+     * (leak or undersized); totalFree large but largestBlock < size
+     * means fragmentation. (log-ab5c2f76, Nov 27 2026: the zone-443
+     * script load failed with neither number recorded.) */
+    Log_Line("heap", "heap=%u total free=%u largest block=%u", heapId, totalFree, largestBlock);
 #endif
-    NNS_FndGetTotalFreeSizeForExpHeap(heap);
-    NNS_FndGetAllocatableSizeForExpHeapEx(heap, 4);
     GFL_HeapDumpOnFailure(heapId);
 }
 
@@ -299,7 +305,9 @@ static void GFL_HeapDumpProc(void *block, NNSFndHeapHandle heap, u32 param) {
 // Prints a heap's sizes and its allocated blocks
 void GFL_HeapDumpOnFailure(HeapID heapId) {
 #ifdef PBW2_N3DS
-    Log_Line("heap", "heap check failed heap=%u allocations=%u", heapId, GFL_HeapGetAllocationCount(heapId));
+    Log_Line("heap", "heap check failed heap=%u allocations=%u size=%u free=%u largest=%u", heapId,
+             GFL_HeapGetAllocationCount(heapId), GFL_HeapGetSize(heapId), GFL_HeapGetFreeSizeCore(heapId),
+             GFL_HeapGetHighestAllocatableSize(heapId));
 #endif
     GFL_HeapGetSize(heapId);
     GFL_HeapGetFreeSizeCore(heapId);

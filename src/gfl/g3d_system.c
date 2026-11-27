@@ -3,6 +3,7 @@
 #ifdef PBW2_N3DS
 #include "g3_raster.h"
 #include "log.h"
+#include "settings.h"
 #endif
 #include "gfl/g3d.h"
 #include "gfl/graphics.h"
@@ -205,6 +206,17 @@ void GFL_G3DSysCreate(BOOL frmTexVramMgr, u32 texVramSize, BOOL frmPltVramMgr, u
     g_G3DSystem.sys->drawCallback = NULL;
     g_G3DSystem.sys->drawArg = NULL;
 #ifdef PBW2_N3DS
+    /* Re-assert the applied display state on every field/scene entry.
+     * Hardware finding (Nate, Nov 27 2026): stored display settings did
+     * not take effect on the boot -> field path, but opening and closing
+     * a menu fixed the picture - a settings close re-runs apply_display
+     * (settings.c commit_stage), while nothing on the boot -> field path
+     * did after Settings_Init. GFL_G3DSysCreate runs once per field entry
+     * (FieldRoutine_Open), so applying here makes boot -> field and
+     * menu -> field identical by construction. Idempotent atomic stores;
+     * the fit/sharp flags are read live per frame in present.c and never
+     * needed this, the stateful pushes (wide enable, PICA options) did. */
+    Settings_ApplyDisplay();
     Log_Line("field", "GFL_G3DSysCreate done");
 #endif
 }

@@ -242,6 +242,10 @@ static void apply_display(void) {
 #endif
 }
 
+void Settings_ApplyDisplay(void) {
+    apply_display();
+}
+
 static bool load_display(const char *path, uint32_t *flags) {
     FILE *file = fopen(path, "rb");
     if (!file) return false;

@@ -25,6 +25,12 @@ bool Settings_Open(void);
  * fps_counter config key. */
 bool Settings_FpsCounterOn(void);
 uint32_t Settings_DisplayFlags(void);
+/* Re-push the derived display state (wide enable, PICA options) into the
+ * renderer. Called at boot (Settings_Init), on settings close, on the
+ * scale hotkey, and on every field entry (GFL_G3DSysCreate) so the
+ * boot -> field path applies exactly what a menu round-trip applies.
+ * Idempotent: two atomic stores. */
+void Settings_ApplyDisplay(void);
 void Settings_Draw(void);
 
 #endif

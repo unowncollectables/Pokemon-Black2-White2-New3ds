@@ -117,7 +117,21 @@ static BOOL GameSystem_Init(GameProc *proc, u32 *state, void *param, void *work)
         DSProt_Callbacks[index] = GameSystem_DSProtNop1;
         DSProt_Callbacks[index ^ 1] = GameSystem_DSProtTamper1;
     }
+#ifdef PBW2_N3DS
+    /* New 3DS headroom (Nate's directive): the retail 64 KiB event heap
+     * wedges long sessions. Hardware log-ab5c2f76 (Nov 27, 2026): on the
+     * SECOND entry into Floccesy Pokemon Center (zone 443), the zone-init
+     * script load (FieldScript_CreateVM -> GFL_ArcSysReadHeapNewLZ on
+     * HEAPID_GAMEEVENT, 3060 bytes) failed with only 26 allocations live,
+     * and the host's terminate-on-alloc-failure policy killed the game
+     * thread, leaving the white-screen wedge. 256 KiB from the same USER
+     * root; the host arena behind it is 16 MiB. If a failure ever recurs,
+     * the heap dump now logs total free vs largest block, which separates
+     * a leak (free ~ 0) from fragmentation (largest < request). */
+    GFL_HeapCreateChild(HEAPID_USER, HEAPID_GAMEEVENT, 0x40000);
+#else
     GFL_HeapCreateChild(HEAPID_USER, HEAPID_GAMEEVENT, 0x10000);
+#endif
     {
         u32 shift;
         u32 checksum;
