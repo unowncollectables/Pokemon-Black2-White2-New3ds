@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "settings.h"
 
+#include "../build_number.h"
 #include "config.h"
 #include "log.h"
 #include "pbw2_port.h"
@@ -919,7 +920,7 @@ void Settings_DrawTop(void) {
     cv_text(20, TOP + 5, "SETTINGS", COL_TAB_TEXT);
     cv_pill(RIGHT - 8, TOP + 5, "INPUT PAUSED", COL_BG_BOT, COL_TAB_TEXT);
     cv_text(20, 46, "Pokemon " PBW2_GAME_NAME " for New 3DS", COL_TAB_TEXT);
-    cv_text(20, 61, "Build " PBW2_BUILD_COMMIT " | " __DATE__, COL_TAB_TEXT);
+    cv_text(20, 61, "Build " PBW2_BUILD_COMMIT " | " __DATE__ " (build " PBW2_BUILD_NUMBER_TEXT(PBW2_BUILD_NUMBER) ")", COL_TAB_TEXT);
 
     unsigned count;
     const RowDef *rows = tab_def(s_tab, &count);

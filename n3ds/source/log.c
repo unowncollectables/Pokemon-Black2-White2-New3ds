@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "log.h"
 
+#include "../build_number.h"
 #include "pbw2_port.h"
 
 #include <3ds.h>
@@ -379,7 +380,7 @@ bool Log_Init(void) {
                             : !strcmp(fate, "first") ? "none" : fate;
     health_append("[boot] prev=%s prev_errors=%u mode=%s\n", health_fate, prev_errors,
                   s_verbose ? "verbose" : "quiet");
-    Log_Line("3DS", "%s port log", PBW2_GAME_NAME);
+    Log_Line("3DS", "%s port log (build %d)", PBW2_GAME_NAME, PBW2_BUILD_NUMBER);
     Log_Line("LOG", "previous run: %s (boot %u)", fate, boots + 1);
     Log_Line("3DS", "logger: %s mode, %u KiB RAM ring, no SD writes during play",
              s_verbose ? "verbose" : "quiet", LOG_RING_BYTES / 1024u);
