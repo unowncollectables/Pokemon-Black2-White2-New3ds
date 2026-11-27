@@ -1031,6 +1031,55 @@ static bool check_wrapped_texture(void) {
     return pixels[center] == 0xfc00 && s_gpuFrames == before + 2;
 }
 
+static bool check_overlapping_texture(bool gpu) {
+    const unsigned center = 96 * 256 + 128;
+    const u16 white = GX_RGB(31, 31, 31);
+    const u16 magenta = GX_RGB(31, 0, 31);
+    memset(pbw2_io, 0, sizeof pbw2_io);
+    PbW2_VramHostInit();
+    PbW2_G3InterceptInit();
+    PbW2_PicaSetOptions(gpu, false);
+    unsigned before = s_gpuFrames;
+
+    reg_GX_VRAMCNT_A = GX_VRAMCNT(3, 0);
+    reg_GX_VRAMCNT_B = GX_VRAMCNT(3, 0);
+    reg_GX_VRAMCNT_C = GX_VRAMCNT(3, 1);
+    reg_GX_VRAMCNT_D = GX_VRAMCNT(3, 1);
+    reg_GX_VRAMCNT_E = GX_VRAMCNT(3, 0);
+    reg_GX_VRAMCNT_F = GX_VRAMCNT(3, 0);
+    reg_GX_VRAMCNT_G = GX_VRAMCNT(3, 0);
+    reg_G3X_CLEAR_DEPTH = 0x7fff;
+
+    u32 tilesA[8], tilesB[8];
+    const u16 indexC[] = {0x8000, 0x8000, 0x8000, 0x8000};
+    const u16 indexD[] = {1, 1, 1, 1};
+    PbW2_TryDmaCopy32(indexC, (void *)HW_LCDC_VRAM_C, sizeof indexC);
+    PbW2_TryDmaCopy32(indexD, (void *)HW_LCDC_VRAM_D, sizeof indexD);
+    for (unsigned compressed = 0; compressed < 2; ++compressed) {
+        memset(tilesA, compressed ? 0x55 : 0x11, sizeof tilesA);
+        memset(tilesB, compressed ? 0xaa : 0x22, sizeof tilesB);
+        PbW2_TryDmaCopy32(tilesA, (void *)HW_LCDC_VRAM_A, sizeof tilesA);
+        PbW2_TryDmaCopy32(tilesB, (void *)HW_LCDC_VRAM_B, sizeof tilesB);
+        unsigned index = compressed ? 5 : 3;
+        u16 paletteE[16] = {0}, paletteF[16] = {0}, paletteG[16] = {0};
+        paletteE[index] = GX_RGB(31, 0, 0);
+        paletteF[index] = GX_RGB(0, 31, 0);
+        paletteG[index] = GX_RGB(0, 0, 31);
+        PbW2_TryDmaCopy32(paletteE, (void *)HW_LCDC_VRAM_E, sizeof paletteE);
+        PbW2_TryDmaCopy32(paletteG, (void *)HW_LCDC_VRAM_G, sizeof paletteG);
+        cmd(G3OP_TEXIMAGE_PARAM, (compressed ? GX_TEXFMT_COMP4x4 : GX_TEXFMT_PLTT16) << 26);
+        for (unsigned changed = 0; changed < 2; ++changed) {
+            if (changed) paletteF[index] = 0;
+            PbW2_TryDmaCopy32(paletteF, (void *)HW_LCDC_VRAM_F, sizeof paletteF);
+            triangle(white, 0);
+            cmd(0x50, 0);
+            PbW2_G3RasterCapture(pixels);
+            if (pixels[center] != (0x8000 | (changed ? magenta : white))) return false;
+        }
+    }
+    return s_gpuFrames == before + (gpu ? 4 : 0);
+}
+
 static unsigned s_textureAllocations;
 
 bool __real_C3D_TexInitWithParams(C3D_Tex *texture, C3D_TexCube *cube, C3D_TexInitParams params);
@@ -1313,6 +1362,8 @@ int main(void) {
         fprintf(f, "CPU Z and W depth %s%s\n", failure ? "FAIL " : "PASS", failure ? failure : "");
         failure = check_buffer_depth(true, true);
         fprintf(f, "Edge-marking fallback Z and W depth %s%s\n", failure ? "FAIL " : "PASS", failure ? failure : "");
+        fprintf(f, "Overlapping texture banks CPU %s\n", check_overlapping_texture(false) ? "PASS" : "FAIL");
+        fprintf(f, "Overlapping texture banks PICA %s\n", check_overlapping_texture(true) ? "PASS" : "FAIL");
         fclose(f);
     }
     for (;;)

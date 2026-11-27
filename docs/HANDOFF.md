@@ -34,6 +34,8 @@ Widescreen and wide capture share a separate 400x240 allocation. The LCD
 compositor borrows the published native image while it blends the layers,
 so it can skip copying all 400x240 pixels while the renderer starts the
 next frame.
+Texture and palette reads OR all VRAM banks mapped to the same slot.
+Cache revisions include all banks contributing indices, descriptors or colors.
 Texture addresses wrap across slot 3 and cache revisions include wrapped
 texels. Identical LCDC uploads preserve existing textures and queued geometry. PICA
 uploads write complete tiles contiguously. Evicted textures of the same

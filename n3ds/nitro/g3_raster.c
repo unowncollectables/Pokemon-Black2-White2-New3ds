@@ -24,8 +24,12 @@ typedef struct {
 } ClipVertex;
 
 typedef struct {
-    const u8 *tiles[4];
-    const u8 *palette[6];
+    const u8 *bank[4];
+} TextureSlot;
+
+typedef struct {
+    TextureSlot tiles[4];
+    TextureSlot palette[6];
     unsigned param, format, width, height, address, paletteAddress;
 #ifdef PBW2_GPU_GEOMETRY
     PicaTextureKey key;
@@ -278,6 +282,15 @@ static void start_frame(void) {
     clear_software_frame();
 }
 
+static void add_texture_bank(TextureSlot *slot, const u8 *bank) {
+    for (unsigned i = 0; i < 4; ++i) {
+        if (!slot->bank[i]) {
+            slot->bank[i] = bank;
+            return;
+        }
+    }
+}
+
 static Texture texture_state(void) {
     Texture t = {0};
     t.param = s_texture;
@@ -292,12 +305,13 @@ static Texture texture_state(void) {
     for (unsigned bank = 0; bank < 4; ++bank) {
         u8 control = texBanks[bank];
         if ((control & 0x87) == 0x83) {
-            t.tiles[(control >> 3) & 3] = PbW2_VramMap((void *)(uintptr_t)(HW_LCDC_VRAM_A + bank * 0x20000));
+            add_texture_bank(&t.tiles[(control >> 3) & 3],
+                             PbW2_VramMap((void *)(uintptr_t)(HW_LCDC_VRAM_A + bank * 0x20000)));
         }
     }
     if ((reg_GX_VRAMCNT_E & 0x87) == 0x83) {
         const u8 *base = PbW2_VramMap((void *)HW_LCDC_VRAM_E);
-        for (unsigned i = 0; i < 4; ++i) t.palette[i] = base + 0x4000 * i;
+        for (unsigned i = 0; i < 4; ++i) add_texture_bank(&t.palette[i], base + 0x4000 * i);
     }
     const u8 palBanks[] = {reg_GX_VRAMCNT_F, reg_GX_VRAMCNT_G};
     for (unsigned bank = 0; bank < 2; ++bank) {
@@ -305,7 +319,8 @@ static Texture texture_state(void) {
         if ((control & 0x87) == 0x83) {
             unsigned offset = (control >> 3) & 3;
             unsigned slot = (offset & 1) + ((offset & 2) << 1);
-            t.palette[slot] = PbW2_VramMap((void *)(uintptr_t)(HW_LCDC_VRAM_F + bank * 0x4000));
+            add_texture_bank(&t.palette[slot],
+                             PbW2_VramMap((void *)(uintptr_t)(HW_LCDC_VRAM_F + bank * 0x4000)));
         }
     }
 #ifdef PBW2_GPU_GEOMETRY
@@ -326,15 +341,27 @@ static Texture texture_state(void) {
 }
 
 static u8 texture_byte(const Texture *t, unsigned addr) {
-    unsigned slot = (addr >> 17) & 3;
-    return t->tiles[slot] ? t->tiles[slot][addr & 0x1ffff] : 0;
+    const TextureSlot *slot = &t->tiles[(addr >> 17) & 3];
+    unsigned offset = addr & 0x1ffff;
+    if (!slot->bank[0]) return 0;
+    /* Banks mapped to the same GX slot drive the data bus together. */
+    u8 value = slot->bank[0][offset];
+    for (unsigned i = 1; i < 4 && slot->bank[i]; ++i) value |= slot->bank[i][offset];
+    return value;
 }
 
 static u16 palette_color(const Texture *t, unsigned addr) {
     unsigned slot = addr >> 14;
-    if (slot >= 6 || !t->palette[slot]) return 0;
-    const u8 *p = t->palette[slot] + (addr & 0x3ffe);
-    return (p[0] | (p[1] << 8)) & 0x7fff;
+    if (slot >= 6 || !t->palette[slot].bank[0]) return 0;
+    unsigned offset = addr & 0x3ffe;
+    const TextureSlot *palette = &t->palette[slot];
+    const u8 *p = palette->bank[0] + offset;
+    unsigned color = p[0] | (p[1] << 8);
+    for (unsigned i = 1; i < 4 && palette->bank[i]; ++i) {
+        p = palette->bank[i] + offset;
+        color |= p[0] | (p[1] << 8);
+    }
+    return color & 0x7fff;
 }
 
 static u16 weighted_color(u16 a, u16 b, unsigned wa, unsigned wb, unsigned shift) {
@@ -668,15 +695,15 @@ static uint32_t gpu_texel(const void *source, unsigned x, unsigned y) {
            | (((pixel >> 10) & 31) * 255u / 31) << 8 | alpha * 255 / 31;
 }
 
-static u32 range_revision(const u8 *const *banks, unsigned bankSize, unsigned count, unsigned address, unsigned size) {
+static u32 range_revision(const TextureSlot *slots, unsigned bankSize, unsigned count, unsigned address, unsigned size) {
     u32 latest = 0;
     while (size && address / bankSize < count) {
         unsigned slot = address / bankSize;
         unsigned offset = address % bankSize;
         unsigned chunk = bankSize - offset;
         if (chunk > size) chunk = size;
-        if (banks[slot]) {
-            u32 revision = PbW2_VramRangeRevision(banks[slot] + offset, chunk);
+        for (unsigned i = 0; i < 4 && slots[slot].bank[i]; ++i) {
+            u32 revision = PbW2_VramRangeRevision(slots[slot].bank[i] + offset, chunk);
             if (revision > latest) latest = revision;
         }
         address += chunk;
@@ -689,7 +716,7 @@ static u32 range_revision(const u8 *const *banks, unsigned bankSize, unsigned co
  * frame. Only the descriptor table determines a compressed texture's
  * palette span. Palette colors and texel indices have separate revisions. */
 typedef struct {
-    const u8 *descriptorBank;
+    TextureSlot descriptorSlot;
     unsigned address, bytes;
     u32 revision;
     unsigned paletteOffset, paletteBytes;
@@ -730,7 +757,7 @@ static PicaTextureKey texture_cache_key(const Texture *tex, unsigned material) {
             block += chunk;
         }
         CompressedPaletteSpan *span = &s_paletteSpans[material];
-        if (span->descriptorBank != tex->tiles[1] || span->address != tex->address ||
+        if (memcmp(&span->descriptorSlot, &tex->tiles[1], sizeof span->descriptorSlot) || span->address != tex->address ||
             span->bytes != bytes || span->revision != key.revision[1]) {
             unsigned minPalette = 0x10000, maxPalette = 0;
             for (unsigned block = tex->address; block < tex->address + bytes; block += 4) {
