@@ -818,6 +818,7 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
     static BgBlend bg_blend;
     static u16 underGeometry[256 * 192];
     const u16 *nativeFrame = NULL;
+    u32 traceStamp = 0;
     BgBlend *blend = NULL;
     u32 dc = reg_u32(regs, 0);
     u32 bgmode = dc & REG_GX_DISPCNT_BGMODE_MASK;
@@ -884,7 +885,7 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
                 if (extend) memcpy(underGeometry, out, sizeof underGeometry);
                 s_haveSides = PbW2_G3RasterComposite(out, window, bg_blend.track ? bg_blend.planes : NULL,
                                                      layerAlpha ? bg_blend.colors : NULL, extend ? s_sides : NULL,
-                                                     backdrop, extend ? &nativeFrame : NULL, bg_blend.ink);
+                                                     backdrop, extend ? &nativeFrame : NULL, bg_blend.ink, &traceStamp);
                 if (nativeFrame) {
                     /* Subsequent layers sit in front of the 3D layer. */
                     bg_blend.track = true;
@@ -935,6 +936,9 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
     if (!is_sub) capture_main(out, dc);
     if (!is_sub && s_haveSides) apply_master_bright(s_sides, 64 * 192, reg_u16(regs, 0x6cu));
     apply_master_bright(out, 256 * 192, reg_u16(regs, 0x6cu));
+    if (traceStamp)
+        PbW2_G3RasterTracePresented(traceStamp, nativeFrame ? s_nativeTop : out,
+                                   nativeFrame != NULL, s_haveSides, window != NULL);
 }
 
 static bool sub_inputs(SubInputs *in, const u8 *regs, bool hasText) {

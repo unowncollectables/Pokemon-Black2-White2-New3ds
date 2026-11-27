@@ -67,6 +67,7 @@ bool PbW2_G3WideCamera(void) {
 
 static Frame s_drawing;
 static u16 s_display[MAX_PIXELS];
+static u32 s_displayTraceStamp;
 /* The game publishes a complete frame. Only the presentation thread reads it. */
 static unsigned char s_displayLock;
 static int s_frameStarted;
@@ -124,6 +125,7 @@ static bool s_previousGpuFrame, s_reusedFrame;
 static Texture s_gpuMaterials[GPU_TEXTURES_MAX];
 static unsigned s_gpuCount, s_gpuMaterialCount, s_lastMaterial;
 static unsigned s_sceneSwaps;
+static u32 s_traceSerial;
 static u32 s_gpuSourceBanks;
 static bool s_gpuFrame;
 static bool s_deferSwap, s_pendingSwap;
@@ -185,6 +187,7 @@ void PbW2_G3RasterReset(void) {
     lock_display();
     memset(s_display, 0, sizeof s_display);
     s_displayWidth = WIDTH;
+    s_displayTraceStamp = 0;
 #ifdef PBW2_GPU_GEOMETRY
     s_haveNative = false;
     s_previousGpuFrame = false;
@@ -1203,7 +1206,37 @@ static u16 lit_color(const s16 xyz[3], const MtxFx44 *matrix) {
     return color;
 }
 
+static u32 trace_pixels(const u16 *pixels, unsigned stride, bool native, bool raw, unsigned *visible) {
+    u32 hash = 2166136261u;
+    *visible = 0;
+    for (unsigned y = 4; y < HEIGHT; y += 8) {
+        for (unsigned x = 4; x < WIDTH; x += 8) {
+            unsigned px = native ? (10 * x + 5) / 8 : x;
+            unsigned py = native ? (10 * y + 5) / 8 : y;
+            u16 pixel = pixels[py * stride + px];
+            if (raw) {
+                if (pixel & 0x8000) ++*visible;
+                pixel = ((pixel & 31) << 11) | ((pixel & 0x03e0) << 1) | ((pixel >> 10) & 31);
+            }
+            hash = (hash ^ pixel) * 16777619u;
+        }
+    }
+    return hash;
+}
+
+void PbW2_G3RasterTracePresented(u32 stamp, const u16 *pixels, bool native, bool wide, bool windowed) {
+    static u32 lastStamp;
+    if (!stamp || stamp == lastStamp) return;
+    lastStamp = stamp;
+    unsigned unused;
+    u32 hash = trace_pixels(pixels + (native ? 40 : 0), native ? PBW2_NATIVE_TOP_WIDTH : WIDTH, native, false, &unused);
+    Log_Line("GPU", "trace %lu LCD: %s window=%u center=%08lx",
+             (unsigned long)stamp, native ? "native" : wide ? "wide scaled" : "centered",
+             windowed, (unsigned long)hash);
+}
+
 static void publish_swap(u32 flags, bool afterVBlank) {
+    u32 traceStamp = 0;
 #ifndef PBW2_GPU_GEOMETRY
     (void)flags;
     (void)afterVBlank;
@@ -1223,6 +1256,28 @@ static void publish_swap(u32 flags, bool afterVBlank) {
     }
     if (!s_gpuFrame && (s_sceneSwaps < 4 || s_sceneSwaps == 7))
         Log_Line("GPU", "scene frame %u: software, width=%u", s_sceneSwaps + 1, s_width);
+    if (!s_reusedFrame && (s_sceneSwaps < 4 || s_sceneSwaps == 7)) {
+        traceStamp = ++s_traceSerial;
+        unsigned visible;
+        const u16 *center = s_drawing.color + (s_width - WIDTH) / 2;
+        u32 hash = trace_pixels(center, s_width, false, true, &visible);
+        unsigned equalDepth = 0, constantUV = 0, textured = 0;
+        if (s_gpuFrame) {
+            for (unsigned i = 0; i < s_previousFrame.triangles; ++i) {
+                const GpuTriangle *tri = &s_previousTriangles[i];
+                equalDepth += (tri->polygon & (1u << 14)) != 0;
+                if (!s_gpuMaterials[tri->material].format) continue;
+                ++textured;
+                const Vertex *a = &tri->vertex[0], *b = &tri->vertex[1], *c = &tri->vertex[2];
+                constantUV += a->s * b->w == b->s * a->w && a->s * c->w == c->s * a->w &&
+                              a->t * b->w == b->t * a->w && a->t * c->w == c->t * a->w;
+            }
+        }
+        Log_Line("GPU", "trace %lu GX frame %u: %s %c depth center=%08lx visible=%u textured=%u constantUV=%u equalDepth=%u",
+                 (unsigned long)traceStamp, s_sceneSwaps + 1, s_gpuFrame ? "PICA" : "CPU",
+                 flags & (GX_BUFFERMODE_W << 1) ? 'W' : 'Z', (unsigned long)hash, visible,
+                 textured, constantUV, equalDepth);
+    }
     if (s_sceneSwaps < 8) ++s_sceneSwaps;
     report_geometry_rate(s_gpuFrame, s_reusedFrame);
     if (!s_gpuFrame) s_previousGpuFrame = false;
@@ -1237,6 +1292,7 @@ static void publish_swap(u32 flags, bool afterVBlank) {
     if (s_haveNative) s_nativeDisplayed = s_nativeDraw;
 #endif
     s_displayWidth = s_width;
+    s_displayTraceStamp = traceStamp;
     memcpy(s_display, s_drawing.color, s_width * HEIGHT * sizeof(*s_display));
     unlock_display();
     s_frameStarted = s_inPrimitive = 0;
@@ -1346,8 +1402,9 @@ void PbW2_G3RasterCommand(u32 op, const u32 *p, const MtxFx44 *clip,
 }
 
 bool PbW2_G3RasterComposite(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawColors, u16 *sides, u16 backdrop,
-                            const u16 **native, u32 *ink) {
+                            const u16 **native, u32 *ink, u32 *traceStamp) {
     lock_display();
+    if (traceStamp) *traceStamp = s_displayTraceStamp;
     if (native) *native = NULL;
 #ifdef PBW2_GPU_GEOMETRY
     if (native && s_haveNative && s_nativeReader == NATIVE_BUFFERS) {

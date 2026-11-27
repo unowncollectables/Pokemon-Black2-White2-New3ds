@@ -895,7 +895,7 @@ static bool check_wide_frame(bool gpu, bool capture) {
     cmd(G3OP_END, 0);
     cmd(0x50, 0);
     memset(pixels, 0, sizeof pixels);
-    bool wide = PbW2_G3RasterComposite(pixels, NULL, NULL, NULL, sides, 0, &native, NULL);
+    bool wide = PbW2_G3RasterComposite(pixels, NULL, NULL, NULL, sides, 0, &native, NULL, NULL);
     bool nativeCorrect = (native != NULL) == (gpu && !capture) &&
                          (!native || native[120 * 400 + 20] == (0x8000 | GX_RGB(31, 0, 0)));
     if (native) PbW2_G3ReleaseNative();
@@ -1206,7 +1206,7 @@ static bool check_pinned_native_frame(void) {
     cmd(0x50, 0);
 
     const u16 *held;
-    PbW2_G3RasterComposite(pixels, NULL, NULL, NULL, NULL, 0, &held, NULL);
+    PbW2_G3RasterComposite(pixels, NULL, NULL, NULL, NULL, 0, &held, NULL, NULL);
     if (!held) return false;
     triangle(GX_RGB(0, 31, 0), 0);
     cmd(0x50, 0);
@@ -1216,7 +1216,7 @@ static bool check_pinned_native_frame(void) {
     PbW2_G3ReleaseNative();
 
     const u16 *latest;
-    PbW2_G3RasterComposite(pixels, NULL, NULL, NULL, NULL, 0, &latest, NULL);
+    PbW2_G3RasterComposite(pixels, NULL, NULL, NULL, NULL, 0, &latest, NULL, NULL);
     correct = correct && latest && latest[center] == 0xfc00;
     if (latest) PbW2_G3ReleaseNative();
     PbW2_G3SetWide(false);

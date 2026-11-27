@@ -20,8 +20,10 @@ void PbW2_G3RasterCommand(u32 opcode, const u32 *args, const MtxFx44 *clip,
                          const MtxFx44 *texture, const MtxFx44 *vector);
 /* The single presenter can borrow the native frame until it finishes composing. */
 bool PbW2_G3RasterComposite(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawColors, u16 *sides, u16 backdrop,
-                            const u16 **native, u32 *ink);
+                            const u16 **native, u32 *ink, u32 *traceStamp);
 void PbW2_G3ReleaseNative(void);
+/* Report sampled pixels for the displayed half of a paired scene trace. */
+void PbW2_G3RasterTracePresented(u32 stamp, const u16 *pixels, bool native, bool wide, bool windowed);
 /* Copy the DS 3D layer, including the validity bit used for capture. */
 void PbW2_G3RasterCapture(u16 *rgb555);
 /* Called on the geometry thread before an upload overwrites LCDC memory. */
