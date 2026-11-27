@@ -32,20 +32,48 @@ static u32 reg_u32(const u8 *regs, u32 off) {
     return *(const u32 *)(regs + off);
 }
 
+enum { SUB_BG_CACHE_BYTES = 0x20000, OBJ_VRAM_BYTES = 0x40000, ENGINE_PIXELS = 256 * 192 };
+typedef struct {
+    u32 regs[0x70 / sizeof(u32)];
+    u32 bgAddress, bgBytes, objAddress, textRevision, hasText;
+} SubInputs;
+
+static struct {
+    SubInputs inputs;
+    u8 bg[SUB_BG_CACHE_BYTES], obj[OBJ_VRAM_BYTES];
+    u16 palette[512], oam[512], pixels[ENGINE_PIXELS];
+    u32 ink[ENGINE_PIXELS];
+    bool valid, replay;
+    unsigned cooldown, misses;
+} s_subCache;
+
+static const u8 *live_vram_ptr(u32 addr) {
+    return PbW2_VramMap((void *)(uintptr_t)addr);
+}
+
 static const u8 *vram_ptr(u32 addr) {
-    return (const u8 *)(void *)PbW2_VramMap((void *)(uintptr_t)addr);
+    if (s_subCache.replay) {
+        const SubInputs *in = &s_subCache.inputs;
+        if (addr == HW_DB_BG_PLTT) return (const u8 *)s_subCache.palette;
+        if (addr == HW_DB_OBJ_PLTT) return (const u8 *)(s_subCache.palette + 256);
+        if (addr == HW_DB_OAM) return (const u8 *)s_subCache.oam;
+        if (in->objAddress && addr == in->objAddress) return s_subCache.obj;
+        if (addr >= in->bgAddress && addr - in->bgAddress < in->bgBytes)
+            return s_subCache.bg + addr - in->bgAddress;
+    }
+    return live_vram_ptr(addr);
 }
 
 static const u16 *engine_bg_pltt(int is_sub) {
     if (is_sub) {
-        return (const u16 *)(void *)PbW2_VramMap((void *)HW_DB_BG_PLTT);
+        return (const u16 *)vram_ptr(HW_DB_BG_PLTT);
     }
     return (const u16 *)(void *)PbW2_VramMap((void *)HW_BG_PLTT);
 }
 
 static const u16 *engine_obj_pltt(int is_sub) {
     if (is_sub) {
-        return (const u16 *)(void *)PbW2_VramMap((void *)HW_DB_OBJ_PLTT);
+        return (const u16 *)vram_ptr(HW_DB_OBJ_PLTT);
     }
     return (const u16 *)(void *)PbW2_VramMap((void *)HW_OBJ_PLTT);
 }
@@ -262,7 +290,9 @@ static void compose_text_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmo
     int pw = ((cnt >> 14) & 1) ? 64 : 32;
     int ph = ((cnt >> 14) & 2) ? 64 : 32;
     const u16 *map = (const u16 *)(void *)vram_ptr(bg_screen_addr(dc, cnt, is_sub, bgmode, bg));
-    const u8 *chars = vram_ptr(bg_char_addr(dc, cnt, is_sub));
+    u32 charAddress = bg_char_addr(dc, cnt, is_sub);
+    const u8 *chars = vram_ptr(charAddress);
+    const u8 *liveChars = live_vram_ptr(charAddress);
     const u16 *pltt = bg_layer_pltt(dc, cnt, is_sub, bg);
     u32 hofs_base = reg_u16(regs, 0x10u + (u32)bg * 4u) & 0x1ffu;
     u32 vofs_base = reg_u16(regs, 0x12u + (u32)bg * 4u) & 0x1ffu;
@@ -300,7 +330,7 @@ static void compose_text_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmo
                 memcpy(words, source, sizeof words);
                 if (!(words[0] | words[1])) continue;
                 u32 details[8];
-                u8 ink = blend && blend->ink ? PbW2_TextTileRow(source - ty * 8, 64, ty, details) : 0;
+                u8 ink = blend && blend->ink ? PbW2_TextTileRow(source - ty * 8, liveChars + tile * 64, 64, ty, details) : 0;
                 bool unflipped = (sc & 0x0c00) == 0;
                 unsigned tx = begin ^ flip;
                 int step = flip ? -1 : 1;
@@ -323,7 +353,7 @@ static void compose_text_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmo
                 memcpy(&nibbles, source, sizeof nibbles);
                 if (!nibbles) continue;
                 u32 details[8];
-                u8 ink = blend && blend->ink ? PbW2_TextTileRow(source - ty * 4, 32, ty, details) : 0;
+                u8 ink = blend && blend->ink ? PbW2_TextTileRow(source - ty * 4, liveChars + tile * 32, 32, ty, details) : 0;
                 bool unflipped = (sc & 0x0c00) == 0;
                 const u16 *palette = colors + (sc >> 12) * 16;
                 for (unsigned i = 0; i < count; i++) {
@@ -505,6 +535,7 @@ static u32 engine_obj_vram_mapped(int is_sub) {
     u32 map;
 
     if (is_sub) {
+        if (s_subCache.replay) return s_subCache.inputs.objAddress;
         vramcnt = *(const u32 *)(pbw2_io + 0x240);
         bank = (u8)((vramcnt >> 24) & 0xffu);
         map = vramcnt_map_addr(bank, 3);
@@ -522,54 +553,50 @@ static u32 engine_obj_vram_mapped(int is_sub) {
     return HW_OBJ_VRAM;
 }
 
-static void draw_obj_layer(u32 dc, int is_sub, u16 *out, u8 *window, u8 inside, unsigned priority, BgBlend *blend) {
+enum { OBJ_WINDOW_LIST = 4, OBJ_LISTS = 5, OBJ_COUNT = 128 };
+
+typedef struct {
+    u16 oam[OBJ_COUNT * 4];
+    const u16 *palette;
+    const u8 *vram;
+    unsigned count[OBJ_LISTS];
+    u8 index[OBJ_LISTS][OBJ_COUNT];
+    bool oneDimensional;
+    unsigned tileShift;
+} ObjScene;
+
+static void prepare_obj_scene(ObjScene *scene, u32 dc, int is_sub) {
+    memset(scene->count, 0, sizeof scene->count);
+    if (!(dc & 0x1000u)) return;
+    memcpy(scene->oam, vram_ptr(is_sub ? HW_DB_OAM : HW_OAM), sizeof scene->oam);
+    scene->vram = vram_ptr(engine_obj_vram_mapped(is_sub));
+    scene->palette = (dc & REG_GX_DISPCNT_O_MASK) ? (const u16 *)vram_ptr(HW_LCDC_VRAM_G) : engine_obj_pltt(is_sub);
+    scene->oneDimensional = (dc & REG_GX_DISPCNT_OBJMAP_CH_MASK) != 0;
+    scene->tileShift = 5 + (scene->oneDimensional ? (dc >> REG_GX_DISPCNT_EXOBJ_SHIFT) & 3u : 0);
+    /* Descending OAM order leaves the lower index on top at a priority tie. */
+    for (int i = OBJ_COUNT - 1; i >= 0; --i) {
+        const u16 *attributes = scene->oam + i * 4;
+        if ((attributes[0] >> 14) > 2 || (attributes[0] & 0x300) == 0x200) continue;
+        unsigned mode = (attributes[0] >> 10) & 3;
+        unsigned list = mode == GX_OAM_MODE_OBJWND ? OBJ_WINDOW_LIST : (attributes[2] >> 10) & 3;
+        scene->index[list][scene->count[list]++] = i;
+    }
+}
+
+static void draw_obj_layer(const ObjScene *scene, u16 *out, u8 *window, u8 inside, unsigned list, BgBlend *blend) {
     static const u8 spw[3][4] = {{8, 16, 32, 64}, {16, 32, 32, 64}, {8, 8, 16, 32}};
     static const u8 sph[3][4] = {{8, 16, 32, 64}, {8, 8, 16, 32}, {16, 32, 32, 64}};
-    u32 oam_base = is_sub ? HW_DB_OAM : HW_OAM;
-    const u16 *oam = (const u16 *)(void *)PbW2_VramMap((void *)(uintptr_t)oam_base);
-    const u8 *ovram = vram_ptr(engine_obj_vram_mapped(is_sub));
-    const u16 *pltt = (dc & REG_GX_DISPCNT_O_MASK) != 0 ? (const u16 *)(void *)vram_ptr(HW_LCDC_VRAM_G)
-                                                      : engine_obj_pltt(is_sub);
-    u32 obj1d = (dc & REG_GX_DISPCNT_OBJMAP_CH_MASK) != 0u;
-    u32 obj1d_shift = (dc >> REG_GX_DISPCNT_EXOBJ_SHIFT) & 3u;
-    int i;
-
-    if ((dc & 0x1000u) == 0) {
-        return;
-    }
-    for (i = 127; i >= 0; i--) {
-        const u16 *a = oam + i * 4;
-        u32 shape = a[0] >> 14;
-        u32 size = a[1] >> 14;
-        int width;
-        int height;
-        int xs;
-        int ypos;
-        int xo;
-        int yo;
-        u32 tile_bytes;
-        u32 tile_base;
-        u32 tile_row_bytes;
-        int bpp8;
-
-        if (shape > 2) {
-            continue;
-        }
-        if ((a[0] & 0x300) == 0x200) {
-            continue;
-        }
-        if (out && ((a[2] >> 10) & 3) != priority) {
-            continue;
-        }
-        unsigned mode = (a[0] >> 10) & 3;
-        if ((mode == GX_OAM_MODE_OBJWND) != (out == NULL)) continue;
-        width = spw[shape][size];
-        height = sph[shape][size];
+    for (unsigned i = 0; i < scene->count[list]; ++i) {
+        const u16 *a = scene->oam + scene->index[list][i] * 4;
+        unsigned shape = a[0] >> 14;
+        unsigned size = a[1] >> 14;
+        int width = spw[shape][size];
+        int height = sph[shape][size];
         bool affine = (a[0] & 0x0100u) != 0;
         bool doubleSize = affine && (a[0] & 0x0200u);
         int boxWidth = doubleSize ? 2 * width : width;
         int boxHeight = doubleSize ? 2 * height : height;
-        const u16 *matrix = oam + 16 * ((a[1] >> 9) & 31);
+        const u16 *matrix = scene->oam + 16 * ((a[1] >> 9) & 31);
         int pa = affine ? (s16)matrix[3] : (a[1] & 0x1000u) ? -256 : 256;
         int pb = affine ? (s16)matrix[7] : 0;
         int pc = affine ? (s16)matrix[11] : 0;
@@ -578,44 +605,42 @@ static void draw_obj_layer(u32 dc, int is_sub, u16 *out, u8 *window, u8 inside, 
         int yCenter = affine ? height * 128 : pd < 0 ? (height - 1) * 256 : 0;
         int xOrigin = affine ? -boxWidth / 2 : 0;
         int yOrigin = affine ? -boxHeight / 2 : 0;
-        bpp8 = (a[0] & 0x2000) != 0;
-        tile_bytes = bpp8 ? 64u : 32u;
-        tile_base = (u32)(a[2] & 0x3ffu) << (5u + (obj1d ? obj1d_shift : 0u));
-        tile_row_bytes = obj1d ? (u32)(width >> 3) * tile_bytes : 0x400u;
-        xs = a[1] & 0x1ff;
-        ypos = a[0] & 255;
-        if (xs >= 256) {
-            xs -= 512;
-        }
-        if (ypos >= 192) {
-            ypos -= 256;
-        }
-        for (yo = 0; yo < boxHeight; yo++) {
+        bool bpp8 = (a[0] & 0x2000) != 0;
+        unsigned tile_bytes = bpp8 ? 64 : 32;
+        unsigned tile_base = (a[2] & 0x3ffu) << scene->tileShift;
+        unsigned tile_row_bytes = scene->oneDimensional ? (width >> 3) * tile_bytes : 0x400;
+        int xs = a[1] & 0x1ff;
+        int ypos = a[0] & 255;
+        if (xs >= 256) xs -= 512;
+        if (ypos >= 192) ypos -= 256;
+        /* Clip screen bounds once per sprite. Advance the affine origin to
+         * the first visible pixel so offscreen work never enters the loop. */
+        int left = xs < 0 ? -xs : 0;
+        int right = xs + boxWidth > 256 ? 256 - xs : boxWidth;
+        int top = ypos < 0 ? -ypos : 0;
+        int bottom = ypos + boxHeight > 192 ? 192 - ypos : boxHeight;
+        if (left >= right || top >= bottom) continue;
+        int sxAtLeft = xCenter + (xOrigin + left) * pa;
+        int syAtLeft = yCenter + (xOrigin + left) * pc;
+        for (int yo = top; yo < bottom; ++yo) {
             int y = ypos + yo;
-            if (y < 0 || y >= 192) {
-                continue;
-            }
-            int sx = xCenter + xOrigin * pa + (yOrigin + yo) * pb;
-            int sy = yCenter + xOrigin * pc + (yOrigin + yo) * pd;
-            for (xo = 0; xo < boxWidth; xo++, sx += pa, sy += pc) {
+            int sx = sxAtLeft + (yOrigin + yo) * pb;
+            int sy = syAtLeft + (yOrigin + yo) * pd;
+            for (int xo = left; xo < right; ++xo, sx += pa, sy += pc) {
                 int x = xs + xo;
-                u32 addr;
+                unsigned addr;
                 unsigned px = sx >> 8, py = sy >> 8;
-                u8 nib;
-                u32 ci, paletteIndex;
-
-                if (x < 0 || x >= 256 || px >= (unsigned)width || py >= (unsigned)height) {
-                    continue;
-                }
+                unsigned ci, paletteIndex;
+                if (affine && (px >= (unsigned)width || py >= (unsigned)height)) continue;
                 addr = tile_base + (py >> 3) * tile_row_bytes + (py & 7u) * (tile_bytes >> 3)
                      + (px >> 3) * tile_bytes;
                 if (bpp8) {
                     addr += px & 7u;
-                    ci = ovram[addr & 0x3ffffu];
+                    ci = scene->vram[addr & 0x3ffffu];
                     paletteIndex = ci;
                 } else {
                     addr += (px & 7u) >> 1;
-                    nib = ovram[addr & 0x3ffffu];
+                    u8 nib = scene->vram[addr & 0x3ffffu];
                     ci = (px & 1) ? (nib >> 4) : (nib & 0x0f);
                     paletteIndex = (a[2] >> 12) * 16u + ci;
                 }
@@ -623,7 +648,7 @@ static void draw_obj_layer(u32 dc, int is_sub, u16 *out, u8 *window, u8 inside, 
                 unsigned pixel = y * 256 + x;
                 if (!out) window[pixel] = inside;
                 else if (!window || (window[pixel] & GX_WND_PLANEMASK_OBJ)) {
-                    u16 color = rgb555_to_565(pltt[paletteIndex]);
+                    u16 color = rgb555_to_565(scene->palette[paletteIndex]);
                     out[pixel] = color;
                     if (blend && blend->ink) blend->ink[pixel] = 0;
                     if (blend && blend->track) {
@@ -653,13 +678,13 @@ static void apply_window_rect(u8 *window, u16 xBounds, u16 yBounds, u8 mask) {
     }
 }
 
-static u8 *build_window_mask(const u8 *regs, u32 dc, int is_sub) {
+static u8 *build_window_mask(const u8 *regs, u32 dc, const ObjScene *objects) {
     static u8 window[256 * 192];
     unsigned enabled = (dc >> 13) & 7;
     if (!enabled) return NULL;
     u16 outside = reg_u16(regs, 0x4a);
     memset(window, outside & 0x3f, sizeof window);
-    if (enabled & GX_WNDMASK_OW) draw_obj_layer(dc, is_sub, NULL, window, (outside >> 8) & 0x3f, 0, NULL);
+    if (enabled & GX_WNDMASK_OW) draw_obj_layer(objects, NULL, window, (outside >> 8) & 0x3f, OBJ_WINDOW_LIST, NULL);
     /* Window 0 takes precedence over window 1, then over the OBJ window. */
     u16 inside = reg_u16(regs, 0x48);
     if (enabled & GX_WNDMASK_W1) apply_window_rect(window, reg_u16(regs, 0x42), reg_u16(regs, 0x46), (inside >> 8) & 0x3f);
@@ -792,6 +817,7 @@ const u16 *PbW2_TopSides(void) {
 static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
     static BgBlend bg_blend;
     static u16 underGeometry[256 * 192];
+    const u16 *nativeFrame = NULL;
     BgBlend *blend = NULL;
     u32 dc = reg_u32(regs, 0);
     u32 bgmode = dc & REG_GX_DISPCNT_BGMODE_MASK;
@@ -808,7 +834,9 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
     for (i = 0; i < 256u * 192u; i++) {
         out[i] = backdrop;
     }
-    u8 *window = build_window_mask(regs, dc, is_sub);
+    ObjScene objects;
+    prepare_obj_scene(&objects, dc, is_sub);
+    u8 *window = build_window_mask(regs, dc, &objects);
     u16 bldcnt = reg_u16(regs, 0x50);
     unsigned effect = bldcnt & REG_G2_BLDCNT_EFFECT_MASK;
     unsigned factor = reg_u16(regs, 0x54) & 31;
@@ -851,13 +879,13 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
             }
             if (bg == 0 && !is_sub && (dc & REG_GX_DISPCNT_BG02D3D_MASK)) {
                 bool extend = PbW2_G3WideCamera() && ((dc >> 16) & 3) == 1 &&
-                              !window && !layerBrightness && !layerAlpha &&
+                              !layerBrightness && !layerAlpha &&
                               !(reg_GX_DISPCAPCNT & REG_GX_DISPCAPCNT_E_MASK);
-                if (extend) memcpy(underGeometry, out, sizeof underGeometry);
+                if (extend && !window) memcpy(underGeometry, out, sizeof underGeometry);
                 s_haveSides = PbW2_G3RasterComposite(out, window, bg_blend.track ? bg_blend.planes : NULL,
                                                      layerAlpha ? bg_blend.colors : NULL, extend ? s_sides : NULL,
-                                                     backdrop, extend ? s_nativeTop : NULL, &s_haveNativeTop, bg_blend.ink);
-                if (s_haveNativeTop) {
+                                                     backdrop, extend && !window ? &nativeFrame : NULL, bg_blend.ink);
+                if (nativeFrame) {
                     /* Subsequent layers sit in front of the 3D layer. */
                     bg_blend.track = true;
                     memset(bg_blend.planes, 0, sizeof bg_blend.planes);
@@ -867,14 +895,15 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
                 draw_bg_layer(regs, dc, is_sub, bg, bgmode, out, blend);
             }
         }
-        draw_obj_layer(dc, is_sub, out, window, 0, pri, blend);
+        draw_obj_layer(&objects, out, window, 0, pri, blend);
     }
-    if (!is_sub && s_haveNativeTop) {
+    if (nativeFrame) {
         for (unsigned y = 0; y < PBW2_NATIVE_TOP_HEIGHT; ++y) {
             unsigned dsRow = ((8 * y + 4) / 10) * 256;
             u16 *row = s_nativeTop + y * PBW2_NATIVE_TOP_WIDTH;
+            const u16 *geometry = nativeFrame + y * PBW2_NATIVE_TOP_WIDTH;
             for (unsigned x = 0; x < PBW2_NATIVE_TOP_WIDTH; ++x) {
-                u16 pixel = row[x];
+                u16 pixel = geometry[x];
                 if (x >= 40 && x < 360) {
                     unsigned i = dsRow + (8 * (x - 40) + 4) / 10;
                     if (bg_blend.planes[i]) row[x] = out[i];
@@ -884,6 +913,8 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
                 }
             }
         }
+        PbW2_G3ReleaseNative();
+        s_haveNativeTop = true;
         apply_master_bright(s_nativeTop, PBW2_NATIVE_TOP_WIDTH * PBW2_NATIVE_TOP_HEIGHT, reg_u16(regs, 0x6cu));
     }
     if (bg_blend.ink) {
@@ -901,6 +932,89 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
     if (!is_sub) capture_main(out, dc);
     if (!is_sub && s_haveSides) apply_master_bright(s_sides, 64 * 192, reg_u16(regs, 0x6cu));
     apply_master_bright(out, 256 * 192, reg_u16(regs, 0x6cu));
+}
+
+static bool sub_inputs(SubInputs *in, const u8 *regs, bool hasText) {
+    memset(in, 0, sizeof(*in));
+    memcpy(in->regs, regs, sizeof in->regs);
+    const u8 *snapshot = (const u8 *)in->regs;
+    u32 dc = in->regs[0];
+    if ((dc & (REG_GX_DISPCNT_BGMODE_MASK | REG_GX_DISPCNT_MODE_MASK | REG_GX_DISPCNT_BG_MASK |
+               REG_GX_DISPCNT_O_MASK | REG_GX_DISPCNT_BG02D3D_MASK | 0x80u)) !=
+        (1u << REG_GX_DISPCNT_MODE_SHIFT)) return false;
+
+    unsigned first = 0xffffffffu, end = 0;
+    for (int bg = 0; bg < 4; ++bg) {
+        if (!(dc & (0x100u << bg))) continue;
+        u16 cnt = reg_u16(snapshot, 8 + bg * 2);
+        unsigned map = bg_screen_addr(dc, cnt, 1, 0, bg);
+        unsigned chars = bg_char_addr(dc, cnt, 1);
+        unsigned mapEnd = map + 2048 * (1 + ((cnt >> 14) & 1)) * (1 + (cnt >> 15));
+        unsigned charsEnd = chars + ((cnt & 0x80u) ? 65536 : 32768);
+        if (chars < first) first = chars;
+        if (map < first) first = map;
+        if (charsEnd > end) end = charsEnd;
+        if (mapEnd > end) end = mapEnd;
+    }
+    if (end) {
+        in->bgAddress = first;
+        in->bgBytes = end - first;
+        if (in->bgBytes > SUB_BG_CACHE_BYTES) return false;
+    }
+    in->objAddress = (dc & 0x1000u) ? engine_obj_vram_mapped(1) : 0;
+    in->hasText = hasText;
+    in->textRevision = hasText ? PbW2_TextVramRevision() : 0;
+    return true;
+}
+
+static bool same_sub_inputs(const SubInputs *in) {
+    return !memcmp(in, &s_subCache.inputs, sizeof(*in)) &&
+           !memcmp(s_subCache.palette, live_vram_ptr(HW_DB_BG_PLTT), sizeof s_subCache.palette) &&
+           (!in->objAddress || (!memcmp(s_subCache.oam, live_vram_ptr(HW_DB_OAM), sizeof s_subCache.oam) &&
+                                !memcmp(s_subCache.obj, live_vram_ptr(in->objAddress), sizeof s_subCache.obj))) &&
+           (!in->bgBytes || !memcmp(s_subCache.bg, live_vram_ptr(in->bgAddress), in->bgBytes));
+}
+
+static void compose_sub(const u8 *regs, u16 *out, u32 *ink) {
+    SubInputs in;
+    if (s_subCache.cooldown) {
+        --s_subCache.cooldown;
+        compose_engine(regs, 1, out, ink);
+        return;
+    }
+    if (!sub_inputs(&in, regs, ink != NULL)) {
+        s_subCache.valid = false;
+        compose_engine(regs, 1, out, ink);
+        return;
+    }
+    if (s_subCache.valid && same_sub_inputs(&in) &&
+        (!ink || in.textRevision == PbW2_TextVramRevision())) {
+        s_subCache.misses = 0;
+    } else {
+        /* Give animated screens a few frames before trying to cache again. */
+        if (++s_subCache.misses == 3) {
+            s_subCache.misses = 0;
+            s_subCache.cooldown = 6;
+            s_subCache.valid = false;
+            compose_engine(regs, 1, out, ink);
+            return;
+        }
+        s_subCache.inputs = in;
+        memcpy(s_subCache.palette, live_vram_ptr(HW_DB_BG_PLTT), sizeof s_subCache.palette);
+        if (in.bgBytes) memcpy(s_subCache.bg, live_vram_ptr(in.bgAddress), in.bgBytes);
+        if (in.objAddress) {
+            memcpy(s_subCache.oam, live_vram_ptr(HW_DB_OAM), sizeof s_subCache.oam);
+            memcpy(s_subCache.obj, live_vram_ptr(in.objAddress), sizeof s_subCache.obj);
+        }
+        if (ink) memset(s_subCache.ink, 0, sizeof s_subCache.ink);
+        /* Compose from the captured bytes so the cache always describes its own output. */
+        s_subCache.replay = true;
+        compose_engine((const u8 *)in.regs, 1, s_subCache.pixels, ink ? s_subCache.ink : NULL);
+        s_subCache.replay = false;
+        s_subCache.valid = !ink || in.textRevision == PbW2_TextVramRevision();
+    }
+    memcpy(out, s_subCache.pixels, sizeof s_subCache.pixels);
+    if (ink) memcpy(ink, s_subCache.ink, sizeof s_subCache.ink);
 }
 
 void PbW2_ComposeScreensWithText(u16 *top_rgb565, u16 *bottom_rgb565, u32 *topInk, u32 *bottomInk) {
@@ -927,7 +1041,8 @@ void PbW2_ComposeScreensWithText(u16 *top_rgb565, u16 *bottom_rgb565, u32 *topIn
         compose_engine(pbw2_io + 0, 0, captureMain, NULL);
     }
     if (sub_fb) {
-        compose_engine(pbw2_io + 0x1000, 1, sub_fb, main_upper ? bottomInk : topInk);
+        if (main_upper) compose_sub(pbw2_io + 0x1000, sub_fb, bottomInk);
+        else compose_engine(pbw2_io + 0x1000, 1, sub_fb, topInk);
     }
 }
 

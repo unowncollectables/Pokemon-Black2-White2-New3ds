@@ -13,7 +13,9 @@ void WaveOut_Shutdown(void);
 
 #ifdef PBW2_LINK_GAME
 struct NNSSndWaveOut;
+/* Sequence handles take the Nitro channel volume and shift packed together. */
 struct NNSSndWaveOut *WaveOut_AllocSequenceChannel(int channel);
+void WaveOut_SetPan(struct NNSSndWaveOut *handle, int pan);
 #endif
 
 #endif

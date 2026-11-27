@@ -4,6 +4,7 @@
 #if defined(PBW2_LINK_GAME)
 
 #include "log.h"
+#include "nitro/gx.h"
 #include "g3_raster.h"
 #include "vram_host.h"
 
@@ -42,6 +43,7 @@ static void log_bg_upload_once(u32 dest, u32 size) {
 BOOL PbW2_TryDmaCopy32(const void *src, void *dest, u32 size) {
     u32 darm;
     const void *arm_src;
+    void *mapped;
 
     if (!size || !dest) {
         return FALSE;
@@ -58,8 +60,13 @@ BOOL PbW2_TryDmaCopy32(const void *src, void *dest, u32 size) {
     }
     PbW2_VramNoteLoad(size);
     arm_src = in_vram_range((uintptr_t)src) ? PbW2_VramMap(src) : src;
+    mapped = PbW2_VramMap((void *)(uintptr_t)darm);
+    /* Repeated uploads of identical texels must not evict a cached texture
+     * or force already submitted geometry back to software. */
+    if (darm >= HW_LCDC_VRAM_A && darm < HW_LCDC_VRAM_H &&
+        size <= HW_LCDC_VRAM_H - darm && !memcmp(mapped, arm_src, size)) return TRUE;
     PbW2_G3RasterBeforeLcdcWrite(darm, size);
-    memcpy(PbW2_VramMap((void *)(uintptr_t)darm), arm_src, size);
+    memcpy(mapped, arm_src, size);
     PbW2_VramNoteLcdcWrite(darm, size);
     return TRUE;
 }

@@ -13,21 +13,60 @@ the original 256 columns for HUD placement and DS display capture. Eligible
 PICA200 frames rasterize the world at the LCD's 400x240 resolution. The
 compositor preserves foreground 2D layers over that geometry. The software
 fallback scales a 320x192 picture with equal scaling on both axes.
-Scenes using DS windows, layer blending or capture use centered 4:3
-presentation. The default-off Sharp game text option draws eligible glyphs in
-scaled DS BG windows at one LCD pixel per font pixel, including foreground
+DS window scenes keep widescreen through the scaled compositor and honor
+BG0 visibility at the screen edges. Layer blending and capture can still
+use centered 4:3 presentation. Display toggles are saved when changed.
+The default-off Sharp game text option draws eligible glyphs in scaled DS BG windows at one LCD pixel per font pixel, including foreground
 text over native 3D. It restores the recorded opaque background during
 presentation and keeps DS window data intact. Glyph pixels with transparent
 backgrounds, incompatible effects or clipping use the existing sampling path.
 Text baked into OBJ sprites remains open.
 
-Ordinary PICA200 frames use a 256-column render target and readback.
-Widescreen and wide capture share a separate 400-column allocation.
+PICA200 honors the GX swap command's Z- or W-buffer selection. W-buffer
+frames project reciprocal W into the hardware depth range and transform
+the GX clear depth the same way. The game publishes its depth mode before
+submission so the software renderer can use the same depth for occlusion,
+edge marking and fog. If the GPU falls back at swap time, software uses
+the mode from the swap command.
+
+Ordinary PICA200 frames use a 256x192 render target and readback.
+Widescreen and wide capture share a separate 400x240 allocation. The LCD
+compositor borrows the published native image while it blends the layers,
+so it can skip copying all 400x240 pixels while the renderer starts the
+next frame.
+Texture and palette reads OR all VRAM banks mapped to the same slot.
+Cache revisions include all banks contributing indices, descriptors or colors.
+Texture addresses wrap across slot 3 and cache revisions include wrapped
+texels. Identical LCDC uploads preserve existing textures and queued geometry. PICA
+uploads write complete tiles contiguously. Evicted textures of the same
+size reuse their allocation after the previous frame fence.
+The main loop submits GPU swaps before VBlank and renders them after the
+VBlank callbacks and transfers. Queued materials then resolve the current
+texture and palette bindings and cache revisions. Software frames and
+swaps with display capture armed still publish immediately. The first
+four swaps and the eighth swap after a field zone opens log their render
+path and, for deferred GPU swaps, the material bank changes.
+
+When the GPU geometry, texture revisions, render settings and clear values
+match the last GPU frame exactly, a GX swap reuses the published 3D image.
+A CPU frame or scene reset invalidates reuse. The performance log separates
+reused swaps from fresh GPU and CPU draws.
 
 The LCD presenter retains an unchanged bottom image after both physical
 buffers have received it. It skips the bottom redraw and data-cache flush
 while the composed pixels, text metadata, and scaling options match.
 Settings invalidates that reuse when it takes over the bottom LCD.
+
+For ordinary sub-engine text modes, the compositor also keeps a snapshot of
+the registers, palettes, OAM, relevant BG/OBJ VRAM and glyph metadata revision.
+A matching snapshot skips 2D composition. Animated screens pause cache
+attempts after repeated misses. The stationary 24-frame Azahar benchmark
+used 86.6 percent fewer ticks with pixel-identical output; hardware timing
+is pending.
+
+The CPU OBJ compositor snapshots OAM once per engine, groups sprites by
+priority and clips their destination rectangles before sampling. Sprite
+windows use the same snapshot and keep hardware ordering.
 
 ## 0. Nov 24 follow-up — New 3DS boot and map loading
 
@@ -284,6 +323,19 @@ Settings invalidates that reuse when it takes over the bottom LCD.
   was silent from ~320 s because the demo BGM 1102's notes were
   pre-fix garbage — the fix should have cured it, but no full
   playthrough to the field has been re-run on the fixed build yet.
+- The audio worker targets fixed 5 ms deadlines. WaveOut averages source
+  blocks before high-rate decimation and filters the intro and sustain
+  independently to retain their original loop boundary.
+- Sampled and synthesized voices use the DS stereo pan law. The
+  sequencer sums NitroSDK attenuation values before applying the channel
+  volume and divider. Sequence pan events and signed game pan offsets
+  update voices that are already sounding.
+- Tied sampled voices keep their waveform and playback position while
+  SSEQ notes change pitch and velocity. The TIE command releases active
+  notes before changing mode. Sampled release envelopes and tied
+  synthesized PSG/noise voices remain open. Synthesized notes honor
+  sequence envelope overrides, and their release starts from the
+  amplitude at note-off.
 - With all permitted sequence voices occupied, a finished NDSP sample
   can be reclaimed before its note deadline. New notes can replace
   equal- or lower-priority voices, with ties decided by onset order

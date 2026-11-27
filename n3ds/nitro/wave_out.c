@@ -82,8 +82,8 @@ void WaveOut_Shutdown(void) {
  * play perfectly in tune, but 96/104/120/131/140 kHz come out at 1/2 or
  * 1/3 pitch — an erratic fixed-point resampler artifact in Teakra, with no
  * monotonic pattern, so no rate above 48 kHz can be trusted. The fix is
- * decimation: downsample the PCM by 2/4/8 (keeping every k-th sample, which
- * preserves pitch exactly) so the rate NDSP sees never exceeds 48 kHz.
+ * decimation: low-pass and downsample the PCM by a power of two
+ * so the rate NDSP sees never exceeds 48 kHz.
  * The extreme notes lose the top octaves of the source spectrum, but the
  * pitch — what the ear hears as "in tune" — becomes exact, on real
  * hardware and in the emulator alike. */
@@ -91,24 +91,37 @@ static float wave_raw_rate(int sampleRate, int speed) {
     return (float)sampleRate * (float)speed / 32768.0f;
 }
 
-/* Downsample decoded PCM in place by factor k (keep every k-th sample).
- * sampleBytes is 1 for PCM8, 2 for PCM16 / ADPCM-decoded. */
-static void wave_decimate(void *pcm, unsigned samples, unsigned sampleBytes, unsigned k) {
-    unsigned i, n = samples / k;
-    if (sampleBytes == 1) {
-        u8 *p = pcm;
-        for (i = 0; i < n; ++i) p[i] = p[i * k];
-    } else {
-        s16 *p = pcm;
-        for (i = 0; i < n; ++i) p[i] = p[i * k];
+/* Average each source block before decimating. Use separate blocks for
+ * the intro and sustain so restarting the loop uses its original phase. */
+static unsigned wave_decimate(void *pcm, unsigned start, unsigned samples, unsigned output,
+                              unsigned sampleBytes, unsigned factor) {
+    for (unsigned i = 0; i < samples;) {
+        unsigned count = samples - i;
+        if (count > factor) count = factor;
+        int sum = 0;
+        if (sampleBytes == 1) {
+            s8 *data = pcm;
+            for (unsigned j = 0; j < count; ++j) sum += data[start + i + j];
+            data[output++] = sum / (int)count;
+        } else {
+            s16 *data = pcm;
+            for (unsigned j = 0; j < count; ++j) sum += data[start + i + j];
+            data[output++] = sum / (int)count;
+        }
+        i += count;
     }
+    return output;
 }
 
 static void wave_set_mix(struct NNSSndWaveOut *waveOut) {
-    float volume = (float)waveOut->volume / 127.0f;
-    float left = waveOut->pan >= 64 ? (127.0f - (float)waveOut->pan) / 63.0f : 1.0f;
-    float right = waveOut->pan <= 64 ? (float)waveOut->pan / 64.0f : 1.0f;
-    float mix[12] = {volume * left, volume * right};
+    static const unsigned divisors[] = {1, 2, 4, 16};
+    unsigned volume = waveOut->volume & 127;
+    unsigned divisor = divisors[(unsigned)waveOut->volume >> 8];
+    /* The DS treats the maximum volume and pan values as 128. */
+    if (volume == 127) volume = 128;
+    unsigned pan = waveOut->pan == 127 ? 128 : waveOut->pan;
+    float gain = (float)volume / (128 * 128 * divisor);
+    float mix[12] = {gain * (128 - pan), gain * pan};
     ndspChnSetMix(waveOut->ndspCh, mix);
 }
 
@@ -237,19 +250,18 @@ BOOL NNS_SndWaveOutStart(NNSSndWaveOutHandle handle, NNSSndWaveFormat format, co
     unsigned bytes = (unsigned)samples * sampleBytes;
     if (adpcm) decode_ima(*pcm, data, samples);
     else memcpy(*pcm, data, bytes);
-    /* Decimation (music-tune fix): if the requested playback rate exceeds
-     * the DSP's reliable 48 kHz, downsample the PCM so the rate NDSP sees
-     * stays in range — the pitch is preserved exactly, only the top
-     * octaves of the source spectrum are lost. For ADPCM, samples and
-     * loopStart are multiples of 8, so k = 2/4/8 divides them exactly;
-     * for raw PCM the truncation is < k samples at the loop point. */
     float rawRate = wave_raw_rate(rate, speed);
     unsigned decim = 1;
-    while (rawRate / (float)decim > 48000.0f) decim *= 2;
+    while (rawRate / (float)decim > 48000.0f && decim < (1u << 30)) decim *= 2;
     if (decim > 1) {
-        wave_decimate(*pcm, (unsigned)samples, sampleBytes, decim);
-        samples /= (int)decim;
-        loopStart /= (int)decim;
+        if (loopStart) {
+            unsigned sustain = (unsigned)(samples - loopStart);
+            unsigned intro = wave_decimate(*pcm, 0, loopStart, 0, sampleBytes, decim);
+            samples = wave_decimate(*pcm, loopStart, sustain, intro, sampleBytes, decim);
+            loopStart = intro;
+        } else {
+            samples = wave_decimate(*pcm, 0, samples, 0, sampleBytes, decim);
+        }
         bytes = (unsigned)samples * sampleBytes;
     }
     unsigned introBytes = (unsigned)loopStart * sampleBytes;
@@ -261,7 +273,8 @@ BOOL NNS_SndWaveOutStart(NNSSndWaveOutHandle handle, NNSSndWaveFormat format, co
     waveOut->sampleRate = rate;
     waveOut->speed = speed;
     waveOut->decim = (int)decim;
-    waveOut->volume = volume < 0 ? 0 : volume > 127 ? 127 : volume;
+    if (!waveOut->sequenceNote) volume = volume < 0 ? 0 : volume > 127 ? 127 : volume;
+    waveOut->volume = volume & 0x37f;
     waveOut->pan = pan < 0 ? 0 : pan > 127 ? 127 : pan;
     ndspChnSetFormat(waveOut->ndspCh,
                      format == NNS_SND_WAVE_FORMAT_PCM8 ? NDSP_FORMAT_PCM8 : NDSP_FORMAT_PCM16);
@@ -269,7 +282,7 @@ BOOL NNS_SndWaveOutStart(NNSSndWaveOutHandle handle, NNSSndWaveFormat format, co
     /* Use the RAW rate divided by the decimation factor: the clamped
      * helper would divide 48000 by decim and play an octave flat. By
      * construction raw/decim <= 48000 here. */
-    float playRate = wave_raw_rate(rate, speed) / (float)decim;
+    float playRate = rawRate / (float)decim;
     if (playRate > 48000.0f) playRate = 48000.0f;
     if (playRate < 4000.0f) playRate = 4000.0f;
     ndspChnSetRate(waveOut->ndspCh, playRate);
@@ -366,8 +379,20 @@ void NNS_SndWaveOutSetVolume(NNSSndWaveOutHandle handle, int volume) {
         LightLock_Unlock(&s_waveLock);
         return;
     }
-    waveOut->volume = volume < 0 ? 0 : volume > 127 ? 127 : volume;
+    if (!waveOut->sequenceNote) volume = volume < 0 ? 0 : volume > 127 ? 127 : volume;
+    waveOut->volume = volume & 0x37f;
     wave_set_mix(waveOut);
+    LightLock_Unlock(&s_waveLock);
+}
+
+void WaveOut_SetPan(NNSSndWaveOutHandle handle, int pan) {
+    struct NNSSndWaveOut *waveOut = handle;
+    if (!waveOut) return;
+    LightLock_Lock(&s_waveLock);
+    if (waveOut->active) {
+        waveOut->pan = pan < 0 ? 0 : pan > 127 ? 127 : pan;
+        wave_set_mix(waveOut);
+    }
     LightLock_Unlock(&s_waveLock);
 }
 

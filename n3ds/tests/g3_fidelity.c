@@ -7,11 +7,10 @@
 #include "nitro/gx.h"
 #include "vram_dma.h"
 #include "vram_host.h"
+#include <citro3d.h>
 #include <stdio.h>
 #include <string.h>
 
-extern int archiveMountSdmc(void);
-extern void svcSleepThread(s64 ns);
 u8 pbw2_io[0x110000] ATTRIBUTE_ALIGN(32);
 static u16 pixels[256 * 192];
 void Log_Line(const char *tag, const char *fmt, ...) {
@@ -665,9 +664,11 @@ static const char *checks(void) {
     reg_G3X_DISP3DCNT = REG_G3X_DISP3DCNT_FME_MASK | (10u << REG_G3X_DISP3DCNT_FOG_SHIFT_SHIFT);
     PBW2_VU8(0x04000361) = 0;
     PBW2_VU8(0x04000367) = 127;
+    PbW2_G3RasterSetWBuffer(true);
     triangle(GX_RGB(31, 0, 0), 0);
     cmd(0x50, GX_BUFFERMODE_W << 1);
     PbW2_G3RasterCapture(pixels);
+    PbW2_G3RasterSetWBuffer(false);
     if (pixels[center] != (0x8000 | GX_RGB(0, 0, 31))) return "W-buffer fog uses clip-space W";
 
     reg_G3X_DISP3DCNT |= REG_G3X_DISP3DCNT_FMOD_MASK;
@@ -876,7 +877,7 @@ static bool check_optional_edges(void) {
 
 static bool check_wide_frame(bool gpu, bool capture) {
     static u16 sides[64 * 192];
-    static u16 native[PBW2_NATIVE_TOP_WIDTH * PBW2_NATIVE_TOP_HEIGHT];
+    const u16 *native;
     memset(pbw2_io, 0, sizeof pbw2_io);
     PbW2_G3InterceptInit();
     PBW2_VU16(0x04000304) = 0x8000;
@@ -894,10 +895,11 @@ static bool check_wide_frame(bool gpu, bool capture) {
     cmd(G3OP_END, 0);
     cmd(0x50, 0);
     memset(pixels, 0, sizeof pixels);
-    bool haveNative;
-    bool wide = PbW2_G3RasterComposite(pixels, NULL, NULL, NULL, sides, 0, native, &haveNative, NULL);
-    if (haveNative != (gpu && !capture) || (haveNative && native[120 * 400 + 20] != (0x8000 | GX_RGB(31, 0, 0))))
-        return false;
+    bool wide = PbW2_G3RasterComposite(pixels, NULL, NULL, NULL, sides, 0, &native, NULL);
+    bool nativeCorrect = (native != NULL) == (gpu && !capture) &&
+                         (!native || native[120 * 400 + 20] == (0x8000 | GX_RGB(31, 0, 0)));
+    if (native) PbW2_G3ReleaseNative();
+    if (!nativeCorrect) return false;
     PbW2_G3RasterCapture(pixels);
     for (unsigned i = 0; i < 256 * 192; ++i)
         if (pixels[i] & 0x8000) return false;
@@ -925,6 +927,17 @@ static bool check_wide_frame(bool gpu, bool capture) {
 
     if (!wide || sides[96 * 64 + 16] != 0xf800 || sides[96 * 64 + 48] || s_gpuFrames != before + gpu)
         return false;
+
+    PBW2_VU16(0x0400006c) = 0;
+    reg_GX_DISPCNT |= 1u << 13; /* Window 0, with an empty rectangle. */
+    PBW2_VU16(0x0400004a) = GX_WND_PLANEMASK_BG0;
+    PbW2_ComposeScreens(pixels, NULL);
+    const u16 *windowedSides = PbW2_TopSides();
+    if (!windowedSides || windowedSides[96 * 64 + 16] != 0xf800 || PbW2_NativeTop()) return false;
+    PBW2_VU16(0x0400004a) = 0;
+    PbW2_ComposeScreens(pixels, NULL);
+    if (PbW2_TopSides()[96 * 64 + 16] != 0x001f) return false;
+    reg_GX_DISPCNT &= ~(1u << 13);
 
     if (gpu) {
         reg_GX_DISPCNT |= 0x200u;
@@ -985,7 +998,392 @@ static bool check_sharp_text(void) {
     return ink[0] == 0;
 }
 
-extern void gfxInitDefault(void);
+static bool check_wrapped_texture(void) {
+    const unsigned center = 96 * 256 + 128;
+    u16 texels[] = {0x801f, 0x801f};
+    memset(pbw2_io, 0, sizeof pbw2_io);
+    PbW2_VramHostInit();
+    PbW2_G3InterceptInit();
+    PbW2_PicaSetOptions(true, false);
+    reg_GX_VRAMCNT_A = GX_VRAMCNT(3, 0);
+    reg_GX_VRAMCNT_D = GX_VRAMCNT(3, 3);
+    reg_G3X_CLEAR_DEPTH = 0x7fff;
+    void *address = (void *)(HW_LCDC_VRAM_A + 8);
+    if (!PbW2_TryDmaCopy32(texels, address, sizeof texels)) return false;
+    u32 revision = PbW2_VramBankRevision(0);
+    if (!PbW2_TryDmaCopy32(texels, address, sizeof texels) || PbW2_VramBankRevision(0) != revision)
+        return false;
+
+    unsigned before = s_gpuFrames;
+    cmd(G3OP_TEXIMAGE_PARAM, (GX_TEXFMT_DIRECT << 26) | 0xffffu);
+    cmd(G3OP_TEXCOORD, 16u << 16);
+    triangle(0x7fff, 0);
+    cmd(0x50, 0);
+    PbW2_G3RasterCapture(pixels);
+    if (pixels[center] != 0x801f) return false;
+
+    texels[0] = texels[1] = 0xfc00;
+    if (!PbW2_TryDmaCopy32(texels, address, sizeof texels) || PbW2_VramBankRevision(0) == revision)
+        return false;
+    triangle(0x7fff, 0);
+    cmd(0x50, 0);
+    PbW2_G3RasterCapture(pixels);
+    return pixels[center] == 0xfc00 && s_gpuFrames == before + 2;
+}
+
+static bool check_overlapping_texture(bool gpu) {
+    const unsigned center = 96 * 256 + 128;
+    const u16 white = GX_RGB(31, 31, 31);
+    const u16 magenta = GX_RGB(31, 0, 31);
+    memset(pbw2_io, 0, sizeof pbw2_io);
+    PbW2_VramHostInit();
+    PbW2_G3InterceptInit();
+    PbW2_PicaSetOptions(gpu, false);
+    unsigned before = s_gpuFrames;
+
+    reg_GX_VRAMCNT_A = GX_VRAMCNT(3, 0);
+    reg_GX_VRAMCNT_B = GX_VRAMCNT(3, 0);
+    reg_GX_VRAMCNT_C = GX_VRAMCNT(3, 1);
+    reg_GX_VRAMCNT_D = GX_VRAMCNT(3, 1);
+    reg_GX_VRAMCNT_E = GX_VRAMCNT(3, 0);
+    reg_GX_VRAMCNT_F = GX_VRAMCNT(3, 0);
+    reg_GX_VRAMCNT_G = GX_VRAMCNT(3, 0);
+    reg_G3X_CLEAR_DEPTH = 0x7fff;
+
+    u32 tilesA[8], tilesB[8];
+    const u16 indexC[] = {0x8000, 0x8000, 0x8000, 0x8000};
+    const u16 indexD[] = {1, 1, 1, 1};
+    PbW2_TryDmaCopy32(indexC, (void *)HW_LCDC_VRAM_C, sizeof indexC);
+    PbW2_TryDmaCopy32(indexD, (void *)HW_LCDC_VRAM_D, sizeof indexD);
+    for (unsigned compressed = 0; compressed < 2; ++compressed) {
+        memset(tilesA, compressed ? 0x55 : 0x11, sizeof tilesA);
+        memset(tilesB, compressed ? 0xaa : 0x22, sizeof tilesB);
+        PbW2_TryDmaCopy32(tilesA, (void *)HW_LCDC_VRAM_A, sizeof tilesA);
+        PbW2_TryDmaCopy32(tilesB, (void *)HW_LCDC_VRAM_B, sizeof tilesB);
+        unsigned index = compressed ? 5 : 3;
+        u16 paletteE[16] = {0}, paletteF[16] = {0}, paletteG[16] = {0};
+        paletteE[index] = GX_RGB(31, 0, 0);
+        paletteF[index] = GX_RGB(0, 31, 0);
+        paletteG[index] = GX_RGB(0, 0, 31);
+        PbW2_TryDmaCopy32(paletteE, (void *)HW_LCDC_VRAM_E, sizeof paletteE);
+        PbW2_TryDmaCopy32(paletteG, (void *)HW_LCDC_VRAM_G, sizeof paletteG);
+        cmd(G3OP_TEXIMAGE_PARAM, (compressed ? GX_TEXFMT_COMP4x4 : GX_TEXFMT_PLTT16) << 26);
+        for (unsigned changed = 0; changed < 2; ++changed) {
+            if (changed) paletteF[index] = 0;
+            PbW2_TryDmaCopy32(paletteF, (void *)HW_LCDC_VRAM_F, sizeof paletteF);
+            triangle(white, 0);
+            cmd(0x50, 0);
+            PbW2_G3RasterCapture(pixels);
+            if (pixels[center] != (0x8000 | (changed ? magenta : white))) return false;
+        }
+    }
+    return s_gpuFrames == before + (gpu ? 4 : 0);
+}
+
+static bool check_vblank_textures(void) {
+    const unsigned center = 96 * 256 + 128;
+    const u16 red = GX_RGB(31, 0, 0);
+    const u16 green = GX_RGB(0, 31, 0);
+    const u16 blue = GX_RGB(0, 0, 31);
+    const u32 texels[] = {0x11111111, 0x11111111};
+    u16 palette[] = {0, red};
+    memset(pbw2_io, 0, sizeof pbw2_io);
+    PbW2_VramHostInit();
+    PbW2_G3InterceptInit();
+    PbW2_PicaSetOptions(true, false);
+    unsigned before = s_gpuFrames;
+
+    reg_GX_VRAMCNT_A = GX_VRAMCNT(3, 0);
+    reg_GX_VRAMCNT_E = GX_VRAMCNT(3, 0);
+    reg_G3X_CLEAR_DEPTH = 0x7fff;
+    PbW2_TryDmaCopy32(texels, (void *)HW_LCDC_VRAM_A, sizeof texels);
+    PbW2_TryDmaCopy32(palette, (void *)HW_LCDC_VRAM_E, sizeof palette);
+    cmd(G3OP_TEXIMAGE_PARAM, GX_TEXFMT_PLTT16 << 26);
+    triangle(0x7fff, 0);
+    cmd(0x50, 0);
+    PbW2_G3RasterCapture(pixels);
+    if (pixels[center] != (0x8000 | red)) return false;
+
+    PbW2_G3RasterDeferSwap(true);
+    triangle(0x7fff, 0);
+    cmd(0x50, 0);
+    PbW2_G3RasterCapture(pixels);
+    if (s_gpuFrames != before + 1 || pixels[center] != (0x8000 | red)) return false;
+    palette[1] = green;
+    PbW2_TryDmaCopy32(palette, (void *)HW_LCDC_VRAM_E, sizeof palette);
+    PbW2_G3RasterDeferSwap(false);
+    PbW2_G3RasterCapture(pixels);
+    if (pixels[center] != (0x8000 | green)) return false;
+
+    PbW2_G3RasterDeferSwap(true);
+    triangle(0x7fff, 0);
+    cmd(0x50, 0);
+    reg_GX_VRAMCNT_E = 0;
+    reg_GX_VRAMCNT_F = GX_VRAMCNT(3, 0);
+    palette[1] = blue;
+    PbW2_TryDmaCopy32(palette, (void *)HW_LCDC_VRAM_F, sizeof palette);
+    PbW2_G3RasterDeferSwap(false);
+    PbW2_G3RasterCapture(pixels);
+    if (pixels[center] != (0x8000 | blue)) return false;
+
+    PbW2_G3RasterDeferSwap(true);
+    triangle(0x7fff, -2048);
+    reg_GX_DISPCAPCNT = REG_GX_DISPCAPCNT_E_MASK;
+    cmd(0x50, 0);
+    bool captureReady = s_gpuFrames == before + 4;
+    PbW2_G3RasterDeferSwap(false);
+    return captureReady;
+}
+
+static unsigned s_textureAllocations;
+
+bool __real_C3D_TexInitWithParams(C3D_Tex *texture, C3D_TexCube *cube, C3D_TexInitParams params);
+
+bool __wrap_C3D_TexInitWithParams(C3D_Tex *texture, C3D_TexCube *cube, C3D_TexInitParams params) {
+    ++s_textureAllocations;
+    return __real_C3D_TexInitWithParams(texture, cube, params);
+}
+
+static uint32_t test_texel(const void *source, unsigned x, unsigned y) {
+    (void)x;
+    (void)y;
+    return *(const uint32_t *)source;
+}
+
+static bool check_pica_storage_reuse(void) {
+    uint32_t color = 0xff0000ff;
+    PicaTexture texture = { .width = 8, .height = 8, .source = &color, .texel = test_texel };
+    if (!PbW2_PicaBegin(0)) return false;
+    for (unsigned i = 0; i < 128; ++i) {
+        texture.key.param = 0x10000000 | i;
+        if (PbW2_PicaUpload(&texture) < 0) return false;
+    }
+    unsigned allocations = s_textureAllocations;
+    texture.key.param++;
+    if (PbW2_PicaUpload(&texture) >= 0) return false; /* Every slot is pinned this frame. */
+
+    if (!PbW2_PicaBegin(0)) return false;
+    color = 0x0000ff80;
+    int slot = PbW2_PicaUpload(&texture);
+    return slot >= 0 && PbW2_PicaTextureAlpha(slot) == PICA_TEX_ALPHA_FRACTIONAL &&
+           s_textureAllocations == allocations;
+}
+
+static bool check_pinned_native_frame(void) {
+    unsigned center = 120 * PBW2_NATIVE_TOP_WIDTH + 200;
+    memset(pbw2_io, 0, sizeof pbw2_io);
+    PbW2_G3InterceptInit();
+    PBW2_VU16(0x04000304) = 0x8000;
+    reg_G3X_CLEAR_DEPTH = 0x7fff;
+    PbW2_G3SetWide(true);
+    PbW2_PicaSetOptions(true, false);
+    triangle(GX_RGB(31, 0, 0), 0);
+    cmd(0x50, 0);
+
+    const u16 *held;
+    PbW2_G3RasterComposite(pixels, NULL, NULL, NULL, NULL, 0, &held, NULL);
+    if (!held) return false;
+    triangle(GX_RGB(0, 31, 0), 0);
+    cmd(0x50, 0);
+    triangle(GX_RGB(0, 0, 31), 0);
+    cmd(0x50, 0);
+    bool correct = held[center] == 0x801f;
+    PbW2_G3ReleaseNative();
+
+    const u16 *latest;
+    PbW2_G3RasterComposite(pixels, NULL, NULL, NULL, NULL, 0, &latest, NULL);
+    correct = correct && latest && latest[center] == 0xfc00;
+    if (latest) PbW2_G3ReleaseNative();
+    PbW2_G3SetWide(false);
+    return correct;
+}
+
+static bool check_clipped_objs(void) {
+    memset(pbw2_io, 0, sizeof pbw2_io);
+    PbW2_VramHostInit();
+    PBW2_VU16(0x04000304) = 0x8000;
+    reg_GX_DISPCNT = (1u << REG_GX_DISPCNT_MODE_SHIFT) | 0x1010u;
+    u16 *oam = PbW2_VramMap((void *)HW_OAM);
+    for (unsigned i = 0; i < 128; ++i) oam[4 * i] = 0x0200;
+    u8 *tiles = PbW2_VramMap((void *)HW_OBJ_VRAM);
+    u16 *palette = PbW2_VramMap((void *)HW_OBJ_PLTT);
+    palette[1] = GX_RGB(31, 0, 0);
+    palette[2] = GX_RGB(0, 31, 0);
+    tiles[2 * 4 + 2] = 0x10; /* Flipped source (5,2) at LCD position (0,0). */
+    memset(tiles + 32, 0x22, 32);
+    oam[0] = 254;
+    oam[1] = 510 | 0x1000;
+    oam[2] = 0;
+    oam[4] = 254;
+    oam[5] = 510;
+    oam[6] = 1;
+    PbW2_ComposeScreens(pixels, NULL);
+    return pixels[0] == 0xf800 && pixels[1] == 0x07c0 &&
+           pixels[5 * 256 + 5] == 0x07c0 && !pixels[6 * 256] && !pixels[6];
+}
+
+static bool check_sub_cache(void) {
+    static u16 bottom[256 * 192];
+    static u32 ink[256 * 192];
+    u8 glyphPixels[32] = {0x01};
+    u8 windowPixels[32] = {0x22};
+    GFLBitmap glyph = {glyphPixels, 8, 8, 32, GFL_BITMAP_WRAPPED};
+    GFLBitmap window = {windowPixels, 8, 8, 32, GFL_BITMAP_WRAPPED};
+    memset(pbw2_io, 0, sizeof pbw2_io);
+    PbW2_VramHostInit();
+    PBW2_VU16(0x04000304) = 0x8000;
+    PBW2_VU32(0x04001000) = (1u << REG_GX_DISPCNT_MODE_SHIFT) | 0x1010u | 0x100u;
+    PBW2_VU16(0x04001008) = 2u << REG_G2_BG0CNT_SCREENBASE_SHIFT;
+
+    u16 *oam = PbW2_VramMap((void *)HW_DB_OAM);
+    for (unsigned i = 0; i < 128; ++i) oam[i * 4] = 0x0200;
+    u8 *vram = PbW2_VramMap((void *)HW_DB_BG_VRAM);
+    u16 *map = (u16 *)(vram + 0x1000);
+    map[0] = 1;
+    u16 *palette = PbW2_VramMap((void *)HW_DB_BG_PLTT);
+    palette[1] = GX_RGB(31, 0, 0);
+    palette[2] = GX_RGB(0, 31, 0);
+    vram[32] = 0x21;
+    PbW2_ComposeScreensWithText(NULL, bottom, NULL, ink);
+    if (bottom[0] != 0xf800 || ink[0]) return false;
+    PbW2_ComposeScreensWithText(NULL, bottom, NULL, ink);
+
+    /* Glyph metadata can change while the displayed VRAM bytes stay identical. */
+    PbW2_TextMarkGlyph(&window, &glyph, 0, 0, 8, 8);
+    windowPixels[0] = 0x21;
+    PbW2_TextUpload(&window, vram, 1, sizeof windowPixels);
+    PbW2_ComposeScreensWithText(NULL, bottom, NULL, ink);
+    if (bottom[0] != 0xf800 || !(ink[0] & PBW2_TEXT_NATIVE)) return false;
+    PbW2_ComposeScreensWithText(NULL, bottom, NULL, ink);
+
+    vram[32] = 0x22; /* Direct VRAM mutation must invalidate cached pixels. */
+    PbW2_ComposeScreensWithText(NULL, bottom, NULL, ink);
+    if (bottom[0] != 0x07c0 || ink[0]) return false;
+
+    u8 *obj = PbW2_VramMap((void *)HW_DB_OBJ_VRAM);
+    u16 *objPalette = PbW2_VramMap((void *)HW_DB_OBJ_PLTT);
+    objPalette[1] = GX_RGB(0, 0, 31);
+    obj[0] = 0x11;
+    oam[0] = 0;
+    PbW2_ComposeScreensWithText(NULL, bottom, NULL, ink);
+    PbW2_TextForgetBitmap(&window);
+    return bottom[0] == 0x001f;
+}
+
+static bool check_frame_reuse(void) {
+    const unsigned center = 96 * 256 + 128;
+    const u16 red[] = {0, GX_RGB(31, 0, 0)};
+    const u16 blue[] = {0, GX_RGB(0, 0, 31)};
+    memset(pbw2_io, 0, sizeof pbw2_io);
+    PbW2_VramHostInit();
+    PbW2_G3InterceptInit();
+    PbW2_PicaSetOptions(true, false);
+    reg_GX_VRAMCNT_A = GX_VRAMCNT(3, 0);
+    reg_GX_VRAMCNT_E = GX_VRAMCNT(3, 0);
+    reg_G3X_CLEAR_DEPTH = 0x7fff;
+    memset(PbW2_VramMap((void *)HW_LCDC_VRAM_A), 0x11, 32);
+    PbW2_VramNoteLcdcWrite(HW_LCDC_VRAM_A, 32);
+    if (!PbW2_TryDmaCopy32(red, (void *)HW_LCDC_VRAM_E, sizeof red)) return false;
+    cmd(G3OP_TEXIMAGE_PARAM, GX_TEXFMT_PLTT16 << 26);
+    unsigned before = s_gpuFrames;
+    for (unsigned i = 0; i < 8; ++i) {
+        triangle(0x7fff, 0);
+        cmd(0x50, 0);
+        PbW2_G3RasterCapture(pixels);
+        if (pixels[center] != 0x801f) return false;
+    }
+    if (s_gpuFrames != before + 1) return false;
+
+    if (!PbW2_TryDmaCopy32(blue, (void *)HW_LCDC_VRAM_E, sizeof blue)) return false;
+    triangle(0x7fff, 0);
+    cmd(0x50, 0);
+    PbW2_G3RasterCapture(pixels);
+    if (s_gpuFrames != before + 2 || pixels[center] != 0xfc00) return false;
+
+    /* A software frame replaces the published image, invalidating reuse. */
+    PbW2_PicaSetOptions(false, false);
+    triangle(0x7fff, 0);
+    cmd(0x50, 0);
+    PbW2_PicaSetOptions(true, false);
+    triangle(0x7fff, 0);
+    cmd(0x50, 0);
+    PbW2_G3RasterCapture(pixels);
+    if (s_gpuFrames != before + 3 || pixels[center] != 0xfc00) return false;
+
+    reg_G3X_CLEAR_COLOR = (31u << 16) | GX_RGB(0, 31, 0);
+    triangle(0x7fff, 0);
+    cmd(0x50, 0);
+    PbW2_G3RasterCapture(pixels);
+    return s_gpuFrames == before + 4 && pixels[0] == 0x83e0;
+}
+
+static const char *check_buffer_depth(bool gpu, bool edges) {
+    PbW2_PicaSetOptions(gpu, false);
+    memset(pbw2_io, 0, sizeof pbw2_io);
+    PbW2_G3InterceptInit();
+    if (edges) reg_G3X_DISP3DCNT = REG_G3X_DISP3DCNT_EME_MASK;
+    const unsigned before = s_gpuFrames;
+    const unsigned center = 96 * 256 + 128;
+    G3_MtxMode(GX_MTXMODE_PROJECTION);
+    const u32 red[] = {
+        FX32_ONE, 0, 0, 0, 0, FX32_ONE, 0, 0,
+        0, 0, FX32_ONE, 0, 0, 0, FX32_ONE / 2, FX32_ONE,
+    };
+    const u32 green[] = {
+        2 * FX32_ONE, 0, 0, 0, 0, 2 * FX32_ONE, 0, 0,
+        0, 0, FX32_ONE, 0, 0, 0, (u32)-FX32_ONE, 2 * FX32_ONE,
+    };
+    for (unsigned i = 0; i < 3; ++i) {
+        PbW2_G3RasterSetWBuffer(i != 0);
+        reg_G3X_CLEAR_DEPTH = i == 2 ? 6 : 0x7fff;
+        PbW2_G3Command(G3OP_MTX_LOAD_4x4, red);
+        triangle(GX_RGB(31, 0, 0), 0);
+        PbW2_G3Command(G3OP_MTX_LOAD_4x4, green);
+        triangle(GX_RGB(0, 31, 0), 0);
+        cmd(0x50, i == 0 ? GX_BUFFERMODE_Z << 1 : GX_BUFFERMODE_W << 1);
+        PbW2_G3RasterCapture(pixels);
+        const u16 expected[] = {0x8000 | GX_RGB(0, 31, 0), 0x8000 | GX_RGB(31, 0, 0), 0};
+        if (pixels[center] != expected[i]) return i == 0 ? "Z order" : i == 1 ? "W order" : "W clear depth";
+    }
+    const u32 sloped[] = {
+        FX32_ONE, 0, 0, FX32_ONE, 0, FX32_ONE, 0, 0,
+        0, 0, FX32_ONE, 0, 0, 0, 0, 2 * FX32_ONE,
+    };
+    reg_G3X_CLEAR_DEPTH = 0x7fff;
+    PbW2_G3Command(G3OP_MTX_LOAD_4x4, green);
+    triangle(GX_RGB(0, 31, 0), 0);
+    PbW2_G3Command(G3OP_MTX_LOAD_4x4, sloped);
+    triangle(GX_RGB(31, 0, 0), 0);
+    cmd(0x50, GX_BUFFERMODE_W << 1);
+    PbW2_G3RasterCapture(pixels);
+    if (pixels[center - 6] != (0x8000 | GX_RGB(31, 0, 0)) ||
+        pixels[center + 6] != (0x8000 | GX_RGB(0, 31, 0))) return "interpolated W depth";
+
+    if (gpu && !edges) {
+        /* A fractional decal is rejected after the GPU batch is collected. */
+        PbW2_G3RasterSetWBuffer(false);
+        reg_GX_VRAMCNT_A = GX_VRAMCNT(3, 0);
+        reg_GX_VRAMCNT_E = GX_VRAMCNT(3, 0);
+        u8 *tiles = PbW2_VramMap((void *)HW_LCDC_VRAM_A);
+        u16 *palette = PbW2_VramMap((void *)HW_LCDC_VRAM_E);
+        memset(tiles, (15u << 3) | 1, 64);
+        palette[1] = GX_RGB(31, 0, 0);
+        PbW2_VramNoteLcdcWrite(HW_LCDC_VRAM_A, 64);
+        PbW2_VramNoteLcdcWrite(HW_LCDC_VRAM_E, 4);
+
+        PbW2_G3Command(G3OP_MTX_LOAD_4x4, green);
+        triangle(GX_RGB(0, 31, 0), 0);
+        PbW2_G3Command(G3OP_MTX_LOAD_4x4, red);
+        cmd(G3OP_POLYGON_ATTR, (31u << 16) | (3u << 6) | (GX_POLYGONMODE_DECAL << 4));
+        cmd(G3OP_TEXIMAGE_PARAM, GX_TEXFMT_A5I3 << 26);
+        triangle(GX_RGB(31, 0, 0), 0);
+        cmd(0x50, GX_BUFFERMODE_W << 1);
+        PbW2_G3RasterCapture(pixels);
+        if (pixels[center] != (0x8000 | GX_RGB(30, 0, 0))) return "W depth on batch fallback";
+    }
+    return s_gpuFrames == before + (gpu && !edges ? 4 : 0) ? NULL : "GPU frame count";
+}
+
 int main(void) {
     gfxInitDefault();
     archiveMountSdmc();
@@ -999,7 +1397,7 @@ int main(void) {
 
         PbW2_PicaSetOptions(true, false);
         failure = PbW2_PicaEnabled() ? checks() : "GPU initialization";
-        if (!failure && s_gpuFrames != 34)
+        if (!failure && s_gpuFrames != 33)
             failure = "unexpected GPU frame count";
         fprintf(f, "PICA200 %s%s (%u GPU frames)\n", failure ? "FAIL " : "PASS", failure ? failure : "", s_gpuFrames);
         fprintf(f, "Optional GPU outlines %s\n", check_optional_edges() ? "PASS" : "FAIL");
@@ -1007,6 +1405,21 @@ int main(void) {
         fprintf(f, "Wide camera PICA200 %s\n", check_wide_frame(true, false) ? "PASS" : "FAIL");
         fprintf(f, "Wide camera capture %s\n", check_wide_frame(true, true) ? "PASS" : "FAIL");
         fprintf(f, "Sharp text tiles %s\n", check_sharp_text() ? "PASS" : "FAIL");
+        fprintf(f, "Wrapped texture and upload reuse %s\n", check_wrapped_texture() ? "PASS" : "FAIL");
+        fprintf(f, "PICA texture allocation reuse %s\n", check_pica_storage_reuse() ? "PASS" : "FAIL");
+        fprintf(f, "Pinned native frame %s\n", check_pinned_native_frame() ? "PASS" : "FAIL");
+        fprintf(f, "Clipped OBJ priority %s\n", check_clipped_objs() ? "PASS" : "FAIL");
+        fprintf(f, "Sub-screen input cache %s\n", check_sub_cache() ? "PASS" : "FAIL");
+        fprintf(f, "PICA frame reuse %s\n", check_frame_reuse() ? "PASS" : "FAIL");
+        failure = check_buffer_depth(true, false);
+        fprintf(f, "PICA Z and W depth %s%s\n", failure ? "FAIL " : "PASS", failure ? failure : "");
+        failure = check_buffer_depth(false, false);
+        fprintf(f, "CPU Z and W depth %s%s\n", failure ? "FAIL " : "PASS", failure ? failure : "");
+        failure = check_buffer_depth(true, true);
+        fprintf(f, "Edge-marking fallback Z and W depth %s%s\n", failure ? "FAIL " : "PASS", failure ? failure : "");
+        fprintf(f, "Overlapping texture banks CPU %s\n", check_overlapping_texture(false) ? "PASS" : "FAIL");
+        fprintf(f, "Overlapping texture banks PICA %s\n", check_overlapping_texture(true) ? "PASS" : "FAIL");
+        fprintf(f, "Post-VBlank GPU textures %s\n", check_vblank_textures() ? "PASS" : "FAIL");
         fclose(f);
     }
     for (;;)

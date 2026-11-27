@@ -24,8 +24,12 @@ typedef struct {
 } ClipVertex;
 
 typedef struct {
-    const u8 *tiles[4];
-    const u8 *palette[6];
+    const u8 *bank[4];
+} TextureSlot;
+
+typedef struct {
+    TextureSlot tiles[4];
+    TextureSlot palette[6];
     unsigned param, format, width, height, address, paletteAddress;
 #ifdef PBW2_GPU_GEOMETRY
     PicaTextureKey key;
@@ -39,12 +43,13 @@ typedef struct {
     u8 opaqueId[MAX_PIXELS];
     u8 shadowMask[MAX_PIXELS];
     u8 fogAlpha[MAX_PIXELS];
-    u32 fogDepthW[MAX_PIXELS];
 } Frame;
 
 #ifdef PBW2_GPU_GEOMETRY
-static u16 s_nativeFrames[2][PBW2_NATIVE_TOP_WIDTH * PBW2_NATIVE_TOP_HEIGHT];
-static unsigned s_nativeDisplayed;
+enum { NATIVE_BUFFERS = 3 };
+static u16 s_nativeFrames[NATIVE_BUFFERS][PBW2_NATIVE_TOP_WIDTH * PBW2_NATIVE_TOP_HEIGHT];
+static unsigned s_nativeDisplayed, s_nativeDraw;
+static unsigned s_nativeReader = NATIVE_BUFFERS;
 static bool s_nativeFrame, s_haveNative;
 #endif
 static unsigned s_width = WIDTH, s_displayWidth = WIDTH;
@@ -83,6 +88,7 @@ static struct {
 static u32 s_polygon, s_texture, s_palette, s_viewport;
 static u32 s_clearColor;
 static unsigned s_clearDepth;
+static bool s_requestedWBuffer, s_wBuffer;
 static bool s_previousShadowMask;
 static bool s_alphaTest;
 static unsigned s_alphaRef;
@@ -99,15 +105,29 @@ static struct {
 enum { FOG_ENABLED = 0x80, FOG_CLEAR_DEPTH = 0x40 };
 #ifdef PBW2_GPU_GEOMETRY
 enum { GPU_TRIANGLES_MAX = 8192, GPU_TEXTURES_MAX = 128 };
-static struct {
+typedef struct {
     Vertex vertex[3];
     u32 polygon;
     unsigned material;
-} s_gpuTriangles[GPU_TRIANGLES_MAX];
+} GpuTriangle;
+
+typedef struct {
+    unsigned triangles, materials, width, alphaRef, flags;
+    u32 clearColor, clearDepth;
+} PicaFrameKey;
+
+static GpuTriangle s_geometry[2][GPU_TRIANGLES_MAX];
+static GpuTriangle *s_gpuTriangles = s_geometry[0], *s_previousTriangles = s_geometry[1];
+static PicaFrameKey s_previousFrame;
+static PicaTextureKey s_previousTextures[GPU_TEXTURES_MAX];
+static bool s_previousGpuFrame, s_reusedFrame;
 static Texture s_gpuMaterials[GPU_TEXTURES_MAX];
 static unsigned s_gpuCount, s_gpuMaterialCount, s_lastMaterial;
+static unsigned s_sceneSwaps;
 static u32 s_gpuSourceBanks;
 static bool s_gpuFrame;
+static bool s_deferSwap, s_pendingSwap;
+static u32 s_pendingSwapFlags;
 enum {
     GPU_FALLBACK_EDGE = 1u << 0,
     GPU_FALLBACK_FOG = 1u << 1,
@@ -124,24 +144,26 @@ static void report_gpu_fallback(unsigned reason, const char *name) {
     Log_Line("GPU", "software geometry fallback: %s", name);
 }
 
-static void report_geometry_rate(bool gpu) {
+static void report_geometry_rate(bool gpu, bool reused) {
     extern u64 svcGetSystemTick(void);
     const u64 ticksPerSecond = 268111856;
     static u64 windowStart;
-    static unsigned frames, gpuFrames;
+    static unsigned frames, gpuFrames, reusedFrames;
     u64 now = svcGetSystemTick();
     if (!windowStart) {
         windowStart = now;
         return;
     }
-    gpuFrames += gpu;
+    gpuFrames += gpu && !reused;
+    reusedFrames += reused;
     ++frames;
     u64 elapsed = now - windowStart;
     if (elapsed >= 4 * ticksPerSecond) {
         unsigned rate = (unsigned)(frames * ticksPerSecond * 10 / elapsed);
-        Log_Line("PERF", "GX swaps %u.%u fps (%u GPU, %u CPU)", rate / 10, rate % 10, gpuFrames, frames - gpuFrames);
+        Log_Line("PERF", "GX swaps %u.%u fps (%u GPU, %u CPU, %u reused)",
+                 rate / 10, rate % 10, gpuFrames, frames - gpuFrames - reusedFrames, reusedFrames);
         windowStart = now;
-        frames = gpuFrames = 0;
+        frames = gpuFrames = reusedFrames = 0;
     }
 }
 #endif
@@ -154,17 +176,25 @@ static void unlock_display(void) {
     __atomic_clear(&s_displayLock, __ATOMIC_RELEASE);
 }
 
+void PbW2_G3RasterSetWBuffer(bool enabled) {
+    s_requestedWBuffer = enabled;
+}
+
 void PbW2_G3RasterReset(void) {
+    s_requestedWBuffer = false;
     lock_display();
     memset(s_display, 0, sizeof s_display);
     s_displayWidth = WIDTH;
 #ifdef PBW2_GPU_GEOMETRY
     s_haveNative = false;
+    s_previousGpuFrame = false;
 #endif
     unlock_display();
     s_frameStarted = s_inPrimitive = 0;
 #ifdef PBW2_GPU_GEOMETRY
     s_gpuCount = 0;
+    s_sceneSwaps = 0;
+    s_deferSwap = s_pendingSwap = false;
 #endif
     s_count = 0;
     memset(s_xyz, 0, sizeof s_xyz);
@@ -181,12 +211,26 @@ void PbW2_G3RasterReset(void) {
     s_viewport = GX_PACK_VIEWPORT_PARAM(0, 0, WIDTH - 1, HEIGHT - 1);
 }
 
+static float clear_w(void) {
+    return ((s_clearDepth << 9) | 511) / 4096.0f;
+}
+
+static float software_clear_depth(void) {
+    if (s_wBuffer) return clear_w();
+    /* The default cleared depth admits fragments on the far plane. */
+    return s_clearDepth == 0x7fff ? 2.0f : s_clearDepth / 32767.0f;
+}
+
+void PbW2_G3RasterTraceScene(void) {
+#ifdef PBW2_GPU_GEOMETRY
+    s_sceneSwaps = 0;
+#endif
+}
+
 static void clear_software_frame(void) {
     u16 color = s_clearColor & 0x7fff;
     if ((s_clearColor >> 16) & 31) color |= 0x8000;
-    float depth = s_clearDepth / 32767.0f;
-    /* The default cleared depth admits fragments on the far plane. */
-    if (depth >= 1.0f) depth = 2.0f;
+    float depth = software_clear_depth();
     memset(s_drawing.translucentId, 0, s_width * HEIGHT);
     memset(s_drawing.opaqueId, (s_clearColor >> 24) & 63, s_width * HEIGHT);
     memset(s_drawing.shadowMask, 0, s_width * HEIGHT);
@@ -228,7 +272,9 @@ static void start_frame(void) {
         }
     }
     s_frameStarted = 1;
+    s_wBuffer = s_requestedWBuffer;
 #ifdef PBW2_GPU_GEOMETRY
+    s_reusedFrame = false;
     s_gpuFrame = PbW2_PicaEnabled();
     if (s_gpuFrame && s_edgeEnabled && !PbW2_PicaSkipEdges()) {
         report_gpu_fallback(GPU_FALLBACK_EDGE, "edge marking");
@@ -245,6 +291,52 @@ static void start_frame(void) {
     clear_software_frame();
 }
 
+static void add_texture_bank(TextureSlot *slot, const u8 *bank) {
+    for (unsigned i = 0; i < 4; ++i) {
+        if (!slot->bank[i]) {
+            slot->bank[i] = bank;
+            return;
+        }
+    }
+}
+
+static void bind_texture(Texture *t) {
+    const u8 texBanks[] = {reg_GX_VRAMCNT_A, reg_GX_VRAMCNT_B, reg_GX_VRAMCNT_C, reg_GX_VRAMCNT_D};
+    for (unsigned bank = 0; bank < 4; ++bank) {
+        u8 control = texBanks[bank];
+        if ((control & 0x87) == 0x83) {
+            add_texture_bank(&t->tiles[(control >> 3) & 3],
+                             PbW2_VramMap((void *)(uintptr_t)(HW_LCDC_VRAM_A + bank * 0x20000)));
+        }
+    }
+    if ((reg_GX_VRAMCNT_E & 0x87) == 0x83) {
+        const u8 *base = PbW2_VramMap((void *)HW_LCDC_VRAM_E);
+        for (unsigned i = 0; i < 4; ++i) add_texture_bank(&t->palette[i], base + 0x4000 * i);
+    }
+    const u8 palBanks[] = {reg_GX_VRAMCNT_F, reg_GX_VRAMCNT_G};
+    for (unsigned bank = 0; bank < 2; ++bank) {
+        u8 control = palBanks[bank];
+        if ((control & 0x87) == 0x83) {
+            unsigned offset = (control >> 3) & 3;
+            unsigned slot = (offset & 1) + ((offset & 2) << 1);
+            add_texture_bank(&t->palette[slot],
+                             PbW2_VramMap((void *)(uintptr_t)(HW_LCDC_VRAM_F + bank * 0x4000)));
+        }
+    }
+#ifdef PBW2_GPU_GEOMETRY
+    if (s_gpuFrame) {
+        const u8 regs[] = {texBanks[0], texBanks[1], texBanks[2], texBanks[3],
+                           reg_GX_VRAMCNT_E, palBanks[0], palBanks[1]};
+        for (unsigned bank = 0; bank < 7; ++bank) {
+            if ((regs[bank] & 0x87) == 0x83) {
+                t->key.banks |= (((regs[bank] >> 3) & 3) | 4) << (4 * bank);
+                t->key.revision[bank] = PbW2_VramBankRevision(bank);
+            }
+        }
+    }
+#endif
+}
+
 static Texture texture_state(void) {
     Texture t = {0};
     t.param = s_texture;
@@ -253,55 +345,38 @@ static Texture texture_state(void) {
     t.height = 8u << ((s_texture >> 23) & 7);
     t.address = (s_texture & 0xffffu) << 3;
     t.paletteAddress = (s_palette & 0x1fffu) << (t.format == GX_TEXFMT_PLTT4 ? 3 : 4);
-    if (t.format == GX_TEXFMT_NONE) return t;
-
-    const u8 texBanks[] = {reg_GX_VRAMCNT_A, reg_GX_VRAMCNT_B, reg_GX_VRAMCNT_C, reg_GX_VRAMCNT_D};
-    for (unsigned bank = 0; bank < 4; ++bank) {
-        u8 control = texBanks[bank];
-        if ((control & 0x87) == 0x83) {
-            t.tiles[(control >> 3) & 3] = PbW2_VramMap((void *)(uintptr_t)(HW_LCDC_VRAM_A + bank * 0x20000));
-        }
-    }
-    if ((reg_GX_VRAMCNT_E & 0x87) == 0x83) {
-        const u8 *base = PbW2_VramMap((void *)HW_LCDC_VRAM_E);
-        for (unsigned i = 0; i < 4; ++i) t.palette[i] = base + 0x4000 * i;
-    }
-    const u8 palBanks[] = {reg_GX_VRAMCNT_F, reg_GX_VRAMCNT_G};
-    for (unsigned bank = 0; bank < 2; ++bank) {
-        u8 control = palBanks[bank];
-        if ((control & 0x87) == 0x83) {
-            unsigned offset = (control >> 3) & 3;
-            unsigned slot = (offset & 1) + ((offset & 2) << 1);
-            t.palette[slot] = PbW2_VramMap((void *)(uintptr_t)(HW_LCDC_VRAM_F + bank * 0x4000));
-        }
-    }
 #ifdef PBW2_GPU_GEOMETRY
-    if (s_gpuFrame) {
-        const u8 regs[] = {texBanks[0], texBanks[1], texBanks[2], texBanks[3],
-                           reg_GX_VRAMCNT_E, palBanks[0], palBanks[1]};
+    if (s_gpuFrame && t.format) {
         t.key.param = t.param;
         t.key.palette = t.paletteAddress;
-        for (unsigned bank = 0; bank < 7; ++bank) {
-            if ((regs[bank] & 0x87) == 0x83) {
-                t.key.banks |= (((regs[bank] >> 3) & 3) | 4) << (4 * bank);
-                t.key.revision[bank] = PbW2_VramBankRevision(bank);
-            }
-        }
     }
 #endif
+    if (t.format) bind_texture(&t);
     return t;
 }
 
 static u8 texture_byte(const Texture *t, unsigned addr) {
-    unsigned slot = addr >> 17;
-    return slot < 4 && t->tiles[slot] ? t->tiles[slot][addr & 0x1ffff] : 0;
+    const TextureSlot *slot = &t->tiles[(addr >> 17) & 3];
+    unsigned offset = addr & 0x1ffff;
+    if (!slot->bank[0]) return 0;
+    /* Banks mapped to the same GX slot drive the data bus together. */
+    u8 value = slot->bank[0][offset];
+    for (unsigned i = 1; i < 4 && slot->bank[i]; ++i) value |= slot->bank[i][offset];
+    return value;
 }
 
 static u16 palette_color(const Texture *t, unsigned addr) {
     unsigned slot = addr >> 14;
-    if (slot >= 6 || !t->palette[slot]) return 0;
-    const u8 *p = t->palette[slot] + (addr & 0x3ffe);
-    return (p[0] | (p[1] << 8)) & 0x7fff;
+    if (slot >= 6 || !t->palette[slot].bank[0]) return 0;
+    unsigned offset = addr & 0x3ffe;
+    const TextureSlot *palette = &t->palette[slot];
+    const u8 *p = palette->bank[0] + offset;
+    unsigned color = p[0] | (p[1] << 8);
+    for (unsigned i = 1; i < 4 && palette->bank[i]; ++i) {
+        p = palette->bank[i] + offset;
+        color |= p[0] | (p[1] << 8);
+    }
+    return color & 0x7fff;
 }
 
 static u16 weighted_color(u16 a, u16 b, unsigned wa, unsigned wb, unsigned shift) {
@@ -327,7 +402,7 @@ static int texture_coord(float coord, int size, unsigned repeat, unsigned flip) 
 }
 
 static unsigned descriptor_address(unsigned block) {
-    return 0x20000 + ((block & 0x1ffff) >> 1) + ((block & 0x40000) ? 0x10000 : 0);
+    return 0x20000 + ((block & 0x1fffc) >> 1) + ((block & 0x40000) ? 0x10000 : 0);
 }
 
 static u16 texture_pixel(const Texture *t, unsigned x, unsigned y, unsigned *alpha) {
@@ -348,7 +423,10 @@ static u16 texture_pixel(const Texture *t, unsigned x, unsigned y, unsigned *alp
         unsigned descriptor = texture_byte(t, info) | (texture_byte(t, info + 1) << 8);
         unsigned addr = t->paletteAddress + (descriptor & 0x3fff) * 4;
         unsigned mode = descriptor >> 14;
-        index = (texture_byte(t, block + (y & 3)) >> (2 * (x & 3))) & 3;
+        /* Slot 1 holds descriptors and returns zero when addressed as a
+         * compressed texel stream. Texture addresses wrap after slot 3. */
+        u8 texels = (block & 0x60000) == 0x20000 ? 0 : texture_byte(t, block + (y & 3));
+        index = (texels >> (2 * (x & 3))) & 3;
         if (index == 3 && mode < 2) { *alpha = 0; return 0; }
         if (index >= 2 && (mode & 1)) {
             u16 a = palette_color(t, addr), b = palette_color(t, addr + 2);
@@ -465,7 +543,7 @@ static bool edge_against(unsigned i, unsigned id, float depth) {
 static void apply_edge_colors(void) {
     if (!s_edgeEnabled) return;
     unsigned clearId = (s_clearColor >> 24) & 63;
-    float clearDepth = s_clearDepth == 0x7fff ? 2.0f : s_clearDepth / 32767.0f;
+    float clearDepth = software_clear_depth();
     for (unsigned y = 0; y < HEIGHT; ++y) {
         for (unsigned x = 0; x < s_width; ++x) {
             unsigned i = y * s_width + x;
@@ -484,14 +562,14 @@ static void apply_edge_colors(void) {
     }
 }
 
-static void apply_fog(bool wBuffer) {
+static void apply_fog(void) {
     if (!s_fog.enabled) return;
     for (unsigned i = 0; i < s_width * HEIGHT; ++i) {
         unsigned attr = s_drawing.fogAlpha[i];
         if (!(attr & FOG_ENABLED)) continue;
         unsigned z;
         if (attr & FOG_CLEAR_DEPTH) z = (s_clearDepth << 9) | 511;
-        else if (wBuffer) z = s_drawing.fogDepthW[i];
+        else if (s_wBuffer) z = (unsigned)(4096.0f * s_drawing.depth[i]);
         else z = (unsigned)fmaxf(0.0f, s_drawing.depth[i] * 16777216.0f - 512.0f);
         unsigned density = fog_density(z);
         unsigned keep = 128 - density;
@@ -542,7 +620,15 @@ static void raster_triangle(Vertex a, Vertex b, Vertex c, const Texture *texture
             float w = 1.0f - u - v;
             if (u < 0.0f || v < 0.0f || w < 0.0f) continue;
             unsigned pixel = y * s_width + x;
-            float depth = a.z * u + b.z * v + c.z * w;
+            float clipW = 1.0f;
+            float depth;
+            if (s_wBuffer) {
+                /* Interpolate 1/W in screen space to recover clip-space W. */
+                if (!constantW) clipW = 1.0f / (a.w * u + b.w * v + c.w * w);
+                depth = clipW;
+            } else {
+                depth = a.z * u + b.z * v + c.z * w;
+            }
             bool depthPass = depth <= s_drawing.depth[pixel];
             if (shadowMask) {
                 if (!depthPass) s_drawing.shadowMask[pixel] = 1;
@@ -555,21 +641,21 @@ static void raster_triangle(Vertex a, Vertex b, Vertex c, const Texture *texture
                     continue;
             }
 
-            float reciprocal = constantW ? 1.0f : 1.0f / (a.w * u + b.w * v + c.w * w);
+            if (!s_wBuffer && !constantW) clipW = 1.0f / (a.w * u + b.w * v + c.w * w);
             unsigned ta = 31;
             u16 texel = 0x7fff;
             if (textured) {
-                texel = sample_texture(texture, (a.s * u + b.s * v + c.s * w) * reciprocal,
-                                       (a.t * u + b.t * v + c.t * w) * reciprocal, &ta);
+                texel = sample_texture(texture, (a.s * u + b.s * v + c.s * w) * clipW,
+                                       (a.t * u + b.t * v + c.t * w) * clipW, &ta);
             }
             unsigned alpha = decal ? polygonAlpha : ((ta + 1) * (polygonAlpha + 1) - 1) >> 5;
             if (alpha <= s_alphaRef) continue;
             if (alpha < 31 && s_drawing.translucentId[pixel] == translucentId) continue;
 
-            float red = (a.r * u + b.r * v + c.r * w) * reciprocal;
+            float red = (a.r * u + b.r * v + c.r * w) * clipW;
             unsigned r = (unsigned)(red + 0.5f);
-            unsigned g = (unsigned)((a.g * u + b.g * v + c.g * w) * reciprocal + 0.5f);
-            unsigned bl = (unsigned)((a.b * u + b.b * v + c.b * w) * reciprocal + 0.5f);
+            unsigned g = (unsigned)((a.g * u + b.g * v + c.g * w) * clipW + 0.5f);
+            unsigned bl = (unsigned)((a.b * u + b.b * v + c.b * w) * clipW + 0.5f);
             u16 color;
             if (toon) {
                 color = toon_color(texel, red, textured);
@@ -597,7 +683,6 @@ static void raster_triangle(Vertex a, Vertex b, Vertex c, const Texture *texture
                 }
                 unsigned clearDepth = depthWrite ? 0 : old & FOG_CLEAR_DEPTH;
                 s_drawing.fogAlpha[pixel] = coverage | clearDepth | (fog ? FOG_ENABLED : 0);
-                if (depthWrite) s_drawing.fogDepthW[pixel] = (unsigned)fminf(16777215.0f, 4096.0f * reciprocal);
             }
             s_drawing.color[pixel] = color | 0x8000;
             s_drawing.translucentId[pixel] = alpha < 31 ? translucentId : 0;
@@ -625,15 +710,15 @@ static uint32_t gpu_texel(const void *source, unsigned x, unsigned y) {
            | (((pixel >> 10) & 31) * 255u / 31) << 8 | alpha * 255 / 31;
 }
 
-static u32 range_revision(const u8 *const *banks, unsigned bankSize, unsigned count, unsigned address, unsigned size) {
+static u32 range_revision(const TextureSlot *slots, unsigned bankSize, unsigned count, unsigned address, unsigned size) {
     u32 latest = 0;
     while (size && address / bankSize < count) {
         unsigned slot = address / bankSize;
         unsigned offset = address % bankSize;
         unsigned chunk = bankSize - offset;
         if (chunk > size) chunk = size;
-        if (banks[slot]) {
-            u32 revision = PbW2_VramRangeRevision(banks[slot] + offset, chunk);
+        for (unsigned i = 0; i < 4 && slots[slot].bank[i]; ++i) {
+            u32 revision = PbW2_VramRangeRevision(slots[slot].bank[i] + offset, chunk);
             if (revision > latest) latest = revision;
         }
         address += chunk;
@@ -646,7 +731,7 @@ static u32 range_revision(const u8 *const *banks, unsigned bankSize, unsigned co
  * frame. Only the descriptor table determines a compressed texture's
  * palette span. Palette colors and texel indices have separate revisions. */
 typedef struct {
-    const u8 *descriptorBank;
+    TextureSlot descriptorSlot;
     unsigned address, bytes;
     u32 revision;
     unsigned paletteOffset, paletteBytes;
@@ -668,7 +753,13 @@ static PicaTextureKey texture_cache_key(const Texture *tex, unsigned material) {
     case GX_TEXFMT_DIRECT: bytes = 2 * count; break;
     case GX_TEXFMT_COMP4x4: bytes = count / 4; break;
     }
-    key.revision[0] = range_revision(tex->tiles, 0x20000, 4, tex->address, bytes);
+    unsigned firstChunk = 0x80000 - tex->address;
+    if (firstChunk > bytes) firstChunk = bytes;
+    key.revision[0] = range_revision(tex->tiles, 0x20000, 4, tex->address, firstChunk);
+    if (firstChunk < bytes) {
+        u32 wrapped = range_revision(tex->tiles, 0x20000, 4, 0, bytes - firstChunk);
+        if (wrapped > key.revision[0]) key.revision[0] = wrapped;
+    }
     if (tex->format == GX_TEXFMT_COMP4x4) {
         /* Each compressed block names its own palette. Track the referenced
          * interval and the descriptor table as well as the texel indices. */
@@ -681,7 +772,7 @@ static PicaTextureKey texture_cache_key(const Texture *tex, unsigned material) {
             block += chunk;
         }
         CompressedPaletteSpan *span = &s_paletteSpans[material];
-        if (span->descriptorBank != tex->tiles[1] || span->address != tex->address ||
+        if (memcmp(&span->descriptorSlot, &tex->tiles[1], sizeof span->descriptorSlot) || span->address != tex->address ||
             span->bytes != bytes || span->revision != key.revision[1]) {
             unsigned minPalette = 0x10000, maxPalette = 0;
             for (unsigned block = tex->address; block < tex->address + bytes; block += 4) {
@@ -724,10 +815,72 @@ static float repeat_shift(float a, float b, float c, float period) {
     return min < 0.0f ? ceilf(-min / period) * period : 0.0f;
 }
 
-static bool render_with_pica(void) {
-    if (!s_gpuCount || !PbW2_PicaBegin(s_alphaRef)) return false;
+static bool render_with_pica(u32 swapFlags, bool afterVBlank) {
+    if (!s_gpuCount) return false;
+    PicaTextureKey textures[GPU_TEXTURES_MAX] = {0};
+    s_nativeFrame = s_width == WIDE_WIDTH && !(reg_GX_DISPCAPCNT & REG_GX_DISPCAPCNT_E_MASK);
+    PicaFrameKey frame = {
+        s_gpuCount, s_gpuMaterialCount, s_width, s_alphaRef, s_alphaTest | (s_nativeFrame << 1) | ((swapFlags & 3) << 2),
+        s_clearColor, s_clearDepth,
+    };
+    bool trace = s_sceneSwaps < 4 || s_sceneSwaps == 7;
+    Texture bindings = {0};
+    unsigned changedAtVBlank = 0;
+    if (afterVBlank) bind_texture(&bindings);
+    for (unsigned i = 0; i < s_gpuMaterialCount; ++i) {
+        Texture *tex = &s_gpuMaterials[i];
+        if (!tex->format) continue;
+        if (afterVBlank) {
+            if (trace && (tex->key.banks != bindings.key.banks ||
+                memcmp(tex->key.revision, bindings.key.revision, sizeof tex->key.revision)))
+                ++changedAtVBlank;
+            if (tex->key.banks != bindings.key.banks) {
+                memcpy(tex->tiles, bindings.tiles, sizeof tex->tiles);
+                memcpy(tex->palette, bindings.palette, sizeof tex->palette);
+                tex->key.banks = bindings.key.banks;
+            }
+        } else {
+            /* Outside a queued VBlank swap, keep submission-time inputs. */
+            for (unsigned bank = 0; bank < 7; ++bank) {
+                if ((tex->key.banks & (4u << (4 * bank))) &&
+                    tex->key.revision[bank] != PbW2_VramBankRevision(bank)) return false;
+            }
+        }
+        textures[i] = texture_cache_key(tex, i);
+    }
+    if (trace && afterVBlank)
+        Log_Line("GPU", "scene frame %u: VBlank changed banks for %u queued materials",
+                 s_sceneSwaps + 1, changedAtVBlank);
+    /* Reuse the last published image only when all render inputs agree.
+     * Texture revision keys include palette and compressed descriptor data. */
+    if (s_previousGpuFrame && !memcmp(&frame, &s_previousFrame, sizeof frame) &&
+        !memcmp(textures, s_previousTextures, s_gpuMaterialCount * sizeof(*textures)) &&
+        !memcmp(s_gpuTriangles, s_previousTriangles, s_gpuCount * sizeof(*s_gpuTriangles))) {
+        s_reusedFrame = true;
+        if (trace) Log_Line("GPU", "scene frame %u: reuses previous 3D output", s_sceneSwaps + 1);
+        return true;
+    }
+
+    bool wBuffer = (swapFlags & (GX_BUFFERMODE_W << 1)) != 0;
+    float depthScale = 0.0f;
+    float clearDepth = s_clearDepth / 32767.0f;
+    if (wBuffer) {
+        float clearW = clear_w();
+        float maxInvW = 1.0f / clearW;
+        for (unsigned i = 0; i < s_gpuCount; ++i) {
+            const Vertex *v = s_gpuTriangles[i].vertex;
+            for (unsigned j = 0; j < 3; ++j) {
+                if (v[j].w > maxInvW) maxInvW = v[j].w;
+            }
+        }
+        depthScale = 0.5f / maxInvW;
+        clearDepth = 1.0f - depthScale / clearW;
+    }
+
+    if (!PbW2_PicaBegin(s_alphaRef)) return false;
     int gpuSlots[GPU_TEXTURES_MAX];
     float invWidth[GPU_TEXTURES_MAX], invHeight[GPU_TEXTURES_MAX];
+    unsigned formats = 0, textured = 0, blank = 0;
     for (unsigned i = 0; i < s_gpuMaterialCount; ++i) {
         const Texture *tex = &s_gpuMaterials[i];
         gpuSlots[i] = -1;
@@ -735,15 +888,14 @@ static bool render_with_pica(void) {
         invWidth[i] = 1.0f / tex->width;
         invHeight[i] = 1.0f / tex->height;
         if (tex->format) {
-            /* An upload between submission and replay must not cache the new
-             * pixels under the revision recorded for the triangle. */
-            for (unsigned bank = 0; bank < 7; ++bank) {
-                if ((tex->key.banks & (4u << (4 * bank)))
-                    && tex->key.revision[bank] != PbW2_VramBankRevision(bank)) return false;
-            }
-            PicaTexture image = {tex->width, tex->height, tex->param, tex, gpu_texel, texture_cache_key(tex, i)};
+            PicaTexture image = {tex->width, tex->height, tex->param, tex, gpu_texel, textures[i]};
             gpuSlots[i] = PbW2_PicaUpload(&image);
             if (gpuSlots[i] < 0) return false;
+            if (trace) {
+                formats |= 1u << tex->format;
+                ++textured;
+                if (!PbW2_PicaTextureAlpha(gpuSlots[i])) ++blank;
+            }
         }
     }
     for (unsigned i = 0; i < s_gpuCount; ++i) {
@@ -760,7 +912,10 @@ static bool render_with_pica(void) {
             float w = 1.0f / p->w;
             vertex[j] = (PicaVertex){
                 (p->x / (s_width / 2.0f) - 1.0f) * w, (p->y / (HEIGHT / 2.0f) - 1.0f) * w,
-                -p->z * w, w, p->s * w * invWidth[material], p->t * w * invHeight[material],
+                /* After division this gives depth 1 - scale / W. PICA
+                 * interpolates 1/W in screen space, preserving W order. */
+                wBuffer ? depthScale - w : -p->z * w, w,
+                p->s * w * invWidth[material], p->t * w * invHeight[material],
                 p->r * w / 31.0f, p->g * w / 31.0f, p->b * w / 31.0f, alphaFloat,
             };
         }
@@ -809,9 +964,27 @@ static bool render_with_pica(void) {
     u32 clear = s_clearColor;
     u32 color = ((clear & 31) * 255 / 31) << 24 | (((clear >> 5) & 31) * 255 / 31) << 16
                 | (((clear >> 10) & 31) * 255 / 31) << 8 | ((clear >> 16) & 31) * 255 / 31;
-    s_nativeFrame = s_width == WIDE_WIDTH && !(reg_GX_DISPCAPCNT & REG_GX_DISPCAPCNT_E_MASK);
-    PbW2_PicaSetFrameWidth(s_width, s_nativeFrame ? s_nativeFrames[s_nativeDisplayed ^ 1] : NULL);
-    return PbW2_PicaFinish(color, s_clearDepth / 32767.0f, s_drawing.color);
+    if (s_nativeFrame) {
+        lock_display();
+        for (s_nativeDraw = 0; s_nativeDraw < NATIVE_BUFFERS; ++s_nativeDraw) {
+            if (s_nativeDraw != s_nativeDisplayed && s_nativeDraw != s_nativeReader) break;
+        }
+        unlock_display();
+    }
+    PbW2_PicaSetFrameWidth(s_width, s_nativeFrame ? s_nativeFrames[s_nativeDraw] : NULL);
+    if (trace) {
+        Log_Line("GPU", "scene frame %u: %u triangles, %u/%u materials textured (%u transparent), formats=%02x, width=%u%s",
+                 s_sceneSwaps + 1, s_gpuCount, textured, s_gpuMaterialCount, blank, formats, s_width,
+                 s_nativeFrame ? " native" : "");
+    }
+    if (!PbW2_PicaFinish(color, clearDepth, s_drawing.color)) return false;
+    s_previousGpuFrame = true;
+    s_previousFrame = frame;
+    memcpy(s_previousTextures, textures, s_gpuMaterialCount * sizeof(*textures));
+    GpuTriangle *finished = s_gpuTriangles;
+    s_gpuTriangles = s_previousTriangles;
+    s_previousTriangles = finished;
+    return true;
 }
 #endif
 
@@ -1030,6 +1203,57 @@ static u16 lit_color(const s16 xyz[3], const MtxFx44 *matrix) {
     return color;
 }
 
+static void publish_swap(u32 flags, bool afterVBlank) {
+#ifndef PBW2_GPU_GEOMETRY
+    (void)flags;
+    (void)afterVBlank;
+#endif
+    start_frame();
+#ifdef PBW2_GPU_GEOMETRY
+    if (s_gpuFrame && !render_with_pica(flags, afterVBlank)) {
+        if (s_gpuCount) report_gpu_fallback(GPU_FALLBACK_BATCH, "batch requires software rendering");
+        s_wBuffer = (flags & (GX_BUFFERMODE_W << 1)) != 0;
+        replay_on_cpu();
+    }
+    if (!s_gpuFrame) {
+#endif
+        apply_edge_colors();
+        apply_fog();
+#ifdef PBW2_GPU_GEOMETRY
+    }
+    if (!s_gpuFrame && (s_sceneSwaps < 4 || s_sceneSwaps == 7))
+        Log_Line("GPU", "scene frame %u: software, width=%u", s_sceneSwaps + 1, s_width);
+    if (s_sceneSwaps < 8) ++s_sceneSwaps;
+    report_geometry_rate(s_gpuFrame, s_reusedFrame);
+    if (!s_gpuFrame) s_previousGpuFrame = false;
+    if (s_reusedFrame) {
+        s_frameStarted = s_inPrimitive = 0;
+        return;
+    }
+#endif
+    lock_display();
+#ifdef PBW2_GPU_GEOMETRY
+    s_haveNative = s_gpuFrame && s_nativeFrame;
+    if (s_haveNative) s_nativeDisplayed = s_nativeDraw;
+#endif
+    s_displayWidth = s_width;
+    memcpy(s_display, s_drawing.color, s_width * HEIGHT * sizeof(*s_display));
+    unlock_display();
+    s_frameStarted = s_inPrimitive = 0;
+}
+
+void PbW2_G3RasterDeferSwap(bool enabled) {
+#ifdef PBW2_GPU_GEOMETRY
+    s_deferSwap = enabled;
+    if (!enabled && s_pendingSwap) {
+        s_pendingSwap = false;
+        publish_swap(s_pendingSwapFlags, true);
+    }
+#else
+    (void)enabled;
+#endif
+}
+
 void PbW2_G3RasterCommand(u32 op, const u32 *p, const MtxFx44 *clip,
                          const MtxFx44 *texture, const MtxFx44 *vector) {
     switch (op) {
@@ -1091,6 +1315,9 @@ void PbW2_G3RasterCommand(u32 op, const u32 *p, const MtxFx44 *clip,
         for (unsigned i = 0; i < sizeof s_shininess; ++i) s_shininess[i] = p[i / 4] >> (8 * (i & 3));
         return;
     case G3OP_BEGIN:
+#ifdef PBW2_GPU_GEOMETRY
+        if (s_pendingSwap) PbW2_G3RasterDeferSwap(false);
+#endif
         start_frame();
         s_widePrimitive = s_width == WIDE_WIDTH && s_viewport == GX_PACK_VIEWPORT_PARAM(0, 0, WIDTH - 1, HEIGHT - 1);
         s_primitive = p[0] & 3;
@@ -1100,29 +1327,17 @@ void PbW2_G3RasterCommand(u32 op, const u32 *p, const MtxFx44 *clip,
         return;
     case G3OP_END: s_inPrimitive = 0; return;
     case 0x50:
-        start_frame();
 #ifdef PBW2_GPU_GEOMETRY
-        if (s_gpuFrame && !render_with_pica()) {
-            if (s_gpuCount) report_gpu_fallback(GPU_FALLBACK_BATCH, "batch requires software rendering");
-            replay_on_cpu();
+        if (s_pendingSwap) PbW2_G3RasterDeferSwap(false);
+        if (s_deferSwap && s_gpuFrame && s_frameStarted && s_gpuCount &&
+            !(reg_GX_DISPCAPCNT & REG_GX_DISPCAPCNT_E_MASK)) {
+            s_pendingSwap = true;
+            s_pendingSwapFlags = p[0];
+            s_inPrimitive = 0;
+            return;
         }
-        if (!s_gpuFrame) {
 #endif
-            apply_edge_colors();
-            apply_fog((p[0] & (GX_BUFFERMODE_W << 1)) != 0);
-#ifdef PBW2_GPU_GEOMETRY
-        }
-        report_geometry_rate(s_gpuFrame);
-#endif
-        lock_display();
-#ifdef PBW2_GPU_GEOMETRY
-        s_haveNative = s_gpuFrame && s_nativeFrame;
-        if (s_haveNative) s_nativeDisplayed ^= 1;
-#endif
-        s_displayWidth = s_width;
-        memcpy(s_display, s_drawing.color, s_width * HEIGHT * sizeof(*s_display));
-        unlock_display();
-        s_frameStarted = s_inPrimitive = 0;
+        publish_swap(p[0], false);
         return;
     case 0x60: s_viewport = p[0]; return;
     default: return;
@@ -1131,13 +1346,13 @@ void PbW2_G3RasterCommand(u32 op, const u32 *p, const MtxFx44 *clip,
 }
 
 bool PbW2_G3RasterComposite(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawColors, u16 *sides, u16 backdrop,
-                            u16 *native, bool *haveNative, u32 *ink) {
+                            const u16 **native, u32 *ink) {
     lock_display();
-    if (haveNative) *haveNative = false;
+    if (native) *native = NULL;
 #ifdef PBW2_GPU_GEOMETRY
-    if (native && haveNative && s_haveNative) {
-        memcpy(native, s_nativeFrames[s_nativeDisplayed], sizeof s_nativeFrames[0]);
-        *haveNative = true;
+    if (native && s_haveNative && s_nativeReader == NATIVE_BUFFERS) {
+        s_nativeReader = s_nativeDisplayed;
+        *native = s_nativeFrames[s_nativeReader];
     }
 #endif
     for (unsigned y = 0; y < HEIGHT; ++y) {
@@ -1145,7 +1360,9 @@ bool PbW2_G3RasterComposite(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawC
         if (sides && s_displayWidth == WIDE_WIDTH) {
             for (int x = 0; x < 64; ++x) {
                 u16 p = row[x < 32 ? x - 32 : WIDTH + x - 32];
-                sides[y * 64 + x] = p & 0x8000 ? ((p & 31) << 11) | ((p & 0x3e0) << 1) | ((p >> 10) & 31) : backdrop;
+                unsigned edge = x < 32 ? 0 : WIDTH - 1;
+                bool visible = !window || (window[y * WIDTH + edge] & GX_WND_PLANEMASK_BG0);
+                sides[y * 64 + x] = visible && (p & 0x8000) ? ((p & 31) << 11) | ((p & 0x3e0) << 1) | ((p >> 10) & 31) : backdrop;
             }
         }
         for (unsigned x = 0; x < WIDTH; ++x) {
@@ -1165,6 +1382,14 @@ bool PbW2_G3RasterComposite(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawC
     return wide;
 }
 
+void PbW2_G3ReleaseNative(void) {
+#ifdef PBW2_GPU_GEOMETRY
+    lock_display();
+    s_nativeReader = NATIVE_BUFFERS;
+    unlock_display();
+#endif
+}
+
 void PbW2_G3RasterCapture(u16 *rgb555) {
     lock_display();
     for (unsigned y = 0; y < HEIGHT; ++y)
@@ -1176,7 +1401,7 @@ void PbW2_G3RasterBeforeLcdcWrite(u32 address, u32 bytes) {
 #ifdef PBW2_GPU_GEOMETRY
     /* The CPU backend samples at submission. Resolve queued geometry while
      * its original texture bytes are still present. */
-    if (s_frameStarted && s_gpuFrame && s_gpuCount &&
+    if (!s_pendingSwap && s_frameStarted && s_gpuFrame && s_gpuCount &&
         (s_gpuSourceBanks & PbW2_VramLcdcBankMask(address, bytes))) {
         replay_on_cpu();
     }

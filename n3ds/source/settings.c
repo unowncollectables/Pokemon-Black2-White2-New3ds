@@ -69,6 +69,7 @@ void Settings_Init(const char *path) {
         if (!s_pending) load_display(s_path, &s_display);
     }
     s_persisted = s_display;
+    Log_Line("CFG", "display flags loaded: %02lx", (unsigned long)s_display);
 #ifdef PBW2_GPU_GEOMETRY
     PbW2_G3SetWide((s_display & DISPLAY_WIDE_FIELD) != 0);
     PbW2_PicaSetOptions((s_display & (DISPLAY_PICA_GEOMETRY | DISPLAY_PICA_NO_EDGES)) != 0,
@@ -146,6 +147,7 @@ bool Settings_Handle(uint32_t down, uint32_t held) {
         PbW2_PicaSetOptions((s_display & (DISPLAY_PICA_GEOMETRY | DISPLAY_PICA_NO_EDGES)) != 0,
                             (s_display & DISPLAY_PICA_NO_EDGES) != 0);
 #endif
+        save_display();
         Log_Line("CFG", "%s %s", s_options[s_row].label, s_display & s_options[s_row].flag ? "on" : "off");
     }
     return true;

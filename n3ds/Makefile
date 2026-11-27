@@ -70,6 +70,7 @@ LIB_GAME_G3D := \
 	nsbca.o nsbma.o nsbta.o nsbtp.o nsbva.o sbc.o cgtool.o basic.o maya.o si3d.o 3dsmax.o xsi.o
 LIB_GAME_SPL := spl_anim.o spl_behavior.o spl_draw.o spl_emit.o spl_emitter.o spl_list.o spl_manager.o spl_random.o
 LIB_GAME_OBJS := \
+	../build/n3ds/$(GAME_SYM)/obj/lib/nitro/src/snd/snd_util.o \
 	../build/n3ds/$(GAME_SYM)/obj/lib/nitro/src/gx/gx_load2d.o \
 	$(foreach size,22 33 43 44,../build/n3ds/$(GAME_SYM)/obj/lib/nitro/src/fx/fx_mtx$(size).o) \
 	$(foreach o,$(LIB_GAME_G2D),../build/n3ds/$(GAME_SYM)/obj/lib/nnsys/src/g2d/$(o)) \
@@ -99,7 +100,7 @@ G3_TEST_SRC := tests/g3_fidelity.c nitro/g3_pica.c nitro/g3_intercept.c nitro/g3
 	nitro/vram_host.c nitro/vram_dma.c nitro/affine_track.c nitro/cp_div_host.c nitro/fx_host.c nitro/game_text.c
 G3_TEST_MTX := $(foreach size,43 44,../build/n3ds/$(GAME_SYM)/obj/lib/nitro/src/fx/fx_mtx$(size).o)
 $(BUILD)/g3_fidelity.elf: $(G3_TEST_SRC) $(G3_TEST_MTX) $(GPU_SHADER)
-	$(CC) $(CFLAGS) $(GAMEFLAGS) $^ $(LDFLAGS) -Wl,--wrap=PbW2_PicaFinish $(LIBPATHS) $(LIBS) -o $@
+	$(CC) $(CFLAGS) $(GAMEFLAGS) $^ $(LDFLAGS) -Wl,--wrap=PbW2_PicaFinish,--wrap=C3D_TexInitWithParams $(LIBPATHS) $(LIBS) -o $@
 
 $(BUILD)/g3_fidelity.3dsx: $(BUILD)/g3_fidelity.elf
 	3dsxtool $< $@
@@ -172,9 +173,9 @@ $(BUILD)/wave_out.3dsx: $(BUILD)/wave_out.elf
 .PHONY: test-seq-voices
 test-seq-voices: $(BUILD)/seq_voices.3dsx
 
-$(BUILD)/seq_voices.elf: tests/seq_voices.c nitro/seq_player.c
+$(BUILD)/seq_voices.elf: tests/seq_voices.c nitro/seq_player.c ../lib/nitro/src/snd/snd_util.c
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -DPBW2_LINK_GAME -I$(CURDIR)/../lib/nnsys/include $< $(LDFLAGS) $(LIBPATHS) $(LIBS) -o $@
+	$(CC) $(CFLAGS) -DPBW2_LINK_GAME -I$(CURDIR)/../lib/nnsys/include $< ../lib/nitro/src/snd/snd_util.c $(LDFLAGS) $(LIBPATHS) $(LIBS) -o $@
 
 $(BUILD)/seq_voices.3dsx: $(BUILD)/seq_voices.elf
 	3dsxtool $< $@

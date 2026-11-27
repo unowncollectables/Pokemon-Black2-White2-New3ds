@@ -10,9 +10,18 @@ void PbW2_G3SetWide(bool enabled);
 bool PbW2_G3WideCamera(void);
 
 void PbW2_G3RasterReset(void);
+/* Software rasterization can begin before the GX swap command. */
+void PbW2_G3RasterSetWBuffer(bool enabled);
+/* Hold a queued GPU swap until the VBlank texture transfers finish. */
+void PbW2_G3RasterDeferSwap(bool enabled);
+/* Restart bounded renderer diagnostics at the start of a field zone. */
+void PbW2_G3RasterTraceScene(void);
 void PbW2_G3RasterCommand(u32 opcode, const u32 *args, const MtxFx44 *clip,
                          const MtxFx44 *texture, const MtxFx44 *vector);
-bool PbW2_G3RasterComposite(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawColors, u16 *sides, u16 backdrop, u16 *native, bool *haveNative, u32 *ink);
+/* The single presenter can borrow the native frame until it finishes composing. */
+bool PbW2_G3RasterComposite(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawColors, u16 *sides, u16 backdrop,
+                            const u16 **native, u32 *ink);
+void PbW2_G3ReleaseNative(void);
 /* Copy the DS 3D layer, including the validity bit used for capture. */
 void PbW2_G3RasterCapture(u16 *rgb555);
 /* Called on the geometry thread before an upload overwrites LCDC memory. */
