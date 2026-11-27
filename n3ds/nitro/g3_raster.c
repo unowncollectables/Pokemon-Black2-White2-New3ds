@@ -101,11 +101,22 @@ static struct {
 enum { FOG_ENABLED = 0x80, FOG_CLEAR_DEPTH = 0x40 };
 #ifdef PBW2_GPU_GEOMETRY
 enum { GPU_TRIANGLES_MAX = 8192, GPU_TEXTURES_MAX = 128 };
-static struct {
+typedef struct {
     Vertex vertex[3];
     u32 polygon;
     unsigned material;
-} s_gpuTriangles[GPU_TRIANGLES_MAX];
+} GpuTriangle;
+
+typedef struct {
+    unsigned triangles, materials, width, alphaRef, flags;
+    u32 clearColor, clearDepth;
+} PicaFrameKey;
+
+static GpuTriangle s_geometry[2][GPU_TRIANGLES_MAX];
+static GpuTriangle *s_gpuTriangles = s_geometry[0], *s_previousTriangles = s_geometry[1];
+static PicaFrameKey s_previousFrame;
+static PicaTextureKey s_previousTextures[GPU_TEXTURES_MAX];
+static bool s_previousGpuFrame, s_reusedFrame;
 static Texture s_gpuMaterials[GPU_TEXTURES_MAX];
 static unsigned s_gpuCount, s_gpuMaterialCount, s_lastMaterial;
 static unsigned s_sceneSwaps;
@@ -127,24 +138,26 @@ static void report_gpu_fallback(unsigned reason, const char *name) {
     Log_Line("GPU", "software geometry fallback: %s", name);
 }
 
-static void report_geometry_rate(bool gpu) {
+static void report_geometry_rate(bool gpu, bool reused) {
     extern u64 svcGetSystemTick(void);
     const u64 ticksPerSecond = 268111856;
     static u64 windowStart;
-    static unsigned frames, gpuFrames;
+    static unsigned frames, gpuFrames, reusedFrames;
     u64 now = svcGetSystemTick();
     if (!windowStart) {
         windowStart = now;
         return;
     }
-    gpuFrames += gpu;
+    gpuFrames += gpu && !reused;
+    reusedFrames += reused;
     ++frames;
     u64 elapsed = now - windowStart;
     if (elapsed >= 4 * ticksPerSecond) {
         unsigned rate = (unsigned)(frames * ticksPerSecond * 10 / elapsed);
-        Log_Line("PERF", "GX swaps %u.%u fps (%u GPU, %u CPU)", rate / 10, rate % 10, gpuFrames, frames - gpuFrames);
+        Log_Line("PERF", "GX swaps %u.%u fps (%u GPU, %u CPU, %u reused)",
+                 rate / 10, rate % 10, gpuFrames, frames - gpuFrames - reusedFrames, reusedFrames);
         windowStart = now;
-        frames = gpuFrames = 0;
+        frames = gpuFrames = reusedFrames = 0;
     }
 }
 #endif
@@ -163,6 +176,7 @@ void PbW2_G3RasterReset(void) {
     s_displayWidth = WIDTH;
 #ifdef PBW2_GPU_GEOMETRY
     s_haveNative = false;
+    s_previousGpuFrame = false;
 #endif
     unlock_display();
     s_frameStarted = s_inPrimitive = 0;
@@ -233,6 +247,7 @@ static void start_frame(void) {
     }
     s_frameStarted = 1;
 #ifdef PBW2_GPU_GEOMETRY
+    s_reusedFrame = false;
     s_gpuFrame = PbW2_PicaEnabled();
     if (s_gpuFrame && s_edgeEnabled && !PbW2_PicaSkipEdges()) {
         report_gpu_fallback(GPU_FALLBACK_EDGE, "edge marking");
@@ -737,11 +752,38 @@ static float repeat_shift(float a, float b, float c, float period) {
     return min < 0.0f ? ceilf(-min / period) * period : 0.0f;
 }
 
-static bool render_with_pica(void) {
-    if (!s_gpuCount || !PbW2_PicaBegin(s_alphaRef)) return false;
+static bool render_with_pica(u32 swapFlags) {
+    if (!s_gpuCount) return false;
+    PicaTextureKey textures[GPU_TEXTURES_MAX] = {0};
+    s_nativeFrame = s_width == WIDE_WIDTH && !(reg_GX_DISPCAPCNT & REG_GX_DISPCAPCNT_E_MASK);
+    PicaFrameKey frame = {
+        s_gpuCount, s_gpuMaterialCount, s_width, s_alphaRef, s_alphaTest | (s_nativeFrame << 1) | ((swapFlags & 3) << 2),
+        s_clearColor, s_clearDepth,
+    };
+    bool trace = s_sceneSwaps < 4 || s_sceneSwaps == 7;
+    for (unsigned i = 0; i < s_gpuMaterialCount; ++i) {
+        const Texture *tex = &s_gpuMaterials[i];
+        if (!tex->format) continue;
+        /* Reject an upload between geometry submission and rendering. */
+        for (unsigned bank = 0; bank < 7; ++bank) {
+            if ((tex->key.banks & (4u << (4 * bank))) &&
+                tex->key.revision[bank] != PbW2_VramBankRevision(bank)) return false;
+        }
+        textures[i] = texture_cache_key(tex, i);
+    }
+    /* Reuse the last published image only when all render inputs agree.
+     * Texture revision keys include palette and compressed descriptor data. */
+    if (s_previousGpuFrame && !memcmp(&frame, &s_previousFrame, sizeof frame) &&
+        !memcmp(textures, s_previousTextures, s_gpuMaterialCount * sizeof(*textures)) &&
+        !memcmp(s_gpuTriangles, s_previousTriangles, s_gpuCount * sizeof(*s_gpuTriangles))) {
+        s_reusedFrame = true;
+        if (trace) Log_Line("GPU", "scene frame %u: reuses previous 3D output", s_sceneSwaps + 1);
+        return true;
+    }
+
+    if (!PbW2_PicaBegin(s_alphaRef)) return false;
     int gpuSlots[GPU_TEXTURES_MAX];
     float invWidth[GPU_TEXTURES_MAX], invHeight[GPU_TEXTURES_MAX];
-    bool trace = s_sceneSwaps < 4 || s_sceneSwaps == 7;
     unsigned formats = 0, textured = 0, blank = 0;
     for (unsigned i = 0; i < s_gpuMaterialCount; ++i) {
         const Texture *tex = &s_gpuMaterials[i];
@@ -750,13 +792,7 @@ static bool render_with_pica(void) {
         invWidth[i] = 1.0f / tex->width;
         invHeight[i] = 1.0f / tex->height;
         if (tex->format) {
-            /* An upload between submission and replay must not cache the new
-             * pixels under the revision recorded for the triangle. */
-            for (unsigned bank = 0; bank < 7; ++bank) {
-                if ((tex->key.banks & (4u << (4 * bank)))
-                    && tex->key.revision[bank] != PbW2_VramBankRevision(bank)) return false;
-            }
-            PicaTexture image = {tex->width, tex->height, tex->param, tex, gpu_texel, texture_cache_key(tex, i)};
+            PicaTexture image = {tex->width, tex->height, tex->param, tex, gpu_texel, textures[i]};
             gpuSlots[i] = PbW2_PicaUpload(&image);
             if (gpuSlots[i] < 0) return false;
             if (trace) {
@@ -829,7 +865,6 @@ static bool render_with_pica(void) {
     u32 clear = s_clearColor;
     u32 color = ((clear & 31) * 255 / 31) << 24 | (((clear >> 5) & 31) * 255 / 31) << 16
                 | (((clear >> 10) & 31) * 255 / 31) << 8 | ((clear >> 16) & 31) * 255 / 31;
-    s_nativeFrame = s_width == WIDE_WIDTH && !(reg_GX_DISPCAPCNT & REG_GX_DISPCAPCNT_E_MASK);
     if (s_nativeFrame) {
         lock_display();
         for (s_nativeDraw = 0; s_nativeDraw < NATIVE_BUFFERS; ++s_nativeDraw) {
@@ -843,7 +878,14 @@ static bool render_with_pica(void) {
                  s_sceneSwaps + 1, s_gpuCount, textured, s_gpuMaterialCount, blank, formats, s_width,
                  s_nativeFrame ? " native" : "");
     }
-    return PbW2_PicaFinish(color, s_clearDepth / 32767.0f, s_drawing.color);
+    if (!PbW2_PicaFinish(color, s_clearDepth / 32767.0f, s_drawing.color)) return false;
+    s_previousGpuFrame = true;
+    s_previousFrame = frame;
+    memcpy(s_previousTextures, textures, s_gpuMaterialCount * sizeof(*textures));
+    GpuTriangle *finished = s_gpuTriangles;
+    s_gpuTriangles = s_previousTriangles;
+    s_previousTriangles = finished;
+    return true;
 }
 #endif
 
@@ -1134,7 +1176,7 @@ void PbW2_G3RasterCommand(u32 op, const u32 *p, const MtxFx44 *clip,
     case 0x50:
         start_frame();
 #ifdef PBW2_GPU_GEOMETRY
-        if (s_gpuFrame && !render_with_pica()) {
+        if (s_gpuFrame && !render_with_pica(p[0])) {
             if (s_gpuCount) report_gpu_fallback(GPU_FALLBACK_BATCH, "batch requires software rendering");
             replay_on_cpu();
         }
@@ -1147,7 +1189,12 @@ void PbW2_G3RasterCommand(u32 op, const u32 *p, const MtxFx44 *clip,
         if (!s_gpuFrame && (s_sceneSwaps < 4 || s_sceneSwaps == 7))
             Log_Line("GPU", "scene frame %u: software, width=%u", s_sceneSwaps + 1, s_width);
         if (s_sceneSwaps < 8) ++s_sceneSwaps;
-        report_geometry_rate(s_gpuFrame);
+        report_geometry_rate(s_gpuFrame, s_reusedFrame);
+        if (!s_gpuFrame) s_previousGpuFrame = false;
+        if (s_reusedFrame) {
+            s_frameStarted = s_inPrimitive = 0;
+            return;
+        }
 #endif
         lock_display();
 #ifdef PBW2_GPU_GEOMETRY

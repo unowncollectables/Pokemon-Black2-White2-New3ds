@@ -16,3 +16,4 @@
 | DS stereo pan and channel gain (reference) | [Pokemon-HeartGold-SoulSilver-New3ds](https://github.com/unowncollectables/Pokemon-HeartGold-SoulSilver-New3ds) `pspoke-patches/0222` and [melonDS SPU](https://github.com/melonDS-emu/melonDS/blob/master/src/SPU.h) | GPL-3.0-or-later |
 | Early OBJ bounds clipping (reference) | [Pokemon-HeartGold-SoulSilver-New3ds](https://github.com/unowncollectables/Pokemon-HeartGold-SoulSilver-New3ds) `soulsilver3ds/platform/gpucomp.c` | GPL-3.0-or-later |
 | Sub-engine 2D input snapshot and composite reuse (reference) | [Pokemon-HeartGold-SoulSilver-New3ds](https://github.com/unowncollectables/Pokemon-HeartGold-SoulSilver-New3ds) `soulsilver3ds/platform/render3ds.cpp` | GPL-3.0-or-later |
+| Reuse of identical GPU frames (reference) | [Pokemon-HeartGold-SoulSilver-New3ds](https://github.com/unowncollectables/Pokemon-HeartGold-SoulSilver-New3ds) `soulsilver3ds/platform/g3gpu.c` | GPL-3.0-or-later |

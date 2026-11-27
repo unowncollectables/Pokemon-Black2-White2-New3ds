@@ -1164,6 +1164,53 @@ static bool check_sub_cache(void) {
     return bottom[0] == 0x001f;
 }
 
+static bool check_frame_reuse(void) {
+    const unsigned center = 96 * 256 + 128;
+    const u16 red[] = {0, GX_RGB(31, 0, 0)};
+    const u16 blue[] = {0, GX_RGB(0, 0, 31)};
+    memset(pbw2_io, 0, sizeof pbw2_io);
+    PbW2_VramHostInit();
+    PbW2_G3InterceptInit();
+    PbW2_PicaSetOptions(true, false);
+    reg_GX_VRAMCNT_A = GX_VRAMCNT(3, 0);
+    reg_GX_VRAMCNT_E = GX_VRAMCNT(3, 0);
+    reg_G3X_CLEAR_DEPTH = 0x7fff;
+    memset(PbW2_VramMap((void *)HW_LCDC_VRAM_A), 0x11, 32);
+    PbW2_VramNoteLcdcWrite(HW_LCDC_VRAM_A, 32);
+    if (!PbW2_TryDmaCopy32(red, (void *)HW_LCDC_VRAM_E, sizeof red)) return false;
+    cmd(G3OP_TEXIMAGE_PARAM, GX_TEXFMT_PLTT16 << 26);
+    unsigned before = s_gpuFrames;
+    for (unsigned i = 0; i < 8; ++i) {
+        triangle(0x7fff, 0);
+        cmd(0x50, 0);
+        PbW2_G3RasterCapture(pixels);
+        if (pixels[center] != 0x801f) return false;
+    }
+    if (s_gpuFrames != before + 1) return false;
+
+    if (!PbW2_TryDmaCopy32(blue, (void *)HW_LCDC_VRAM_E, sizeof blue)) return false;
+    triangle(0x7fff, 0);
+    cmd(0x50, 0);
+    PbW2_G3RasterCapture(pixels);
+    if (s_gpuFrames != before + 2 || pixels[center] != 0xfc00) return false;
+
+    /* A software frame replaces the published image, invalidating reuse. */
+    PbW2_PicaSetOptions(false, false);
+    triangle(0x7fff, 0);
+    cmd(0x50, 0);
+    PbW2_PicaSetOptions(true, false);
+    triangle(0x7fff, 0);
+    cmd(0x50, 0);
+    PbW2_G3RasterCapture(pixels);
+    if (s_gpuFrames != before + 3 || pixels[center] != 0xfc00) return false;
+
+    reg_G3X_CLEAR_COLOR = (31u << 16) | GX_RGB(0, 31, 0);
+    triangle(0x7fff, 0);
+    cmd(0x50, 0);
+    PbW2_G3RasterCapture(pixels);
+    return s_gpuFrames == before + 4 && pixels[0] == 0x83e0;
+}
+
 int main(void) {
     gfxInitDefault();
     archiveMountSdmc();
@@ -1177,7 +1224,7 @@ int main(void) {
 
         PbW2_PicaSetOptions(true, false);
         failure = PbW2_PicaEnabled() ? checks() : "GPU initialization";
-        if (!failure && s_gpuFrames != 34)
+        if (!failure && s_gpuFrames != 33)
             failure = "unexpected GPU frame count";
         fprintf(f, "PICA200 %s%s (%u GPU frames)\n", failure ? "FAIL " : "PASS", failure ? failure : "", s_gpuFrames);
         fprintf(f, "Optional GPU outlines %s\n", check_optional_edges() ? "PASS" : "FAIL");
@@ -1190,6 +1237,7 @@ int main(void) {
         fprintf(f, "Pinned native frame %s\n", check_pinned_native_frame() ? "PASS" : "FAIL");
         fprintf(f, "Clipped OBJ priority %s\n", check_clipped_objs() ? "PASS" : "FAIL");
         fprintf(f, "Sub-screen input cache %s\n", check_sub_cache() ? "PASS" : "FAIL");
+        fprintf(f, "PICA frame reuse %s\n", check_frame_reuse() ? "PASS" : "FAIL");
         fclose(f);
     }
     for (;;)

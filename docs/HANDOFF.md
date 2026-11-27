@@ -32,6 +32,11 @@ texels. Identical LCDC uploads preserve existing textures and queued geometry. P
 uploads write complete tiles contiguously. Evicted textures of the same
 size reuse their allocation after the previous frame fence.
 
+When the GPU geometry, texture revisions, render settings and clear values
+match the last GPU frame exactly, a GX swap reuses the published 3D image.
+A CPU frame or scene reset invalidates reuse. The performance log separates
+reused swaps from fresh GPU and CPU draws.
+
 The LCD presenter retains an unchanged bottom image after both physical
 buffers have received it. It skips the bottom redraw and data-cache flush
 while the composed pixels, text metadata, and scaling options match.
