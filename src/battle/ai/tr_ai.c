@@ -683,7 +683,34 @@ BOOL TrAI_ChooseMoveAndTarget(VM *vm, TrAIContext *wk) {
     return FALSE;
 }
 
+#ifdef PBW2_N3DS
+/* Build 16 probe round 3 statics: what the VM is actually running.
+ * sDbgBase/sDbgLen/sDbgLoadSum describe the script buffer as loaded;
+ * the suspend log re-checksums the same range, so a buffer rewritten
+ * under the VM shows up as a changed sum. sDbgPcMin/Max track how
+ * far the pc has travelled since the load. */
+static const u8 *sDbgBase;
+static u32 sDbgLen;
+static u32 sDbgLoadSum;
+static s32 sDbgPcMin;
+static s32 sDbgPcMax;
+
+static u32 TrAIDbgChecksum(const u8 *data, u32 len) {
+    u32 hash = 2166136261u;
+    u32 i;
+
+    for (i = 0; i < len; i++) {
+        hash ^= data[i];
+        hash *= 16777619u;
+    }
+    return hash;
+}
+#endif
+
 void TrAI_RunScripts(VM *vm, TrAIContext *wk) {
+#ifdef PBW2_N3DS
+    u32 dbgRuns = 0;
+#endif
     while (wk->seq != TRAI_SEQ_DONE && !(wk->status & TRAI_STATUS_SUSPENDED)) {
         switch (wk->seq) {
         case TRAI_SEQ_LOAD_SCRIPT:
@@ -693,6 +720,17 @@ void TrAI_RunScripts(VM *vm, TrAIContext *wk) {
                 wk->moveId = MoveGetID(wk->attacker, wk->moveIdx);
                 wk->script = TrAI_LoadScript(wk);
                 VM_LoadScript(vm, wk->script);
+#ifdef PBW2_N3DS
+                /* Build 16 probe round 3: fingerprint the loaded
+                 * buffer. ROM script 0 is len 9120, FNV-1a 250c6147;
+                 * the suspend log re-checksums this exact range. */
+                sDbgBase = (const u8 *)wk->script;
+                sDbgLen = (sDbgBase != NULL) ? GFL_ArcToolGetDataLength(wk->scriptArc, wk->scriptIndex) : 0;
+                sDbgLoadSum = (sDbgBase != NULL) ? TrAIDbgChecksum(sDbgBase, sDbgLen) : 0;
+                sDbgPcMin = 0x7fffffff;
+                sDbgPcMax = -1;
+                Log_Line("BTL", "trai run load len=%u cksum=%08x", sDbgLen, sDbgLoadSum);
+#endif
             }
             wk->seq++;
             // fallthrough
@@ -706,29 +744,58 @@ void TrAI_RunScripts(VM *vm, TrAIContext *wk) {
                 wk->script = NULL;
             }
             if (wk->moveId != 0) {
+#ifdef PBW2_N3DS
+                dbgRuns++;
+#endif
                 VM_Run(vm);
+#ifdef PBW2_N3DS
+                if (vm->pc != NULL && sDbgBase != NULL) {
+                    s32 pcOffNow = (s32)(vm->pc - sDbgBase);
+
+                    if (pcOffNow < sDbgPcMin) {
+                        sDbgPcMin = pcOffNow;
+                    }
+                    if (pcOffNow > sDbgPcMax) {
+                        sDbgPcMax = pcOffNow;
+                    }
+                }
+#endif
                 if (wk->status & TRAI_STATUS_MOVE_DONE) {
+#ifdef PBW2_N3DS
+                    /* Build 16 probe round 3: a move evaluation
+                     * finished — the think is making progress. */
+                    Log_Line("BTL", "trai move done script=%u moveIdx=%u runs=%u", wk->scriptIndex, wk->moveIdx,
+                             dbgRuns);
+#endif
                     wk->status &= (u8)~TRAI_STATUS_SUSPENDED;
                     TrAI_ReleaseScript(wk);
                     wk->script = NULL;
                 } else if (OS_GetTick() - wk->startTick > TRAI_TIME_LIMIT) {
 #ifdef PBW2_N3DS
-                    /* Build 15 probe: the think ran out of its tick
-                     * budget without finishing the script. A healthy
-                     * script suspends rarely; a script that can never
-                     * reach AIEnd suspends every frame forever, and
-                     * vmState then says why the VM is stuck (0 =
-                     * STOPPED: bad command/NULL pc; 1 = RUNNING: the
-                     * script itself loops). Log the first few and a
-                     * slow drip so the count itself is the evidence. */
+                    /* Build 16 probe round 3: the script is a DAG
+                     * (longest possible pass = 66 commands, verified
+                     * offline against the ROM bytes), so a suspend
+                     * that never ends means the VM is not walking the
+                     * loaded stream. runs/elapsed say how much
+                     * execution one slice bought; pcOff with
+                     * pcMin/pcMax says where the pc lives; sum vs
+                     * loadSum says whether the buffer in RAM is still
+                     * the buffer that was loaded. First few + a slow
+                     * drip, same as before. */
                     {
                         static u32 s_suspends;
 
                         s_suspends++;
                         if (s_suspends <= 3 || (s_suspends % 200) == 0) {
-                            Log_Line("BTL", "trai suspend #%u script=%u moveIdx=%u vmState=%u pcNull=%u status=0x%x",
-                                     s_suspends, wk->scriptIndex, wk->moveIdx, vm->state,
-                                     vm->pc == NULL ? 1 : 0, wk->status);
+                            s32 pcOff = (vm->pc != NULL && sDbgBase != NULL) ? (s32)(vm->pc - sDbgBase) : -1;
+                            u32 sumNow = (sDbgBase != NULL && sDbgLen != 0) ? TrAIDbgChecksum(sDbgBase, sDbgLen) : 0;
+
+                            Log_Line("BTL",
+                                     "trai suspend #%u script=%u moveIdx=%u vmState=%u status=0x%x runs=%u elapsed=%u pcOff=%d pcMin=%d pcMax=%d wordAtPc=%04x result=%d work=%u,%u sum=%08x loadSum=%08x",
+                                     s_suspends, wk->scriptIndex, wk->moveIdx, vm->state, wk->status, dbgRuns,
+                                     (u32)(OS_GetTick() - wk->startTick), pcOff, sDbgPcMin, sDbgPcMax,
+                                     (vm->pc != NULL) ? *(const u16 *)vm->pc : 0xffff, wk->result, vm->work[0],
+                                     vm->work[1], sumNow, sDbgLoadSum);
                         }
                     }
 #endif
