@@ -101,6 +101,24 @@ static const HeapDef HEAP_SETUP_TWL[] = {
     { 0x48ae00, 0 },
 };
 
+#ifdef PBW2_N3DS
+/* The port reports OS_IsRunOnTwl() == FALSE, so the game runs the retail
+ * DS heap layout: a 0x1a3e00 USER root sized for retail's children. That
+ * budget broke when the GAMEEVENT heap grew 64K -> 256K (the hardware-
+ * proven Center session fix): at field entry, FieldmapProc_Init's
+ * GFL_HeapCreateChild(HEAPID_USER, HEAPID_FIELDMAP, ...) carve no longer
+ * fit what was left of USER, the create failed, and the failure handler's
+ * OS_Terminate parked the game thread on the transition fade -- the
+ * black screen on Continue reproduced by REQ-28 on every build carrying
+ * the raise. The host main arena is 16 MiB (os_host.c), so give USER the
+ * game's own DSi root size: the raise keeps its room and the field carve
+ * fits with the headroom the New 3DS actually has. */
+static const HeapDef HEAP_SETUP_N3DS[] = {
+    { 0x6000, 0 },
+    { 0x48ae00, 0 },
+};
+#endif
+
 static u32 sVBlankCount;
 static VBlankCallback sVBlankCallback;
 static void *sVBlankCallbackData;
@@ -124,9 +142,16 @@ void GFLAppInit(void) {
 
     if (OS_IsRunOnTwl()) {
         GFL_MemInit(HEAP_SETUP_TWL, 2, 193, 0);
-    } else {
+    }
+#ifdef PBW2_N3DS
+    else {
+        GFL_MemInit(HEAP_SETUP_N3DS, 2, 193, 0);
+    }
+#else
+    else {
         GFL_MemInit(HEAP_SETUP_NTR, 2, 193, 0);
     }
+#endif
     GFL_HeapDTCMInit(0x2000);
     GFL_HeapCreateChild(1, 7, 0x27000);
     if (!OS_IsRunOnTwl()) {

@@ -7,7 +7,7 @@
 #include <citro3d.h>
 #include <string.h>
 
-enum { WIDTH = 256, HEIGHT = 192, LCD_WIDTH = 400, LCD_HEIGHT = 240, VERTICES = 24576, BATCHES = 1024, TEXTURES = 256 };
+enum { WIDTH = 256, HEIGHT = 192, LCD_WIDTH = 400, LCD_HEIGHT = 240, VERTICES = 24576, BATCHES = 1024 };
 enum { TEXTURE_CACHE_BYTES = 8 * 1024 * 1024 };
 
 extern const u8 _binary_g3_pass_shbin_start[], _binary_g3_pass_shbin_end[];
@@ -39,9 +39,10 @@ static struct {
     PicaTextureKey key;
     uint64_t frame;
     unsigned bytes, alpha;
-} s_texture[TEXTURES];
+} s_texture[PICA_TEXTURE_SLOTS];
 static Batch s_batch[BATCHES];
 static unsigned s_vertexCount, s_batchCount, s_cacheBytes, s_uploads, s_hits;
+static unsigned s_invalidations;
 static unsigned s_alphaRef;
 static uint64_t s_frame;
 static bool s_ready;
@@ -70,11 +71,29 @@ static void evict(unsigned i) {
     C3D_TexDelete(&s_texture[i].texture);
     s_cacheBytes -= s_texture[i].bytes;
     s_texture[i].bytes = 0;
+    /* Leave no stale record behind: the slot must not carry the evicted
+     * texture's key, frame stamp or alpha into its next life. */
+    memset(&s_texture[i].key, 0, sizeof s_texture[i].key);
+    s_texture[i].frame = 0;
+    s_texture[i].alpha = 0;
+}
+
+/* Zone transitions rewrite texture VRAM wholesale, and the cache key is a
+ * write-order stamp, not content: no resident entry can be trusted across
+ * one. Drop the whole cache so each zone starts from the known-good empty
+ * state (the first-entry state that always rendered textured). The
+ * re-upload cost is already being paid -- keys advance on every zone load
+ * either way. Hits/uploads stay cumulative so tester comparisons across
+ * entries still work; invalidations counts the resets themselves. */
+void PbW2_PicaInvalidate(void) {
+    for (unsigned i = 0; i < PICA_TEXTURE_SLOTS; ++i) evict(i);
+    s_cacheBytes = 0;
+    ++s_invalidations;
 }
 
 void PbW2_PicaExit(void) {
     if (!s_ready) return;
-    for (unsigned i = 0; i < TEXTURES; ++i) evict(i);
+    for (unsigned i = 0; i < PICA_TEXTURE_SLOTS; ++i) evict(i);
     if (s_shader) {
         if (s_program.vertexShader) shaderProgramFree(&s_program);
         DVLB_Free(s_shader);
@@ -128,10 +147,10 @@ static GPU_TEXTURE_WRAP_PARAM wrap(unsigned repeat, unsigned mirror) {
 }
 
 static unsigned oldest_unreferenced(void) {
-    unsigned oldest = TEXTURES;
-    for (unsigned i = 0; i < TEXTURES; ++i) {
+    unsigned oldest = PICA_TEXTURE_SLOTS;
+    for (unsigned i = 0; i < PICA_TEXTURE_SLOTS; ++i) {
         if (s_texture[i].bytes && s_texture[i].frame != s_frame
-            && (oldest == TEXTURES || s_texture[i].frame < s_texture[oldest].frame)) oldest = i;
+            && (oldest == PICA_TEXTURE_SLOTS || s_texture[i].frame < s_texture[oldest].frame)) oldest = i;
     }
     return oldest;
 }
@@ -139,7 +158,7 @@ static unsigned oldest_unreferenced(void) {
 int PbW2_PicaUpload(const PicaTexture *texture) {
     unsigned width = texture->width, height = texture->height;
     if (width > 1024 || height > 1024) return -1;
-    for (unsigned i = 0; i < TEXTURES; ++i) {
+    for (unsigned i = 0; i < PICA_TEXTURE_SLOTS; ++i) {
         if (s_texture[i].bytes && !memcmp(&s_texture[i].key, &texture->key, sizeof texture->key)) {
             s_texture[i].frame = s_frame;
             ++s_hits;
@@ -147,27 +166,45 @@ int PbW2_PicaUpload(const PicaTexture *texture) {
         }
     }
     unsigned bytes = width * height * 4;
+    if (bytes > TEXTURE_CACHE_BYTES) return -1;
+    /* Choose the slot and prove the byte budget before evicting anything.
+     * A free slot is kept even when the cache is over budget -- the budget
+     * is then met by evicting other unreferenced slots, not by throwing
+     * the free slot away and evicting a live victim instead. And a failing
+     * upload must leave the resident set untouched: the old code evicted
+     * the chosen slot (then further LRU slots) before it could discover
+     * every remaining slot was pinned this frame, permanently thinning
+     * the cache on each failure -- a ratchet that guaranteed harder
+     * eviction work on every later zone entry. */
     unsigned slot = 0;
-    while (slot < TEXTURES && s_texture[slot].bytes) ++slot;
-    if (slot == TEXTURES || s_cacheBytes + bytes > TEXTURE_CACHE_BYTES)
+    while (slot < PICA_TEXTURE_SLOTS && s_texture[slot].bytes) ++slot;
+    if (slot == PICA_TEXTURE_SLOTS) {
         slot = oldest_unreferenced();
-    if (slot == TEXTURES) return -1;
+        if (slot == PICA_TEXTURE_SLOTS) return -1;
+    }
+    unsigned reclaimable = 0;
+    for (unsigned i = 0; i < PICA_TEXTURE_SLOTS; ++i) {
+        if (s_texture[i].bytes && (i == slot || s_texture[i].frame != s_frame))
+            reclaimable += s_texture[i].bytes;
+    }
+    if (s_cacheBytes - reclaimable + bytes > TEXTURE_CACHE_BYTES) return -1;
 
     C3D_Tex *tex = &s_texture[slot].texture;
-    /* The previous frame is fenced before we get here. Refresh only a victim
-     * that has no references in this frame, matching SoulSilver's in-place
-     * upload without sacrificing cache hits for other live materials. */
-    bool reuse = s_texture[slot].bytes && tex->width == width && tex->height == height;
-    if (!reuse) {
-        evict(slot);
-        while (s_cacheBytes + bytes > TEXTURE_CACHE_BYTES) {
-            unsigned oldest = oldest_unreferenced();
-            if (oldest == TEXTURES) return -1;
-            evict(oldest);
-        }
-        if (!C3D_TexInit(tex, width, height, GPU_RGBA8)) return -1;
-        s_cacheBytes += bytes;
+    /* A victim is always fully evicted and re-initialised, never overwritten
+     * in place: the previous frame is not fenced on every publish path (the
+     * frame-reuse early return submits no Pica work at all), so the previous
+     * command list may still be sampling the victim's data. Overwriting it
+     * in place rendered flat single-colour materials while every host-side
+     * counter reported success (the "playdoh interiors" bug). Eviction is
+     * already the slow path; an alloc/free per eviction is acceptable. */
+    evict(slot);
+    while (s_cacheBytes + bytes > TEXTURE_CACHE_BYTES) {
+        unsigned oldest = oldest_unreferenced();
+        if (oldest == PICA_TEXTURE_SLOTS) return -1; /* Unreachable: the budget was proven above. */
+        evict(oldest);
     }
+    if (!C3D_TexInit(tex, width, height, GPU_RGBA8)) return -1;
+    s_cacheBytes += bytes;
     u32 *tiles = tex->data;
     unsigned alpha = 0;
     /* Walk complete PICA tiles so writes stay within contiguous cache lines.
@@ -349,8 +386,8 @@ bool PbW2_PicaFinish(uint32_t clearColor, float clearDepth, uint16_t *result) {
     }
     if (s_frame == 2 || sampleCount == 120) {
         unsigned averageUs = totalTicks * 1000000ull / ((u64)sampleCount * SYSCLOCK_ARM11);
-        Log_Line("GPU", "texture cache: %u hits, %u uploads, frame and readback avg %u us (%u frames)",
-                 s_hits, s_uploads, averageUs, sampleCount);
+        Log_Line("GPU", "texture cache: %u hits, %u uploads, %u invalidations, frame and readback avg %u us (%u frames)",
+                 s_hits, s_uploads, s_invalidations, averageUs, sampleCount);
         totalTicks = 0;
         sampleCount = 0;
     }
