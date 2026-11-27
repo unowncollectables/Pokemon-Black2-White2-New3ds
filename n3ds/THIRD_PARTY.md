@@ -13,3 +13,4 @@
 | Citro3D / wide compositor patterns | [3ds-platinum](https://github.com/unowncollectables/3ds-platinum) (reference; not vendored) | GPL-3.0 |
 | Game glyph tracking across bitmap uploads (reference) | [Pokemon-HeartGold-SoulSilver-New3ds](https://github.com/unowncollectables/Pokemon-HeartGold-SoulSilver-New3ds) `soulsilver3ds/platform/ss3ds_gametext.c` | GPL-3.0-or-later |
 | Reuse of unchanged bottom screen uploads (reference) | [Pokemon-HeartGold-SoulSilver-New3ds](https://github.com/unowncollectables/Pokemon-HeartGold-SoulSilver-New3ds) `soulsilver3ds/platform/gpuscale.c` | GPL-3.0-or-later |
+| DS stereo pan and channel gain (reference) | [Pokemon-HeartGold-SoulSilver-New3ds](https://github.com/unowncollectables/Pokemon-HeartGold-SoulSilver-New3ds) `pspoke-patches/0222` and [melonDS SPU](https://github.com/melonDS-emu/melonDS/blob/master/src/SPU.h) | GPL-3.0-or-later |

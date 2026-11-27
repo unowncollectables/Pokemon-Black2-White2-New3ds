@@ -114,10 +114,14 @@ static unsigned wave_decimate(void *pcm, unsigned start, unsigned samples, unsig
 }
 
 static void wave_set_mix(struct NNSSndWaveOut *waveOut) {
-    float volume = (float)waveOut->volume / 127.0f;
-    float left = waveOut->pan >= 64 ? (127.0f - (float)waveOut->pan) / 63.0f : 1.0f;
-    float right = waveOut->pan <= 64 ? (float)waveOut->pan / 64.0f : 1.0f;
-    float mix[12] = {volume * left, volume * right};
+    static const unsigned divisors[] = {1, 2, 4, 16};
+    unsigned volume = waveOut->volume & 127;
+    unsigned divisor = divisors[(unsigned)waveOut->volume >> 8];
+    /* The DS treats the maximum volume and pan values as 128. */
+    if (volume == 127) volume = 128;
+    unsigned pan = waveOut->pan == 127 ? 128 : waveOut->pan;
+    float gain = (float)volume / (128 * 128 * divisor);
+    float mix[12] = {gain * (128 - pan), gain * pan};
     ndspChnSetMix(waveOut->ndspCh, mix);
 }
 
@@ -269,7 +273,8 @@ BOOL NNS_SndWaveOutStart(NNSSndWaveOutHandle handle, NNSSndWaveFormat format, co
     waveOut->sampleRate = rate;
     waveOut->speed = speed;
     waveOut->decim = (int)decim;
-    waveOut->volume = volume < 0 ? 0 : volume > 127 ? 127 : volume;
+    if (!waveOut->sequenceNote) volume = volume < 0 ? 0 : volume > 127 ? 127 : volume;
+    waveOut->volume = volume & 0x37f;
     waveOut->pan = pan < 0 ? 0 : pan > 127 ? 127 : pan;
     ndspChnSetFormat(waveOut->ndspCh,
                      format == NNS_SND_WAVE_FORMAT_PCM8 ? NDSP_FORMAT_PCM8 : NDSP_FORMAT_PCM16);
@@ -374,8 +379,20 @@ void NNS_SndWaveOutSetVolume(NNSSndWaveOutHandle handle, int volume) {
         LightLock_Unlock(&s_waveLock);
         return;
     }
-    waveOut->volume = volume < 0 ? 0 : volume > 127 ? 127 : volume;
+    if (!waveOut->sequenceNote) volume = volume < 0 ? 0 : volume > 127 ? 127 : volume;
+    waveOut->volume = volume & 0x37f;
     wave_set_mix(waveOut);
+    LightLock_Unlock(&s_waveLock);
+}
+
+void WaveOut_SetPan(NNSSndWaveOutHandle handle, int pan) {
+    struct NNSSndWaveOut *waveOut = handle;
+    if (!waveOut) return;
+    LightLock_Lock(&s_waveLock);
+    if (waveOut->active) {
+        waveOut->pan = pan < 0 ? 0 : pan > 127 ? 127 : pan;
+        wave_set_mix(waveOut);
+    }
     LightLock_Unlock(&s_waveLock);
 }
 

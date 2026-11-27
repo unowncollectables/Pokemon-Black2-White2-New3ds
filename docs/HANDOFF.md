@@ -292,6 +292,10 @@ Settings invalidates that reuse when it takes over the bottom LCD.
 - The audio worker targets fixed 5 ms deadlines. WaveOut averages source
   blocks before high-rate decimation and filters the intro and sustain
   independently to retain their original loop boundary.
+- Sampled and synthesized voices use the DS stereo pan law. The
+  sequencer sums NitroSDK attenuation values before applying the channel
+  volume and divider. Sequence pan events and signed game pan offsets
+  update voices that are already sounding.
 - With all permitted sequence voices occupied, a finished NDSP sample
   can be reclaimed before its note deadline. New notes can replace
   equal- or lower-priority voices, with ties decided by onset order

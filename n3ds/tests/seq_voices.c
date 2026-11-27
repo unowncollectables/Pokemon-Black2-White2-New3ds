@@ -7,6 +7,7 @@
 struct NNSSndWaveOut {
     bool allocated;
     bool playing;
+    int pan;
 };
 static struct NNSSndWaveOut s_dspVoices[SEQ_DS_CHANNELS];
 
@@ -23,6 +24,10 @@ BOOL NNS_SndWaveOutIsPlaying(NNSSndWaveOutHandle voice) {
 
 void NNS_SndWaveOutFreeChannel(NNSSndWaveOutHandle voice) {
     if (voice) voice->allocated = voice->playing = false;
+}
+
+void WaveOut_SetPan(NNSSndWaveOutHandle voice, int pan) {
+    voice->pan = pan;
 }
 
 static NNSSndWaveOutHandle note_on(unsigned slot, int priority) {
@@ -54,9 +59,29 @@ static const char *check_voices(void) {
     return NULL;
 }
 
+static const char *check_mix(void) {
+    SeqSlot *slot = &s_slots[0];
+    SeqTrack *track = &slot->tracks[0];
+    slot->volume = slot->fadeVol = s_playerVolume[0] = 127;
+    track->volume = track->expression = 127;
+    if (seq_final_volume(slot, track, 127) != 127 || (seq_final_volume(slot, track, 0) & 127))
+        return "full and silent mix levels";
+    track->volume = 32;
+    int quiet = seq_final_volume(slot, track, 2);
+    if (!(quiet >> 8) || !(quiet & 127)) return "quiet mix survives intermediate rounding";
+
+    track->pan = 44;
+    track->panOffset = 12;
+    track->notes[0].instrumentPan = 80;
+    seq_update_track_pan(track);
+    if (s_dspVoices[0].pan != 72) return "live pan combines sequence, instrument and game adjustment";
+    return NULL;
+}
+
 int main(void) {
     archiveMountSdmc();
     const char *failure = check_voices();
+    if (!failure) failure = check_mix();
     FILE *out = fopen("sdmc:/seq-voices-test.txt", "w");
     if (out) {
         fprintf(out, "%s\n", failure ? failure : "PASS");

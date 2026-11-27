@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "types.h"
 #include "nnsys/snd.h"
+#include "nitro/snd.h"
 #include "snd_arc.h"
 #include "seq_player.h"
 #include "wave_out.h"
@@ -74,6 +75,7 @@ typedef struct {
     int dsCh; /* -1 when the note is timed but not sounding (NDSP down) */
     u8 note;
     u8 velocity;
+    u8 instrumentPan;
     u32 endTick;
     int samplePitch;
     bool sampled;
@@ -87,7 +89,8 @@ typedef struct {
     u32 wait;
     u8 volume;     /* 0xC1, default 127 */
     u8 expression; /* 0xD5, default 127 */
-    s8 pan;        /* 0xC0, default 64 */
+    u8 pan;        /* 0xC0, default 64 */
+    s8 panOffset;  /* Signed adjustment from the game. */
     s8 transpose;  /* 0xC3, default 0 */
     s8 bend;       /* 0xC4, default 0 */
     u8 bendRange;  /* 0xC5, default 2 */
@@ -423,13 +426,26 @@ static NNSSndWaveOutHandle seq_alloc_channel(SeqSlot *slot, int trackIdx, int no
     return seq_claim_channel(slot, trackIdx, noteIdx, priority, victim);
 }
 
+static int seq_volume_attenuation(unsigned volume) {
+    return SNDi_DecibelTable[volume > 127 ? 127 : volume];
+}
+
 static int seq_final_volume(SeqSlot *slot, SeqTrack *track, int velocity) {
-    int v = velocity * track->volume / 127;
-    v = v * track->expression / 127;
-    v = v * slot->volume / 127;
-    v = v * s_playerVolume[slot->playerNo] / 127;
-    v = v * slot->fadeVol / 127;
-    return v < 0 ? 0 : v > 127 ? 127 : v;
+    int attenuation = seq_volume_attenuation(velocity) + seq_volume_attenuation(track->volume) +
+                      seq_volume_attenuation(track->expression) + seq_volume_attenuation(slot->volume) +
+                      seq_volume_attenuation(s_playerVolume[slot->playerNo]) + seq_volume_attenuation(slot->fadeVol);
+    return SND_CalcChannelVolume(attenuation);
+}
+
+static int seq_note_pan(const SeqTrack *track, unsigned instrumentPan) {
+    return track->pan + (int)instrumentPan - 64 + track->panOffset;
+}
+
+static void seq_update_track_pan(SeqTrack *track) {
+    for (unsigned i = 0; i < SEQ_TRACK_NOTES; ++i) {
+        SeqNote *note = &track->notes[i];
+        if (note->active && note->wave) WaveOut_SetPan(note->wave, seq_note_pan(track, note->instrumentPan));
+    }
 }
 
 static void seq_update_volume(SeqSlot *slot, unsigned trackMask) {
@@ -579,9 +595,7 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
         return;
     }
     finalVol = seq_final_volume(slot, track, velocity);
-    pan = (int)track->pan + (int)wave.pan - 64;
-    if (pan < 0) pan = 0;
-    if (pan > 127) pan = 127;
+    pan = seq_note_pan(track, wave.pan);
     endTick = slot->tick + duration;
     if (wave.kind == 0) {
         samplePitch = ((int)note - (int)wave.defNote + track->transpose) * 64;
@@ -629,6 +643,7 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
         n->dsCh = -1;
         n->note = (u8)note;
         n->velocity = (u8)velocity;
+        n->instrumentPan = wave.pan;
         n->endTick = endTick;
         return;
     }
@@ -656,6 +671,7 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
         n->samplePitch = samplePitch;
         n->note = (u8)note;
         n->velocity = (u8)velocity;
+        n->instrumentPan = wave.pan;
         n->endTick = endTick;
     }
 }
@@ -759,7 +775,10 @@ static void seq_process_events(SeqSlot *slot, int trackIdx) {
             u8 v = p[1];
             track->pos += 2;
             switch (op) {
-            case 0xC0: track->pan = (s8)v; break;
+            case 0xC0:
+                track->pan = v & 127;
+                seq_update_track_pan(track);
+                break;
             case 0xC1:
                 track->volume = v;
                 seq_update_volume(slot, 1u << trackIdx);
@@ -1305,7 +1324,11 @@ void NNS_SndPlayerSetTrackPan(NNSSndHandle *handle, u16 trackBitMask, int pan) {
         return;
     }
     for (t = 0; t < SEQ_TRACKS; ++t) {
-        if (trackBitMask & (1u << t)) slot->tracks[t].pan = pan < -128 ? -128 : pan > 127 ? 127 : pan;
+        if (trackBitMask & (1u << t)) {
+            SeqTrack *track = &slot->tracks[t];
+            track->panOffset = pan < -128 ? -128 : pan > 127 ? 127 : pan;
+            seq_update_track_pan(track);
+        }
     }
     LightLock_Unlock(&s_seqLock);
 }
