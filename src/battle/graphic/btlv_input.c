@@ -48,6 +48,10 @@
 #include "system/wordset.h"
 #include "text/system/battle_view_input.h"
 
+#ifdef PBW2_N3DS
+#include "log.h"
+#endif
+
 // Slots of the input task registry; when full it replaces its first task.
 #define INPUT_TASK_CAPACITY 8
 
@@ -787,6 +791,42 @@ void BtlvInput_Update(BtlvInput *work) {
 static void BtlvInput_CoreTask(TCB *tcb, void *data) {
     BtlvInput *work = data;
 
+#ifdef PBW2_N3DS
+    /* Build 13 battle probe: BtlvInput_CheckInput returns "no input"
+     * while busy, a palette fade, or the input lock is active, so a
+     * screen transition that never completes soft-locks command
+     * select with no other symptom. Log the gate tuple on change,
+     * plus a slow heartbeat. */
+    {
+        static u32 s_frames;
+        static u32 s_lastTuple[5] = { 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff };
+        u32 tuple[5];
+
+        tuple[0] = work->screen;
+        tuple[1] = work->busy;
+        tuple[2] = work->subTaskCount;
+        tuple[3] = PaletteFade_GetActiveMask(work->paletteFade);
+        tuple[4] = work->inputLocked;
+        {
+            BOOL changed = FALSE;
+            u32 i;
+
+            for (i = 0; i < 5; i++) {
+                if (tuple[i] != s_lastTuple[i]) {
+                    changed = TRUE;
+                }
+            }
+            if (changed || (s_frames % 600) == 0) {
+                Log_Line("BTL", "input screen=%u busy=%u subTasks=%u fadeMask=0x%x locked=%u", tuple[0], tuple[1],
+                         tuple[2], tuple[3], tuple[4]);
+                for (i = 0; i < 5; i++) {
+                    s_lastTuple[i] = tuple[i];
+                }
+            }
+        }
+        s_frames++;
+    }
+#endif
     GFL_TCBMgrUpdate(work->tcbMgr);
     InfoWin_Update();
     BtlvInput_UpdateTypePaletteAnim(work);

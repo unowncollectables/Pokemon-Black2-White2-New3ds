@@ -267,8 +267,9 @@ int main(int argc, char **argv) {
         if (PbW2_GameHasPresented()) Present_NoteFrame(frameStart, flushStart, svcGetSystemTick());
         /* Logger drip: flushes the RAM ring to log.txt every ~10 s
          * (time-gated inside), so even a run that never reaches the
-         * clean-exit path leaves a log behind. */
-        Log_SafePoint();
+         * clean-exit path leaves a log behind. Host thread only since
+         * Build 13 — the game thread's safe points no longer drip. */
+        Log_DripFlush();
 #endif
         gspWaitForVBlank();
     }

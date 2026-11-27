@@ -38,6 +38,10 @@
 #include "system/gf_font.h"
 #include "text/system/battle_view_core.h"
 
+#ifdef PBW2_N3DS
+#include "log.h"
+#endif
+
 // The procedure each display command starts
 typedef struct BtlvCmdEntry {
     u32 cmd;
@@ -261,6 +265,36 @@ void BtlvCore_Delete(BtlvCore *core) {
 void BtlvCore_Update(BtlvCore *core) {
     GFL_TCBExMgrUpdate(core->tcbManager);
     BtlvEffect_Main();
+#ifdef PBW2_N3DS
+    /* Build 13 battle probe: if a battle ever stops advancing, the
+     * log must name the gate it is waiting on. Log the view-core
+     * command state whenever it changes, plus a slow heartbeat so a
+     * frozen tuple reads as frozen. BtlvEffect_IsBusy dereferences
+     * the effect system with no NULL check, so it is only called
+     * once a display command has started (its setup step creates the
+     * effect system before any wait can begin). */
+    {
+        static u32 s_frames;
+        static u32 s_lastCmd = 0xffffffff;
+        static s32 s_lastSeq = 0x7fffffff;
+        static u32 s_lastBusy = 0xffffffff;
+        static BOOL s_cmdSeen;
+        u32 busy;
+
+        if (core->cmd != BTLV_CMD_NONE) {
+            s_cmdSeen = TRUE;
+        }
+        busy = s_cmdSeen ? (BtlvEffect_IsBusy() ? 1 : 0) : 2;
+        if (core->cmd != s_lastCmd || core->seq != s_lastSeq || busy != s_lastBusy ||
+            (s_frames % 600) == 0) {
+            Log_Line("BTL", "core cmd=%u seq=%d effBusy=%u", core->cmd, core->seq, busy);
+            s_lastCmd = core->cmd;
+            s_lastSeq = core->seq;
+            s_lastBusy = busy;
+        }
+        s_frames++;
+    }
+#endif
 }
 
 void BtlvCore_StartCommand(BtlvCore *core, u32 cmd) {

@@ -30,9 +30,13 @@
  *   overlay loads — a moment the game is already reading the card), a
  *   forced flush at >= 7/8 full so a verbose firehose loses a bounded
  *   tail instead of wrapping silently — and, since Run 4 (Nov 27
- *   2026) left no log.txt at all, a time-based drip in Log_SafePoint:
- *   the main loop calls it every frame and it flushes whenever the
+ *   2026) left no log.txt at all, a time-based drip: the host main
+ *   loop calls Log_DripFlush every frame and it flushes whenever the
  *   ring holds anything and ~10 s have passed since the last flush.
+ *   (Build 13 moved the drip out of Log_SafePoint: it was the only
+ *   game-visible host-behavior change in the Build 10-12 window that
+ *   regressed battles, and overlay loads call Log_SafePoint on the
+ *   game thread — the battle's three overlays included.)
  *   A quiet session may never fill the ring halfway, and a run that
  *   never reaches Log_Close (Home close, power off, a game-thread
  *   wedge while the main thread keeps presenting) used to take its
@@ -191,12 +195,24 @@ void Log_SafePoint(void) {
     }
     if (s_used * 2 >= LOG_RING_BYTES) {
         Log_Flush();
+    }
+}
+
+void Log_DripFlush(void) {
+    if (!s_ready) {
+        return;
+    }
+    if (s_used * 2 >= LOG_RING_BYTES) {
+        Log_Flush();
         return;
     }
     /* Time-based drip: flush a non-empty ring every ~10 s so a run
      * that never reaches Log_Close still leaves a log.txt behind.
-     * The main loop calls this once per frame; the tick check keeps
-     * it to one comparison on frames that do not flush. */
+     * Host main loop only — the game thread's safe points went back
+     * to threshold-only in Build 13 (battle soft-lock bisect: the
+     * drip was the only game-visible host-behavior change in the
+     * Build 10-12 regression window, and overlay loads call
+     * Log_SafePoint on the game thread, the battle's included). */
     if (s_used && svcGetSystemTick() - s_last_flush_tick >= LOG_FLUSH_INTERVAL_TICKS) {
         Log_Flush();
     }
@@ -241,8 +257,9 @@ static bool keep_line(enum LogLevel level, const char *tag) {
     if (s_verbose || level == LOG_ERROR) {
         return true;
     }
-    /* Quiet mode: errors, boot/exit markers and the PERF summaries. */
-    return !strcmp(tag, "PERF") || !strcmp(tag, "3DS");
+    /* Quiet mode: errors, boot/exit markers, the PERF summaries and
+     * the Build 13 battle-state probe lines. */
+    return !strcmp(tag, "PERF") || !strcmp(tag, "3DS") || !strcmp(tag, "BTL");
 }
 
 void Log_Line(const char *tag, const char *fmt, ...) {

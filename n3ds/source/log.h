@@ -27,12 +27,19 @@ bool Log_Init(void);
 void Log_Close(void);
 /* Drain the ring buffer to log.txt now. Cold paths only. */
 void Log_Flush(void);
-/* Flush when the ring is at least half full, or when it holds
- * anything and ~10 s have passed since the last flush. Cheap to call
- * at loading moments (overlay loads) and once per frame from the main
- * loop, so a session's log reaches the card in bounded pieces and a
- * run that never exits cleanly still leaves a log.txt behind. */
+/* Flush when the ring is at least half full. Called from overlay
+ * loads on the game thread — a moment the game is already reading the
+ * card. Build 13 split the time-based drip out of this function (see
+ * Log_DripFlush): the drip was the only game-visible host-behavior
+ * change in the Build 10-12 window that regressed battles, so the
+ * game thread is back to Build 9 flush semantics. */
 void Log_SafePoint(void);
+/* Time-based drip: flush a non-empty ring when ~10 s have passed
+ * since the last flush. Host main loop only (once per frame; the tick
+ * check keeps it to one comparison on frames that do not flush), so a
+ * run that never exits cleanly still leaves a log.txt behind without
+ * the game thread ever doing time-based SD I/O. */
+void Log_DripFlush(void);
 bool Log_Verbose(void);
 
 void Log_Line(const char *tag, const char *fmt, ...);
