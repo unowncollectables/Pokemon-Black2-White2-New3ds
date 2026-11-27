@@ -533,11 +533,90 @@ static void compose_bitmap_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bg
     }
 }
 
+/* Affine and extended tile BGs (BG2/BG3 in BG modes 1-4). Hardware
+ * decodes these from the BG type, not from the colour-mode bit: the
+ * map is a flat row-major array (8-bit entries for affine, 16-bit for
+ * extended — tile, flips and palette in the entry), tiles are always
+ * 256-colour, and the BGxPA..PD transform maps screen pixels into map
+ * pixels. compose_text_bg cannot stand in for them: it walks the map
+ * in 32x32 text blocks, decodes the tiles as 16-colour whenever the
+ * colour-mode bit is clear (extended tile CNTs clear it:
+ * GX_BG_EXTMODE_256x16PLTT is 0) and never applies the transform, so
+ * an extended BG — the battle standby screen's ball picture on sub
+ * BG3 — came out as smeared garbage across the whole screen. */
+static u16 s_affinePltt[4096];
+
+static void compose_affine_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmode, u16 *out, BgBlend *blend) {
+    u16 cnt = reg_u16(regs, 8 + bg * 2);
+    unsigned plane = 1u << bg;
+    bool extended = bgmode == 4 || (bgmode == 3 && bg == 3);
+    bool wrap = (cnt & (1u << REG_G2_BG2CNT_AREAOVER_SHIFT)) != 0;
+    const u8 *mapBytes = vram_ptr(bg_screen_addr(dc, cnt, is_sub, bgmode, bg));
+    const u8 *chars = vram_ptr(bg_char_addr(dc, cnt, is_sub));
+    int width, height;
+    s16 pa, pb, pc, pd;
+    s32 rx, ry;
+
+    if ((dc & (0x100u << bg)) == 0) {
+        return;
+    }
+    bitmap_dims(cnt, &width, &height);
+    int tilesWide = width / 8;
+
+    /* Extended BGs take their colours from the BG extended palette —
+     * this BG's own 8 KiB slot — when DISPCNT enables it; otherwise
+     * the plain engine palette applies and the map's palette field is
+     * meaningless, exactly like a 256-colour text BG. */
+    bool useExt = (dc & REG_GX_DISPCNT_BG_MASK) != 0;
+    const u16 *extPltt = NULL;
+    u16 stdColors[256];
+    if (useExt) {
+        extPltt = (const u16 *)(void *)vram_ptr((is_sub ? HW_LCDC_VRAM_H : HW_LCDC_VRAM_E) + (u32)bg * 0x2000u);
+        for (unsigned i = 0; i < 4096; i++) s_affinePltt[i] = rgb555_to_565(extPltt[i]);
+    } else {
+        const u16 *pltt = engine_bg_pltt(is_sub);
+        for (unsigned i = 0; i < 256; i++) stdColors[i] = rgb555_to_565(pltt[i]);
+    }
+
+    read_bg_affine(is_sub, bg, &pa, &pb, &pc, &pd, &rx, &ry);
+    for (unsigned y = 0; y < 192; ++y, rx += pb, ry += pd) {
+        s32 sx = rx, sy = ry;
+        for (unsigned x = 0; x < 256; ++x, sx += pa, sy += pc) {
+            unsigned tx = (unsigned)(sx >> 8), ty = (unsigned)(sy >> 8);
+            if (wrap) {
+                tx &= (unsigned)width - 1;
+                ty &= (unsigned)height - 1;
+            } else if (tx >= (unsigned)width || ty >= (unsigned)height) {
+                continue;
+            }
+            unsigned tile, palNum = 0;
+            unsigned px = tx & 7, py = ty & 7;
+            if (extended) {
+                u16 entry = ((const u16 *)(const void *)mapBytes)[(ty >> 3) * (unsigned)tilesWide + (tx >> 3)];
+                tile = entry & 1023;
+                if (entry & 0x0400) px = 7 - px;
+                if (entry & 0x0800) py = 7 - py;
+                palNum = entry >> 12;
+            } else {
+                tile = mapBytes[(ty >> 3) * (unsigned)tilesWide + (tx >> 3)];
+            }
+            unsigned index = chars[tile * 64 + py * 8 + px];
+            if (!index) continue;
+            put_bg_pixel(out, blend, y * 256 + x, plane,
+                         useExt ? s_affinePltt[palNum * 256 + index] : stdColors[index]);
+        }
+    }
+}
+
 static void draw_bg_layer(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmode, u16 *out, BgBlend *blend) {
     u16 cnt = reg_u16(regs, 8 + bg * 2);
 
     if (bg >= 2 && bgmode >= 3 && (cnt & REG_G2_BG0CNT_COLORMODE_MASK)) {
         compose_bitmap_bg(regs, dc, is_sub, bg, bgmode, out, blend);
+    } else if (bg >= 2 && ((bgmode == 1 && bg == 3) || (bgmode >= 2 && bgmode <= 4))) {
+        /* An affine-family slot that is not a bitmap (bitmaps always
+         * carry the colour-mode bit, checked above) is a tile BG. */
+        compose_affine_bg(regs, dc, is_sub, bg, bgmode, out, blend);
     } else {
         compose_text_bg(regs, dc, is_sub, bg, bgmode, out, blend);
     }

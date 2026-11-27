@@ -265,6 +265,10 @@ int main(int argc, char **argv) {
         gfxSwapBuffers();
 #if defined(PBW2_LINK_GAME)
         if (PbW2_GameHasPresented()) Present_NoteFrame(frameStart, flushStart, svcGetSystemTick());
+        /* Logger drip: flushes the RAM ring to log.txt every ~10 s
+         * (time-gated inside), so even a run that never reaches the
+         * clean-exit path leaves a log behind. */
+        Log_SafePoint();
 #endif
         gspWaitForVBlank();
     }

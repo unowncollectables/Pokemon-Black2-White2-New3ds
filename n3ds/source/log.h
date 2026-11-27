@@ -27,9 +27,11 @@ bool Log_Init(void);
 void Log_Close(void);
 /* Drain the ring buffer to log.txt now. Cold paths only. */
 void Log_Flush(void);
-/* Flush only when the ring is at least half full. Cheap to call at
- * loading moments (overlay loads) so a long session's log reaches the
- * card in bounded pieces without I/O during gameplay. */
+/* Flush when the ring is at least half full, or when it holds
+ * anything and ~10 s have passed since the last flush. Cheap to call
+ * at loading moments (overlay loads) and once per frame from the main
+ * loop, so a session's log reaches the card in bounded pieces and a
+ * run that never exits cleanly still leaves a log.txt behind. */
 void Log_SafePoint(void);
 bool Log_Verbose(void);
 

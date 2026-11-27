@@ -24,13 +24,21 @@
  * - one vsnprintf into a 1 MB ring buffer in RAM (LightLock-guarded,
  *   records are u16 length + payload, never split across the wrap);
  * - no printf except in verbose mode (the emulator flow reads stdout);
- * - no SD I/O at all during gameplay. The ring reaches log.txt only at
- *   flush points: Log_Close, Log_Error (which also marks the run
- *   failed), Log_SafePoint at >= 50% full (called from overlay loads —
- *   a moment the game is already reading the card), and a forced flush
- *   at >= 7/8 full so a verbose firehose loses a bounded tail instead
- *   of wrapping silently. Overflow past that drops the oldest records
- *   and counts them; the count is written into the flushed log.
+ * - no SD I/O at all from line intake. The ring reaches log.txt only
+ *   at flush points: Log_Close, Log_Error (which also marks the run
+ *   failed), Log_SafePoint when the ring is >= 50% full (called from
+ *   overlay loads — a moment the game is already reading the card), a
+ *   forced flush at >= 7/8 full so a verbose firehose loses a bounded
+ *   tail instead of wrapping silently — and, since Run 4 (Nov 27
+ *   2026) left no log.txt at all, a time-based drip in Log_SafePoint:
+ *   the main loop calls it every frame and it flushes whenever the
+ *   ring holds anything and ~10 s have passed since the last flush.
+ *   A quiet session may never fill the ring halfway, and a run that
+ *   never reaches Log_Close (Home close, power off, a game-thread
+ *   wedge while the main thread keeps presenting) used to take its
+ *   whole log with it; now the worst case is a bounded ~10 s tail.
+ *   Overflow past that drops the oldest records and counts them; the
+ *   count is written into the flushed log.
  *
  * Failure preservation (union of the logger design and the port-over
  * Stage 2b preservation, REQ-7 + REQ-15): Log_Error rewrites
@@ -48,6 +56,8 @@
 
 #define LOG_RING_BYTES (1024u * 1024u)
 #define LOG_LINE_MAX 512u
+/* Periodic-flush cadence for the Log_SafePoint drip (see below). */
+#define LOG_FLUSH_INTERVAL_TICKS (10ull * SYSCLOCK_ARM11)
 
 static u8 s_ring[LOG_RING_BYTES];
 static LightLock s_lock;
@@ -66,6 +76,7 @@ static unsigned s_kept;
 static unsigned s_suppressed;
 static unsigned s_dropped;
 static unsigned s_errors;
+static u64 s_last_flush_tick;
 
 static void path_of(char *buf, size_t size, const char *name) {
     snprintf(buf, size, "%s/%s", PBW2_SD_DIR, name);
@@ -170,11 +181,23 @@ void Log_Flush(void) {
     fclose(fp);
     s_head = s_tail = s_used = s_wrap_dead = 0;
     s_dropped = 0;
+    s_last_flush_tick = svcGetSystemTick();
     LightLock_Unlock(&s_lock);
 }
 
 void Log_SafePoint(void) {
-    if (s_ready && s_used * 2 >= LOG_RING_BYTES) {
+    if (!s_ready) {
+        return;
+    }
+    if (s_used * 2 >= LOG_RING_BYTES) {
+        Log_Flush();
+        return;
+    }
+    /* Time-based drip: flush a non-empty ring every ~10 s so a run
+     * that never reaches Log_Close still leaves a log.txt behind.
+     * The main loop calls this once per frame; the tick check keeps
+     * it to one comparison on frames that do not flush. */
+    if (s_used && svcGetSystemTick() - s_last_flush_tick >= LOG_FLUSH_INTERVAL_TICKS) {
         Log_Flush();
     }
 }
@@ -356,6 +379,7 @@ bool Log_Init(void) {
     unsigned prev_errors = 0;
     const char *fate = rotate_previous(&prev_errors);
     s_ready = true;
+    s_last_flush_tick = svcGetSystemTick();
     /* Port-over health record (health.txt): one "boot N prev=..." line
      * per boot; the line count is the boot number the previous-run
      * line reports. */
@@ -382,7 +406,7 @@ bool Log_Init(void) {
                   s_verbose ? "verbose" : "quiet");
     Log_Line("3DS", "%s port log (build %d)", PBW2_GAME_NAME, PBW2_BUILD_NUMBER);
     Log_Line("LOG", "previous run: %s (boot %u)", fate, boots + 1);
-    Log_Line("3DS", "logger: %s mode, %u KiB RAM ring, no SD writes during play",
+    Log_Line("3DS", "logger: %s mode, %u KiB RAM ring, flush at exit/error and every ~10 s",
              s_verbose ? "verbose" : "quiet", LOG_RING_BYTES / 1024u);
     /* SD is usable when the health record accepted the boot line. */
     char path[128];
