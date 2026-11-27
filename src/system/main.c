@@ -49,6 +49,39 @@ static void setMonoSnd(const Config *config);
 // decompiled, points at the start of .bss through this symbol
 BOOL g_MainMemoryPriorityBlocked;
 
+#ifdef PBW2_N3DS
+static void LogFramePhases(u64 start, u64 updateEnd, u64 swapEnd, u64 waitEnd, u64 transferEnd, u64 finish) {
+    static struct {
+        u64 start;
+        u64 update;
+        u64 submit;
+        u64 wait;
+        u64 transfers;
+        u64 render;
+        unsigned samples;
+    } profile;
+    if (!profile.samples) {
+        profile.start = start;
+    }
+    profile.update += updateEnd - start;
+    profile.submit += swapEnd - updateEnd;
+    profile.wait += waitEnd - swapEnd;
+    profile.transfers += transferEnd - waitEnd;
+    profile.render += finish - transferEnd;
+    ++profile.samples;
+    if (finish - profile.start >= OS_MilliSecondsToTicks(4000)) {
+        Log_Line("PERF2", "main-loop %u samples avg us: update=%u submit=%u wait+irq=%u transfers=%u render=%u",
+                 profile.samples, (unsigned)(OS_TicksToMicroSeconds(profile.update) / profile.samples),
+                 (unsigned)(OS_TicksToMicroSeconds(profile.submit) / profile.samples),
+                 (unsigned)(OS_TicksToMicroSeconds(profile.wait) / profile.samples),
+                 (unsigned)(OS_TicksToMicroSeconds(profile.transfers) / profile.samples),
+                 (unsigned)(OS_TicksToMicroSeconds(profile.render) / profile.samples));
+        profile.update = profile.submit = profile.wait = profile.transfers = profile.render = 0;
+        profile.samples = 0;
+    }
+}
+#endif
+
 void main(void) {
     SystemInit();
     GFLAppInit();
@@ -63,15 +96,22 @@ void main(void) {
 
     while (TRUE) {
         BOOL priority;
+#ifdef PBW2_N3DS
+        u64 phaseStart = OS_GetTick();
+#endif
 
         Machine_ProcessExitRequest();
         GFLAppUpdate();
         GameUpdate();
         GflUse_NoOpFrameHook();
 #ifdef PBW2_N3DS
+        u64 updateEnd = OS_GetTick();
         PbW2_G3RasterDeferSwap(true);
 #endif
         GFL_G3DSysCheckSwapBuffers();
+#ifdef PBW2_N3DS
+        u64 swapEnd = OS_GetTick();
+#endif
 
         // The ARM9 has the main memory first while it waits for the VBlank, and the sound thread waits with it
         priority = IsMainMemoryPriorityFree();
@@ -82,9 +122,14 @@ void main(void) {
             OS_SleepThreadDirect(&g_GFLSndThread, NULL);
         }
         OS_WaitIrq(TRUE, OS_IE_V_BLANK);
+#ifdef PBW2_N3DS
+        u64 waitEnd = OS_GetTick();
+#endif
         GameUpdateVBlank();
 #ifdef PBW2_N3DS
+        u64 transferEnd = OS_GetTick();
         PbW2_G3RasterDeferSwap(false);
+        LogFramePhases(phaseStart, updateEnd, swapEnd, waitEnd, transferEnd, OS_GetTick());
 #endif
         if (!OS_IsThreadTerminated(&g_GFLSndThread)) {
             OS_WakeupThreadDirect(&g_GFLSndThread);

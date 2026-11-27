@@ -4,6 +4,22 @@ Self-contained notes so another agent can take over this New 3DS port.
 Phases: [PLAN.md](PLAN.md). Build extras: [BUILDING.md](BUILDING.md).
 Short rules pointer: [AGENTS.md](../AGENTS.md).
 
+## Field frame timing
+
+On the Nov 27 hardware run, the LCD reached 28-29 fps. Update and
+composition averaged 24-27 ms in the later samples, while flush and
+swap took about 0.2 ms. The handoff reports about 19 GX swaps/sec for
+field GPU rendering with outlines and about 2.8 for software. The
+existing LCD timer cannot attribute the game thread cost.
+
+`PERF2` reports mean wall time for the host game update, GX submission,
+the wait including the VBlank IRQ, post-IRQ transfers, and deferred
+rendering in four-second windows. Match those windows with the GX
+swap and fallback counts. Compare the same save, route and display
+options, including outlines. Keep boot, zone loading and steady
+walking samples separate. The first emulator run checked that the
+counters emit through boot. Field timing still needs a route capture.
+
 ## Widescreen 3D
 
 L+R+Y opens Display settings. Widescreen 3D defaults off. For a full top-screen
