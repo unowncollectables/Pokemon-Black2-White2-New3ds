@@ -1199,11 +1199,31 @@ static void seq_envelope_step(SeqSlot *slot, float dt) {
     }
 }
 
+/* Backlog drain (audio decoupling audit, finding #2): a tick gap over
+ * 100 ms is DRAINED in <=100 ms chunks inside the same tick call, not
+ * discarded, so after an audio-thread stall the sequence and its
+ * envelopes return to wall time instead of lagging it permanently.
+ * The total catch-up in one call is capped at SEQ_CATCHUP_MAX_SECONDS;
+ * anything beyond it is dropped AND logged below (never silent). The
+ * cap is what makes a pathological stall safe: at most half a second
+ * of sequence time is processed per tick call, in bounded 100 ms
+ * steps, so the drain is a small multiple of a normal tick's worst
+ * case and cannot spiral (drain work is bounded while real time keeps
+ * arriving at 1x; an uncapped drain could take longer than the stall
+ * it repays and grow the next gap). The catch-up itself is a burst by
+ * nature: seq_advance walks the stalled span's event deadlines in
+ * order, so notes that began and ended inside the stall are turned on
+ * and off within the drain (inaudible), and notes still current start
+ * on their wall-time schedule — the audible result is the music back
+ * in sync, not a fast-forward. */
+#define SEQ_TICK_CHUNK_SECONDS 0.1f
+#define SEQ_CATCHUP_MAX_SECONDS 0.5f
+
 void SeqPlayer_Tick(void) {
-    static u64 windowStart, longestGap;
-    static unsigned cappedUpdates;
+    static u64 windowStart, longestGap, discardedMs;
+    static unsigned stalledUpdates;
     u64 now, gap;
-    float dt = 0.0f;
+    float dt = 0.0f, discarded = 0.0f;
     bool playing = false;
     int i;
     LightLock_Lock(&s_seqLock);
@@ -1213,34 +1233,55 @@ void SeqPlayer_Tick(void) {
     gap = s_lastTick ? now - s_lastTick : 0;
     if (s_lastTick) {
         dt = (float)gap / (float)SYSCLOCK_ARM11;
-        if (dt > 0.1f) dt = 0.1f;
         if (dt < 0.0f) dt = 0.0f;
+        if (dt > SEQ_CATCHUP_MAX_SECONDS) {
+            discarded = dt - SEQ_CATCHUP_MAX_SECONDS;
+            dt = SEQ_CATCHUP_MAX_SECONDS;
+        }
     }
     s_lastTick = now;
+    /* Fades are functions of absolute time; step them once per call. */
     for (i = 0; i < SEQ_SLOTS; ++i) {
         SeqSlot *slot = &s_slots[i];
-        float ticks;
         if (!slot->inUse) continue;
         seq_fade_step(slot, now);
         if (!slot->inUse) continue;
-        if (slot->paused) continue;
-        playing = true;
-        seq_envelope_step(slot, dt);
-        ticks = dt * (float)slot->tempo * 0.8f * ((float)slot->tempoRatio / 256.0f);
-        seq_advance(slot, ticks);
-        if (slot->inUse && !seq_slot_has_tracks(slot)) seq_finish_slot(i);
+        if (!slot->paused) playing = true;
+    }
+    /* Advance sequence + envelopes over dt in <=100 ms chunks. A
+     * normal ~5 ms tick is a single chunk — exactly the old path. */
+    {
+        float remaining = dt;
+        while (remaining > 0.0f) {
+            float chunk = remaining > SEQ_TICK_CHUNK_SECONDS ? SEQ_TICK_CHUNK_SECONDS : remaining;
+            remaining -= chunk;
+            for (i = 0; i < SEQ_SLOTS; ++i) {
+                SeqSlot *slot = &s_slots[i];
+                float ticks;
+                if (!slot->inUse) continue;
+                if (slot->paused) continue;
+                playing = true;
+                seq_envelope_step(slot, chunk);
+                ticks = chunk * (float)slot->tempo * 0.8f * ((float)slot->tempoRatio / 256.0f);
+                seq_advance(slot, ticks);
+                if (slot->inUse && !seq_slot_has_tracks(slot)) seq_finish_slot(i);
+            }
+        }
     }
     if (playing && windowStart) {
         if (gap > longestGap) longestGap = gap;
-        if (gap > SYSCLOCK_ARM11 / 10) ++cappedUpdates;
+        if (gap > SYSCLOCK_ARM11 / 10) ++stalledUpdates;
     }
+    if (discarded > 0.0f) discardedMs += (u64)(discarded * 1000.0f + 0.5f);
     if (!playing || !windowStart || now - windowStart >= 5ull * SYSCLOCK_ARM11) {
-        if (cappedUpdates)
-            Log_Line("AUDIO", "sequence updates over 100 ms: %u, longest gap %llu ms",
-                     cappedUpdates, (unsigned long long)(longestGap / (SYSCLOCK_ARM11 / 1000)));
+        if (stalledUpdates || discardedMs)
+            Log_Line("AUDIO", "sequence updates over 100 ms: %u, longest gap %llu ms, backlog discarded %llu ms",
+                     stalledUpdates, (unsigned long long)(longestGap / (SYSCLOCK_ARM11 / 1000)),
+                     (unsigned long long)discardedMs);
         windowStart = playing ? now : 0;
         longestGap = 0;
-        cappedUpdates = 0;
+        stalledUpdates = 0;
+        discardedMs = 0;
     }
     LightLock_Unlock(&s_seqLock);
 }
