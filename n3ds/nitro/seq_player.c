@@ -78,7 +78,8 @@ typedef struct {
     u8 instrumentPan;
     u32 endTick;
     int samplePitch;
-    bool sampled;
+    int key; /* MIDI note including transpose at note-on. */
+    bool sampled, held;
     BOOL active;
 } SeqNote;
 
@@ -98,7 +99,7 @@ typedef struct {
     u8 priority;   /* 0xC6, default 64 */
     BOOL noteWait;   /* 0xC7, advance by note length when enabled */
     BOOL tie;      /* 0xC8 */
-    u8 attack, decay, sustain, release; /* 0xD0-0xD3, stored */
+    u8 attack, decay, sustain, release; /* 0xD0-0xD3 */
     u8 modDepth, modSpeed, modType, modRange; /* 0xCA-0xCD, stored */
     s16 pitch;     /* SetTrackPitch, 64 units per semitone */
     u32 callStack[SEQ_CALL_DEPTH];
@@ -509,6 +510,23 @@ static void seq_update_track_pitch(SeqTrack *track) {
     }
 }
 
+static float seq_synth_envelope(float time, float noteSeconds, float attack, float decay, float release,
+                                float sustain) {
+    float heldTime = time < noteSeconds ? time : noteSeconds;
+    float gain = sustain;
+    if (heldTime < attack) gain = heldTime / attack;
+    else if (heldTime < attack + decay) gain = 1.0f - (1.0f - sustain) * (heldTime - attack) / decay;
+    if (time < noteSeconds) return gain;
+    return release > 0.0f ? gain * (1.0f - (time - noteSeconds) / release) : 0.0f;
+}
+
+static void seq_synth_apply_overrides(SeqWave *wave, const SeqTrack *track) {
+    if (track->attack != 0xff) wave->attack = track->attack;
+    if (track->decay != 0xff) wave->decay = track->decay;
+    if (track->sustain != 0xff) wave->sustain = track->sustain;
+    if (track->release != 0xff) wave->release = track->release;
+}
+
 static u32 seq_synth_note(const SeqWave *wave, int note, int pitch, float noteSeconds,
                           float *releaseSeconds) {
     float freq = 440.0f * powf(2.0f, (float)((note - 69) * 64 + pitch) / (12 * 64));
@@ -527,19 +545,8 @@ static u32 seq_synth_note(const SeqWave *wave, int note, int pitch, float noteSe
     *releaseSeconds = relTime;
     for (i = 0; i < samples; ++i) {
         float t = (float)i / (float)SEQ_SYNTH_RATE;
-        float env;
+        float env = seq_synth_envelope(t, noteSeconds, atkTime, decTime, relTime, sustain);
         float v;
-        if (atkTime > 0.0f && t < atkTime) {
-            env = t / atkTime;
-        } else if (decTime > 0.0f && t < atkTime + decTime) {
-            env = 1.0f - (1.0f - sustain) * (t - atkTime) / decTime;
-        } else if (t < noteSeconds) {
-            env = sustain;
-        } else if (relTime > 0.0f) {
-            env = sustain * (1.0f - (t - noteSeconds) / relTime);
-        } else {
-            env = 0.0f;
-        }
         if (wave->kind == 1) {
             phase += freq / (float)SEQ_SYNTH_RATE;
             if (phase >= 1.0f) phase -= 1.0f;
@@ -552,6 +559,38 @@ static u32 seq_synth_note(const SeqWave *wave, int note, int pitch, float noteSe
         s_synthBuf[i] = (s16)(v * env * 32767.0f);
     }
     return samples;
+}
+
+static bool seq_continue_tied_note(SeqSlot *slot, int trackIdx, int note, int velocity) {
+    SeqTrack *track = &slot->tracks[trackIdx];
+    for (int i = 0; i < SEQ_TRACK_NOTES; ++i) {
+        SeqNote *voice = &track->notes[i];
+        if (!voice->active || !voice->held) continue;
+        if (voice->wave && !NNS_SndWaveOutIsPlaying(voice->wave)) {
+            seq_note_off(slot, trackIdx, i);
+            continue;
+        }
+        int key = note + track->transpose;
+        voice->samplePitch += (key - voice->key) * 64;
+        voice->key = key;
+        voice->note = (u8)note;
+        voice->velocity = (u8)velocity;
+        if (voice->wave) {
+            s_channels[voice->dsCh].priority = track->priority;
+            NNS_SndWaveOutSetSpeed(voice->wave, seq_sample_speed(voice->samplePitch + seq_track_pitch(track)));
+            NNS_SndWaveOutSetVolume(voice->wave, seq_final_volume(slot, track, velocity));
+        }
+        ++slot->noteCount;
+        return true;
+    }
+    return false;
+}
+
+static void seq_set_tie(SeqSlot *slot, int trackIdx, bool enabled) {
+    /* Nitro releases current notes at either TIE command. The next note
+     * starts the new held voice when the command enables ties. */
+    for (int i = 0; i < SEQ_TRACK_NOTES; ++i) seq_note_off(slot, trackIdx, i);
+    slot->tracks[trackIdx].tie = enabled;
 }
 
 static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32 duration) {
@@ -570,6 +609,7 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
     u32 endTick;
 
     if (track->muted) return;
+    if (track->tie && seq_continue_tied_note(slot, trackIdx, note, velocity)) return;
     /* Retrigger the same pitch on this track. */
     for (i = 0; i < SEQ_TRACK_NOTES; ++i) {
         if (track->notes[i].active && track->notes[i].note == (u8)note) seq_note_off(slot, trackIdx, i);
@@ -607,7 +647,8 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
         samples = (int)wave.samples;
         rate = wave.rate;
     } else {
-        /* PSG / noise: synthesize at the note's pitch. */
+        /* PSG and noise use the instrument envelope with sequence overrides. */
+        seq_synth_apply_overrides(&wave, track);
         int pitch = track->transpose * 64 + seq_track_pitch(track);
         float noteSeconds = slot->tempo > 0 ? (float)duration / ((float)slot->tempo * 0.8f) : 0.0f;
         float releaseSeconds = 0.0f;
@@ -627,24 +668,20 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
         rate = SEQ_SYNTH_RATE;
         speed = 0x8000;
     }
-    slot->noteCount++;
+    ++slot->noteCount;
+    SeqNote *voice = &track->notes[freeIdx];
+    *voice = (SeqNote){
+        .dsCh = -1, .note = (u8)note, .velocity = (u8)velocity, .instrumentPan = wave.pan,
+        .endTick = endTick, .samplePitch = samplePitch, .key = note + track->transpose,
+        .sampled = wave.kind == 0, .held = track->tie && wave.kind == 0,
+    };
     if (!Audio_IsNdspReady()) {
-        /* Timed but silent: the sequence still advances and ends on
-         * schedule, so the game never waits on a sound that cannot
-         * play. */
-        SeqNote *n;
+        /* Track timing still advances in the absence of a DSP. */
         if (!s_ndspDownLogged) {
             s_ndspDownLogged = TRUE;
             Log_Line("AUDIO", "SeqPlayer: NDSP down, seq %d silent (timing kept)", slot->seqNo);
         }
-        n = &track->notes[freeIdx];
-        n->active = TRUE;
-        n->wave = NULL;
-        n->dsCh = -1;
-        n->note = (u8)note;
-        n->velocity = (u8)velocity;
-        n->instrumentPan = wave.pan;
-        n->endTick = endTick;
+        voice->active = TRUE;
         return;
     }
     waveOut = seq_alloc_channel(slot, trackIdx, freeIdx, track->priority);
@@ -653,27 +690,17 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
         slot->droppedNotes++;
         return;
     }
-    int ch = track->notes[freeIdx].dsCh;
     if (!NNS_SndWaveOutStart(waveOut, format, data, loop, loopStart, samples, rate, finalVol,
                              speed, pan)) {
         NNS_SndWaveOutFreeChannel(waveOut);
-        s_channels[ch].inUse = FALSE;
-        track->notes[freeIdx].dsCh = -1;
+        s_channels[voice->dsCh].inUse = FALSE;
+        voice->dsCh = -1;
         slot->queueFailed++;
         slot->droppedNotes++;
         return;
     }
-    {
-        SeqNote *n = &track->notes[freeIdx];
-        n->active = TRUE;
-        n->wave = waveOut;
-        n->sampled = wave.kind == 0;
-        n->samplePitch = samplePitch;
-        n->note = (u8)note;
-        n->velocity = (u8)velocity;
-        n->instrumentPan = wave.pan;
-        n->endTick = endTick;
-    }
+    voice->active = TRUE;
+    voice->wave = waveOut;
 }
 
 /* Walk one track's events until a NOTE/REST sets a wait, or the track
@@ -798,7 +825,7 @@ static void seq_process_events(SeqSlot *slot, int trackIdx) {
                 break;
             case 0xC6: track->priority = v; break;
             case 0xC7: track->noteWait = v != 0; break;
-            case 0xC8: track->tie = v ? TRUE : FALSE; break;
+            case 0xC8: seq_set_tie(slot, trackIdx, v != 0); break;
             case 0xC9: break; /* portamento control */
             case 0xCA: track->modDepth = v; break;
             case 0xCB: track->modSpeed = v; break;
@@ -806,10 +833,10 @@ static void seq_process_events(SeqSlot *slot, int trackIdx) {
             case 0xCD: track->modRange = v; break;
             case 0xCE: break; /* portamento on/off */
             case 0xCF: break; /* portamento time */
-            case 0xD0: track->attack = v; break;
-            case 0xD1: track->decay = v; break;
-            case 0xD2: track->sustain = v; break;
-            case 0xD3: track->release = v; break;
+            case 0xD0: track->attack = v & 127; break;
+            case 0xD1: track->decay = v & 127; break;
+            case 0xD2: track->sustain = v & 127; break;
+            case 0xD3: track->release = v & 127; break;
             case 0xD4: /* LOOP START, count byte */
                 if (v == 0) v = 1;
                 if (track->loopDepth < SEQ_LOOP_DEPTH) {
@@ -847,6 +874,11 @@ static void seq_process_events(SeqSlot *slot, int trackIdx) {
         Log_Line("AUDIO", "SeqPlayer seq=%d track=%d: event guard hit, track stopped",
                  slot->seqNo, trackIdx);
         track->active = FALSE;
+    }
+    if (!track->active) {
+        for (int i = 0; i < SEQ_TRACK_NOTES; ++i) {
+            if (track->notes[i].held) seq_note_off(slot, trackIdx, i);
+        }
     }
 }
 
@@ -893,7 +925,7 @@ static void seq_advance(SeqSlot *slot, float ticks) {
             if (track->active && track->wait < step) step = track->wait;
             for (n = 0; n < SEQ_TRACK_NOTES; ++n) {
                 SeqNote *note = &track->notes[n];
-                if (note->active) {
+                if (note->active && !note->held) {
                     u32 remaining = note->endTick > slot->tick ? note->endTick - slot->tick : 0;
                     if (remaining < step) step = remaining;
                 }
@@ -904,8 +936,8 @@ static void seq_advance(SeqSlot *slot, float ticks) {
         for (t = 0; t < SEQ_TRACKS; ++t) {
             SeqTrack *track = &slot->tracks[t];
             for (n = 0; n < SEQ_TRACK_NOTES; ++n) {
-                if (track->notes[n].active && slot->tick >= track->notes[n].endTick)
-                    seq_note_off(slot, t, n);
+                SeqNote *note = &track->notes[n];
+                if (note->active && !note->held && slot->tick >= note->endTick) seq_note_off(slot, t, n);
             }
         }
         for (t = 0; t < SEQ_TRACKS; ++t) {
@@ -1141,6 +1173,7 @@ BOOL NNS_SndArcPlayerStartSeqEx(NNSSndHandle *handle, int playerNo, int bankNo, 
         tr->noteWait = TRUE;
         tr->volume = 127;
         tr->expression = 127;
+        tr->attack = tr->decay = tr->sustain = tr->release = 0xff;
         tr->pan = 64;
         tr->bendRange = 2;
         tr->priority = 64;

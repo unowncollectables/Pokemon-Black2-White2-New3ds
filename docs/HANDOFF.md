@@ -299,6 +299,12 @@ Settings invalidates that reuse when it takes over the bottom LCD.
   sequencer sums NitroSDK attenuation values before applying the channel
   volume and divider. Sequence pan events and signed game pan offsets
   update voices that are already sounding.
+- Tied sampled voices keep their waveform and playback position while
+  SSEQ notes change pitch and velocity. The TIE command releases active
+  notes before changing mode. Sampled release envelopes and tied
+  synthesized PSG/noise voices remain open. Synthesized notes honor
+  sequence envelope overrides, and their release starts from the
+  amplitude at note-off.
 - With all permitted sequence voices occupied, a finished NDSP sample
   can be reclaimed before its note deadline. New notes can replace
   equal- or lower-priority voices, with ties decided by onset order
