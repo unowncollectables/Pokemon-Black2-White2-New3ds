@@ -24,8 +24,15 @@ static int s_ready;
 static char s_root[96];
 
 /* Nitro can keep many logical handles open. Keep a smaller pool of SD
- * handles so field archives leave room for audio, overlays and the log. */
-enum { SD_CACHE_SIZE = 32 };
+ * handles so field archives leave room for audio, overlays and the log.
+ * The pool must stay well under the 3DS FS service's own open-file
+ * budget (shared with audio, overlays, the save and the log): a raise
+ * to 32 wedged Continue on hardware (Nov 27, 2026) - the title flow
+ * pinned pool handles until the FS service refused the field's first
+ * archive open (a/1/2/6, zone entities) before the pool itself was
+ * full, so no eviction ever ran. The emulator's host FS has no such
+ * budget, which is why it never reproduced there. */
+enum { SD_CACHE_SIZE = 8 };
 typedef struct {
     char *path;
     FILE *fp;
@@ -44,28 +51,46 @@ static CachedFile *find_file(const char *path) {
     return NULL;
 }
 
+/* A free slot if one exists, else the LRU entry. With occupiedOnly,
+ * the LRU occupied entry even when a slot is free. */
+static CachedFile *cache_slot(int occupiedOnly) {
+    CachedFile *lru = NULL;
+    for (unsigned i = 0; i < SD_CACHE_SIZE; ++i) {
+        if (!s_cache[i].fp) {
+            if (!occupiedOnly) return &s_cache[i];
+        } else if (!lru || s_cache[i].used < lru->used) {
+            lru = &s_cache[i];
+        }
+    }
+    return lru;
+}
+
+static void cache_evict(CachedFile *entry) {
+    if (entry->fp) fclose(entry->fp);
+    free(entry->path);
+    *entry = (CachedFile){0};
+}
+
 static CachedFile *cache_file(const char *path) {
     CachedFile *entry = find_file(path);
     if (entry) {
         entry->used = ++s_useCount;
         return entry;
     }
-    entry = &s_cache[0];
-    for (unsigned i = 0; i < SD_CACHE_SIZE; ++i) {
-        if (!s_cache[i].fp) {
-            entry = &s_cache[i];
-            break;
-        }
-        if (s_cache[i].used < entry->used) entry = &s_cache[i];
-    }
-    if (entry->fp) {
-        fclose(entry->fp);
-        free(entry->path);
-        *entry = (CachedFile){0};
-    }
     char *copy = strdup(path);
     if (!copy) return NULL;
-    FILE *fp = fopen(path, "rb");
+    FILE *fp = NULL;
+    for (int attempt = 0; attempt < 2 && !fp; ++attempt) {
+        /* First attempt takes a free slot or evicts the LRU entry.
+         * If the open is still refused, the FS service's handle
+         * budget is the likely cause, so the retry evicts an
+         * occupied entry to free a real handle first. A genuine
+         * error (e.g. no such file) simply fails twice. */
+        entry = cache_slot(attempt > 0);
+        if (!entry) break;
+        cache_evict(entry);
+        fp = fopen(path, "rb");
+    }
     if (!fp) {
         int error = errno;
         free(copy);
