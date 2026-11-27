@@ -278,11 +278,20 @@ static inline void put_bg_pixel(u16 *out, BgBlend *blend, unsigned i, unsigned p
 }
 
 static void put_text_pixel(u16 *out, BgBlend *blend, unsigned i, unsigned plane, u16 color, u32 ink, const u16 *palette) {
+    /* The composed colour beneath this text layer, captured before the
+     * glyph overwrites it: for a glyph over a transparent underlay this
+     * is the only honest background to restore when the native stamp
+     * moves the glyph to its native-resolution coordinate. */
+    u16 below = out[i];
     put_bg_pixel(out, blend, i, plane, color);
     if (!ink || !blend || !blend->ink || (blend->window && !(blend->window[i] & plane))) return;
     blend->ink[i] = PBW2_TEXT_INK;
-    if (blend->nativeText && (ink & PBW2_TEXT_NATIVE))
-        blend->ink[i] = (ink & ~0xffu) | PBW2_TEXT_INK | palette[ink & 255];
+    if (blend->nativeText && (ink & PBW2_TEXT_NATIVE)) {
+        if (ink & PBW2_TEXT_CLEAR_UNDER)
+            blend->ink[i] = (ink & ~0xffu & ~PBW2_TEXT_CLEAR_UNDER) | PBW2_TEXT_INK | below;
+        else
+            blend->ink[i] = (ink & ~0xffu) | PBW2_TEXT_INK | palette[ink & 255];
+    }
 }
 
 static void compose_text_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmode, u16 *out, BgBlend *blend) {
