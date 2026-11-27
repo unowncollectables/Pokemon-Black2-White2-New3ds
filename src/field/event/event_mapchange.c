@@ -1,4 +1,7 @@
 #include "types.h"
+#ifdef PBW2_N3DS
+#include "g3_raster.h"
+#endif
 #include "communication/union/union_main.h"
 #include "constants/arc.h"
 #include "constants/flags.h"
@@ -1695,6 +1698,19 @@ void FieldMapControl_LoadZone(GameSystem *gsys, u16 zoneId) {
     GameData *gameData = GSYS_GetGameData(gsys);
     EventData *eventData = GameData_GetEventData(gameData);
     MapMatrix *matrix;
+
+#ifdef PBW2_N3DS
+    /* Every warp (field<->interior, interior<->interior) loads its zone
+     * through here, inside the running field proc. This is the real
+     * per-zone-transition site for the host texture cache: the
+     * GFL_G3DSysCreate hook (g3d_system.c) runs only once per field-proc
+     * lifetime (FieldRoutine_Open brackets the whole session; warps
+     * never re-run it), so playdoh fix v2's invalidate never fired on a
+     * zone change in play, and later zones kept uploading into a full
+     * cross-zone cache. Drop it here so each zone starts from the
+     * known-good empty-cache state, like a first entry. */
+    PbW2_G3RasterInvalidateZone();
+#endif
 
     GSYS_GetField(gsys);
 

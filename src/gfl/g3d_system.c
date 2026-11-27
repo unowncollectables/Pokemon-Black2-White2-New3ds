@@ -217,12 +217,14 @@ void GFL_G3DSysCreate(BOOL frmTexVramMgr, u32 texVramSize, BOOL frmPltVramMgr, u
      * the fit/sharp flags are read live per frame in present.c and never
      * needed this, the stateful pushes (wide enable, PICA options) did. */
     Settings_ApplyDisplay();
-    /* A fresh G3D system is a zone/scene transition. For the field this
-     * runs once per zone entry: FieldRoutine_Open (fieldmap.c) calls
-     * GFL_G3DSysCreate exactly once, right after Field_Create, on every
-     * field<->interior cycle. Drop the host PICA texture cache here so
-     * no stale cross-zone binding survives (playdoh fix v2; v1 hooked
-     * PbW2_G3RasterReset, which REQ-18 proved is boot-only). */
+    /* A fresh G3D system is a scene transition (a field proc starting,
+     * an app opening). Drop the host PICA texture cache here so no
+     * stale cross-scene binding survives (playdoh fix v2; v1 hooked
+     * PbW2_G3RasterReset, which REQ-18 proved is boot-only). NOTE: this
+     * does NOT cover zone changes in play — FieldRoutine_Open runs
+     * once per field-proc lifetime and warps never re-run it; the
+     * per-zone site is FieldMapControl_LoadZone (event_mapchange.c),
+     * which also invalidates. */
     PbW2_G3RasterInvalidateZone();
     Log_Line("field", "GFL_G3DSysCreate done");
 #endif
