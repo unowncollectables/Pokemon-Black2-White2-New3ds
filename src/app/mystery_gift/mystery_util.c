@@ -25,6 +25,10 @@
 #include "system/text_speed.h"
 #include "system/time_icon.h"
 
+#if defined(PBW2_N3DS)
+#include "vram_host_api.h"
+#endif
+
 // Mystery Gift's windows, menus, sequences and palette fades. Our names; swan has none for this overlay
 
 // A position, and how the text is placed against it
@@ -636,6 +640,7 @@ MysteryList *MysteryList_Create(const MysteryListSetup *setup, HeapID heapId) {
     MysteryList *list = GFL_HeapAllocate(heapId, sizeof(MysteryList), FALSE, "mystery_util.c", 1265);
     u32 i;
     ClActorPos pos;
+    u16 *pltt;
 
     MI_CpuFill8(list, 0, sizeof(MysteryList));
     list->count = setup->count;
@@ -653,10 +658,17 @@ MysteryList *MysteryList_Create(const MysteryListSetup *setup, HeapID heapId) {
         list->pos = *setup->cursorPos;
         list->pos = list->pos > list->count - 1 ? list->count - 1 : list->pos;
     }
+#if defined(PBW2_N3DS)
+    /* HW_BG_PLTT is main-screen BG palette RAM, unmapped on the 3DS;
+     * resolve it through the host map (same pattern as PStatus_InitText). */
+    pltt = PbW2_VramMap((const void *)(HW_BG_PLTT + setup->bgPalette * 32));
+#else
+    pltt = (u16 *)(HW_BG_PLTT + setup->bgPalette * 32);
+#endif
     for (i = 0; i < list->count; i++) {
-        list->baseColors[i] = *(u16 *)(HW_BG_PLTT + setup->bgPalette * 32 + (i + 10) * 2);
+        list->baseColors[i] = pltt[i + 10];
     }
-    list->grayColor = *(u16 *)(HW_BG_PLTT + setup->bgPalette * 32 + 15 * 2);
+    list->grayColor = pltt[15];
     {
         MysteryTextWinEntry entries[4] = {
             { 5, 2, 27, 2, 0, NULL, ALIGN_CENTER_Y, 0, 0, PRINT_COLOR(15, 2, 0) },

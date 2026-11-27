@@ -43,14 +43,6 @@ extern DSProtCallback DSProt_Callbacks[2];
 
 // Calls callback(arg0, arg1) through the DS Protect function func, which returns what the callback returns, after
 // verifying func's code. If the checksum does not match, tamper(NULL, NULL) is called instead
-#ifdef PBW2_N3DS
-// On the 3DS host build there is no DS Protect code to verify: func is a host
-// implementation whose machine code can never match the DS checksum, and the
-// caller dereferences the tamper path's return value (pokelist.c's
-// DSPROT_CHECKED_RUN result), so taking the tamper branch would crash. Run
-// the callback through func directly instead.
-#define DSPROT_CHECKED_RUN(ret, func, tamper, callback, arg0, arg1) { ret = func(callback, arg0, arg1); }
-#else
 #define DSPROT_CHECKED_RUN(ret, func, tamper, callback, arg0, arg1)                                                    \
     {                                                                                                                  \
         u32 i;                                                                                                         \
@@ -66,7 +58,6 @@ extern DSProtCallback DSProt_Callbacks[2];
             ret = tamper(NULL, NULL);                                                                                  \
         }                                                                                                              \
     }
-#endif
 
 void *DSProt_CallRunChecks1(void *arg0, void *arg1);
 void *DSProt_CallRunChecks2(void *arg0, void *arg1);

@@ -30,6 +30,10 @@
 #include "system/wipe.h"
 #include "text/system/c_gear_help.h"
 
+#if defined(PBW2_N3DS)
+#include "vram_host_api.h"
+#endif
+
 #define PAGE_COUNT 15
 // The titles of the pages are the first messages of the bank and their texts the ones after
 #define TITLE_MESSAGE(page) (CGearHelp_Text_AboutInfrared + (page))
@@ -416,7 +420,13 @@ static void CGHelp_InitText(CGHelp *help) {
     help->quitButton = AppTaskMenuWin_Create(help->taskMenuRes, &item, 22, 21, 10, help->heapId);
     GFL_StrBufFree(item.str);
     AppTaskMenuWin_ClearScreen(help->previousButton);
+#if defined(PBW2_N3DS)
+    /* 0x050005e2 is sub-screen BG palette RAM, unmapped on the 3DS;
+     * resolve it through the host map (same pattern as PStatus_InitText). */
+    *(vu16 *)PbW2_VramMap((const void *)0x050005e2) = 0;
+#else
     *(vu16 *)0x050005e2 = 0;
+#endif
 }
 
 static void CGHelp_FreeText(CGHelp *help) {
