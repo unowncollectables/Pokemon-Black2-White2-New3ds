@@ -83,6 +83,24 @@ static OSThread *sThread;
 static u32 sUnused;
 // The frames left of the BGM's fade in or out
 static s32 sFadeFrames;
+#ifdef PBW2_N3DS
+// Port (audio decoupling audit, findings #5/#6): the BGM crossfade and the
+// sFadeFrames report are paced by wall-clock time, never by rendered
+// frames. The fade durations stay authored in 60 Hz frames — that is the
+// game's design unit — but they are handed to the sequence player's
+// wall-clock MoveVolume fade and polled against elapsed time here, so a
+// fade lasts the same number of SECONDS at any frame rate.
+// sBGMFadePhaseTick is the OS_GetTick() at the start of the current
+// BGM-change fade phase (fade-out, then fade-in); sFadeStartTick is the
+// same for the standalone GFL_SndBGMFadeIn/FadeOut fades.
+static u64 sBGMFadePhaseTick;
+static u64 sFadeStartTick;
+
+// Whole 60 Hz frames elapsed since tick0, by the wall clock.
+static s32 SndElapsedFrames(u64 tick0) {
+    return (s32)((OS_GetTick() - tick0) * 60 * 64 / OS_SYSTEM_CLOCK);
+}
+#endif
 static BOOL (*sSeqVerifyCallback)(u32 seq);
 static NNSSndHeapHandle sSndHeap;
 static BGMChange sBGMChange;
@@ -135,9 +153,18 @@ void GFL_SndUpdate(void) {
             sTrackMask |= (u16)(1 << i);
         }
     }
+#ifdef PBW2_N3DS
+    // The audible fade is the player's wall-clock MoveVolume fade; the
+    // report count follows the same clock (audit finding #6) instead of
+    // counting rendered frames.
+    if (sFadeFrames != 0 && SndElapsedFrames(sFadeStartTick) >= sFadeFrames) {
+        sFadeFrames = 0;
+    }
+#else
     if (sFadeFrames != 0) {
         sFadeFrames--;
     }
+#endif
 }
 
 void GFL_SndDestroyHeap(void) {
@@ -283,12 +310,18 @@ static void GFL_SndBGMFadeInEx(u16 frames, s32 volume) {
     NNS_SndPlayerMoveVolume(GFL_SndBGMStack_GetHandle(), 0, 0);
     NNS_SndPlayerMoveVolume(GFL_SndBGMStack_GetHandle(), volume, frames);
     sFadeFrames = frames;
+#ifdef PBW2_N3DS
+    sFadeStartTick = OS_GetTick();
+#endif
 }
 
 void GFL_SndBGMFadeOut(u16 frames) {
     FinishBGMChange();
     NNS_SndPlayerMoveVolume(GFL_SndBGMStack_GetHandle(), 0, frames);
     sFadeFrames = frames;
+#ifdef PBW2_N3DS
+    sFadeStartTick = OS_GetTick();
+#endif
 }
 
 BOOL GFL_SndBGMIsFading(void) {
@@ -366,6 +399,17 @@ static void RequestBGMChange(u32 seq, u16 channelMask, s32 fadeOutFrames, s32 fa
     StopLoadThread();
     sBGMChange.loadState = BGM_LOAD_IDLE;
     sBGMChange.active = TRUE;
+#ifdef PBW2_N3DS
+    // Start the fade-out on the sequence player's wall-clock MoveVolume
+    // fade; UpdateBGMChange only polls its elapsed time to gate the new
+    // BGM's load, so the change happens on a time schedule at any frame
+    // rate. With no different BGM playing there is nothing to fade and
+    // the load proceeds at once, as before.
+    sBGMFadePhaseTick = OS_GetTick();
+    if (seq != 0 && GFL_SndGetLastResID() != 0 && GFL_SndGetLastResID() != seq) {
+        NNS_SndPlayerMoveVolume(GFL_SndBGMStack_GetHandle(), 0, fadeOutFrames);
+    }
+#endif
 }
 
 static void ResetBGMChange(void) {
@@ -404,13 +448,46 @@ static void UpdateBGMChange(void) {
     case BGM_LOAD_IDLE:
         if (seq != 0) {
             if (seq != sBGMChange.seq) {
+#ifdef PBW2_N3DS
+                // The fade-out runs on the player's wall-clock MoveVolume
+                // fade (see RequestBGMChange). Poll elapsed time only:
+                // while the authored duration has not elapsed, wait; once
+                // it has, fall through and load the new BGM. fadeCounter
+                // mirrors the frames remaining, derived from the clock.
+                {
+                    s32 elapsed = SndElapsedFrames(sBGMFadePhaseTick);
+                    sBGMChange.fadeCounter = elapsed < sBGMChange.fadeOutFrames
+                                                 ? (u16)(sBGMChange.fadeOutFrames - elapsed)
+                                                 : 0;
+                    if (sBGMChange.fadeCounter != 0) {
+                        return;
+                    }
+                }
+#else
                 if (sBGMChange.fadeCounter != 0) {
                     sBGMChange.fadeCounter--;
                     NNS_SndPlayerSetVolume(handle, SND_VOLUME_MAX * sBGMChange.fadeCounter / sBGMChange.fadeOutFrames);
                     return;
                 }
                 NNS_SndPlayerSetVolume(handle, 0);
+#endif
             } else {
+#ifdef PBW2_N3DS
+                // Fade-in: likewise a wall-clock MoveVolume fade, started
+                // when the new sequence starts (BGM_LOAD_WAVE below).
+                // Poll its elapsed time and finish on schedule.
+                {
+                    s32 elapsed = SndElapsedFrames(sBGMFadePhaseTick);
+                    sBGMChange.fadeCounter = elapsed < sBGMChange.fadeInFrames
+                                                 ? (u16)elapsed
+                                                 : (u16)sBGMChange.fadeInFrames;
+                    if (sBGMChange.fadeCounter < sBGMChange.fadeInFrames) {
+                        return;
+                    }
+                }
+                ResetBGMChange();
+                return;
+#else
                 if (sBGMChange.fadeCounter < sBGMChange.fadeInFrames) {
                     sBGMChange.fadeCounter++;
                     NNS_SndPlayerSetVolume(handle, SND_VOLUME_MAX * sBGMChange.fadeCounter / sBGMChange.fadeInFrames);
@@ -418,6 +495,7 @@ static void UpdateBGMChange(void) {
                 }
                 ResetBGMChange();
                 return;
+#endif
             }
         }
         StopBGM();
@@ -444,7 +522,17 @@ static void UpdateBGMChange(void) {
             NNS_SndArcSetLoadBlockSize(0);
             GFL_SndBGMStack_SetLoadedSeq(sBGMChange.seq);
             NNS_SndArcPlayerStartSeqEx(GFL_SndBGMStack_GetHandle(), 0, -1, -1, sBGMChange.seq);
+#ifdef PBW2_N3DS
+            // Fade the new BGM in on the player's wall-clock MoveVolume
+            // fade: snap to silence, then rise to full over the authored
+            // fadeInFrames duration.
+            NNS_SndPlayerMoveVolume(handle, 0, 0);
+            NNS_SndPlayerMoveVolume(handle, SND_VOLUME_MAX, sBGMChange.fadeInFrames);
+            sBGMFadePhaseTick = OS_GetTick();
+            sBGMChange.fadeCounter = 0;
+#else
             NNS_SndPlayerSetVolume(handle, 0);
+#endif
             sBGMChange.loadState = BGM_LOAD_IDLE;
         } else {
             OS_Sleep(1);

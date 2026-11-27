@@ -21,8 +21,9 @@
  * The ARM7 sequence interpreter does not exist in this tree, so the
  * host runs it: the audio worker advances each playing sequence's tick clock from
  * wall time, the event parser walks the SSEQ tracks, and NOTE-ONs
- * resolve program -> instrument (SBNK) -> wave (SWAR) -> a DS channel
- * through the wave player (wave_out.c). The sequence data is copied
+ * resolve program -> instrument (SBNK) -> wave (SWAR) -> a host
+ * voice (DS-mapped or overflow, see SEQ_VOICE_SLOTS) through the
+ * wave player (wave_out.c). The sequence data is copied
  * at StartSeq time, so the sound heap may unload the bank underneath
  * a playing sequence without the parser reading freed memory; a wave
  * is resolved at note-on time and skipped (not hung on) when its bank
@@ -56,8 +57,9 @@
  * Slice A limits (see work-log.md for the sized remainder): no
  * arithmetic opcodes (0xA0-0xBF â€” none appear in any inventoried
  * sequence; a track that hits one stops instead of desyncing), no
- * ADSR envelope on sampled notes (notes play at constant volume
- * for their duration; the PSG/noise synth does apply an ADSR),
+ * ADSR envelope is implemented for sampled notes too (the same
+ * curve the PSG/noise synth bakes into its buffers, stepped on
+ * the tick and applied through the channel volume),
  * no modulation or portamento. Sampled notes follow track pitch and
  * pitch-bend changes. PSG/noise uses the pitch at note-on. */
 
@@ -66,13 +68,36 @@
 #define SEQ_TRACK_NOTES 4
 #define SEQ_DS_CHANNELS 16
 #define SEQ_CRY_CHANNEL 15
+/* Host overflow voices (polyphony lift): the game's channel
+ * requests stay SEQ_DS_CHANNELS wide — that width is game design.
+ * The HOST voice pool is wider: past the DS-mapped voices sit
+ * SEQ_OVERFLOW_CHANNELS extra voices on NDSP 17..23 (wave_out.c),
+ * for 15 DS-mapped usable (cry channel excluded) + 7 overflow = 22
+ * usable sequence voices against NDSP's 24 (stream ch 0 and the
+ * cry reserve excluded). A voice slot indexes s_channels: slots
+ * 0..SEQ_DS_CHANNELS-1 are DS channels, the rest are overflow.
+ * Priority-stealing remains the valve, but only ABOVE this cap:
+ * a note steals only when no DS voice, no finished voice and no
+ * overflow voice is free.
+ *
+ * Frame-rate decoupling (Nate, Nov 27): this pool is managed only
+ * from seq_note_on / seq_note_off, reached from SeqPlayer_Tick —
+ * the audio thread's wall-clock tick (audio.c, 5 ms period,
+ * svcGetSystemTick dt), never from a frame/vsync path. No pool
+ * decision is paced by frames. (Pre-existing touchpoint, flagged
+ * in the work log: StartSeqEx processes a sequence's first events
+ * on the game thread, so a sequence's very first notes claim
+ * voices there; every later claim/steal/free is audio-thread.) */
+#define SEQ_OVERFLOW_CHANNELS 7
+#define SEQ_VOICE_SLOTS (SEQ_DS_CHANNELS + SEQ_OVERFLOW_CHANNELS)
 #define SEQ_CALL_DEPTH 4
 #define SEQ_LOOP_DEPTH 4
 #define SEQ_TICKS_PER_QUARTER 48
 
 typedef struct {
     NNSSndWaveOutHandle wave;
-    int dsCh; /* -1 when the note is timed but not sounding (NDSP down) */
+    int dsCh; /* host voice slot (see SEQ_VOICE_SLOTS); -1 when the
+               * note is timed but not sounding (NDSP down) */
     u8 note;
     u8 velocity;
     u8 instrumentPan;
@@ -80,6 +105,20 @@ typedef struct {
     int samplePitch;
     int key; /* MIDI note including transpose at note-on. */
     bool sampled, held;
+    /* ADSR envelope (sampled notes; the synth bakes its own into the
+     * generated buffer). attack/decay/sustain/release are the
+     * instrument's SNDInstParam bytes after track overrides. The
+     * curve is the synth's model (seq_synth_envelope): attack
+     * a/127*0.02 s, decay d/127*0.30 s, release r/127*0.30 s,
+     * sustain s/127 as a gain. envTime and gateSeconds are
+     * wall-clock seconds (gate uses the tempo at note-on). At the
+     * gate end the voice enters the release phase instead of
+     * cutting off, keeps its channel through the tail like the
+     * real player, and is freed at releaseEndTick. */
+    u8 attack, decay, sustain, release;
+    float envTime, gateSeconds, releaseSeconds, envLevel;
+    u32 releaseEndTick;
+    bool enveloped, releasing;
     BOOL active;
 } SeqNote;
 
@@ -143,7 +182,7 @@ typedef struct {
 } SeqChannel;
 
 static SeqSlot s_slots[SEQ_SLOTS];
-static SeqChannel s_channels[SEQ_DS_CHANNELS];
+static SeqChannel s_channels[SEQ_VOICE_SLOTS];
 static u64 s_channelOrder;
 static NNSSndHeapHandle s_heap; /* stashed by NNS_SndArcPlayerSetup */
 static int s_playerVolume[32];
@@ -387,12 +426,20 @@ static void seq_free_channel(int ch) {
 }
 
 static NNSSndWaveOutHandle seq_claim_channel(SeqSlot *slot, int trackIdx, int noteIdx, int priority, int ch) {
-    NNSSndWaveOutHandle wave = WaveOut_AllocSequenceChannel(ch);
+    NNSSndWaveOutHandle wave = ch < SEQ_DS_CHANNELS
+                                   ? WaveOut_AllocSequenceChannel(ch)
+                                   : WaveOut_AllocSequenceOverflowChannel(ch - SEQ_DS_CHANNELS);
     if (wave) {
         s_channels[ch] = (SeqChannel){TRUE, (int)(slot - s_slots), trackIdx, noteIdx, priority, s_channelOrder++};
         slot->tracks[trackIdx].notes[noteIdx].dsCh = ch;
     }
     return wave;
+}
+
+/* The game's alloc mask names DS channels only; overflow voices are
+ * host-owned and always eligible. The cry channel is never eligible. */
+static bool seq_voice_eligible(int voice, u32 allowed) {
+    return voice >= SEQ_DS_CHANNELS || (allowed & (1u << voice)) != 0;
 }
 
 static NNSSndWaveOutHandle seq_alloc_channel(SeqSlot *slot, int trackIdx, int noteIdx, int priority) {
@@ -402,21 +449,40 @@ static NNSSndWaveOutHandle seq_alloc_channel(SeqSlot *slot, int trackIdx, int no
     NNSSndWaveOutHandle wave;
     int victim = -1;
 
+    /* 1. A free DS-mapped voice, in the game's own channel order. */
     for (int ch = 0; ch < SEQ_DS_CHANNELS; ++ch) {
         if (!(allowed & (1u << ch)) || s_channels[ch].inUse) continue;
         wave = seq_claim_channel(slot, trackIdx, noteIdx, priority, ch);
         if (wave) return wave;
     }
 
-    for (int ch = 0; ch < SEQ_DS_CHANNELS; ++ch) {
+    /* 2. A voice whose wave already finished, DS slots first, then
+     * overflow — reclaiming one keeps the overflow pool in reserve
+     * for genuinely simultaneous notes. */
+    for (int ch = 0; ch < SEQ_VOICE_SLOTS; ++ch) {
         SeqChannel *channel = &s_channels[ch];
-        if (!(allowed & (1u << ch)) || !channel->inUse) continue;
-        if (!NNS_SndWaveOutIsPlaying(seq_channel_note(channel)->wave)) {
-            seq_free_channel(ch);
-            wave = seq_claim_channel(slot, trackIdx, noteIdx, priority, ch);
-            if (wave) return wave;
-            continue;
-        }
+        if (!seq_voice_eligible(ch, allowed) || !channel->inUse) continue;
+        if (NNS_SndWaveOutIsPlaying(seq_channel_note(channel)->wave)) continue;
+        seq_free_channel(ch);
+        wave = seq_claim_channel(slot, trackIdx, noteIdx, priority, ch);
+        if (wave) return wave;
+    }
+
+    /* 3. A free overflow voice: the polyphony lift proper. Notes
+     * that used to drop as channel-unavailable sound here instead. */
+    for (int ch = SEQ_DS_CHANNELS; ch < SEQ_VOICE_SLOTS; ++ch) {
+        if (s_channels[ch].inUse) continue;
+        wave = seq_claim_channel(slot, trackIdx, noteIdx, priority, ch);
+        if (wave) return wave;
+    }
+
+    /* 4. Only with the whole pool sounding does priority-stealing
+     * remain, across DS and overflow voices alike: the lowest
+     * priority, oldest first, at or below the new note's priority. */
+    for (int ch = 0; ch < SEQ_VOICE_SLOTS; ++ch) {
+        SeqChannel *channel = &s_channels[ch];
+        if (!seq_voice_eligible(ch, allowed) || !channel->inUse) continue;
+        if (!NNS_SndWaveOutIsPlaying(seq_channel_note(channel)->wave)) continue;
         if (channel->priority > priority) continue;
         if (victim < 0 || channel->priority < s_channels[victim].priority ||
             (channel->priority == s_channels[victim].priority && channel->order < s_channels[victim].order))
@@ -440,6 +506,26 @@ static int seq_final_volume(SeqSlot *slot, SeqTrack *track, int velocity) {
     return SND_CalcChannelVolume(attenuation);
 }
 
+/* The one place a sounding note's channel volume is written: the
+ * sequence volume stack (velocity/track/expression/seq/player/
+ * fade) with the note's ADSR envelope gain multiplied in for
+ * sampled notes. Every volume change (track controls, fades, tie
+ * continuation, the envelope step itself) goes through here so an
+ * unrelated update never stomps the envelope. The packed channel
+ * volume keeps its shift bits; only the 0..127 part scales, which
+ * is the part wave_set_mix treats linearly. */
+static void seq_apply_note_volume(SeqSlot *slot, SeqTrack *track, SeqNote *note) {
+    int volume;
+    if (!note->wave) return;
+    volume = seq_final_volume(slot, track, note->velocity);
+    if (note->enveloped) {
+        int scaled = (int)((float)(volume & 127) * note->envLevel + 0.5f);
+        if (scaled > 127) scaled = 127;
+        volume = (volume & ~127) | scaled;
+    }
+    NNS_SndWaveOutSetVolume(note->wave, volume);
+}
+
 static int seq_note_pan(const SeqTrack *track, unsigned instrumentPan) {
     return track->pan + (int)instrumentPan - 64 + track->panOffset;
 }
@@ -457,8 +543,7 @@ static void seq_update_volume(SeqSlot *slot, unsigned trackMask) {
         SeqTrack *track = &slot->tracks[t];
         for (unsigned n = 0; n < SEQ_TRACK_NOTES; ++n) {
             SeqNote *note = &track->notes[n];
-            if (note->active && note->wave)
-                NNS_SndWaveOutSetVolume(note->wave, seq_final_volume(slot, track, note->velocity));
+            if (note->active && note->wave) seq_apply_note_volume(slot, track, note);
         }
     }
 }
@@ -467,7 +552,7 @@ static void seq_note_off(SeqSlot *slot, int trackIdx, int noteIdx) {
     SeqTrack *track = &slot->tracks[trackIdx];
     SeqNote *note = &track->notes[noteIdx];
     if (!note->active) return;
-    if (note->dsCh >= 0 && note->dsCh < SEQ_DS_CHANNELS && s_channels[note->dsCh].inUse &&
+    if (note->dsCh >= 0 && note->dsCh < SEQ_VOICE_SLOTS && s_channels[note->dsCh].inUse &&
         s_channels[note->dsCh].slot == (int)(slot - s_slots) &&
         s_channels[note->dsCh].noteIdx == noteIdx && s_channels[note->dsCh].track == trackIdx) {
         s_channels[note->dsCh].inUse = FALSE;
@@ -520,6 +605,19 @@ static float seq_synth_envelope(float time, float noteSeconds, float attack, flo
     else if (heldTime < attack + decay) gain = 1.0f - (1.0f - sustain) * (heldTime - attack) / decay;
     if (time < noteSeconds) return gain;
     return release > 0.0f ? gain * (1.0f - (time - noteSeconds) / release) : 0.0f;
+}
+
+/* Live envelope gain for a sampled note at `time` seconds after
+ * note-on, using the same curve and time constants as the synth's
+ * baked envelope (seq_synth_envelope). A held (tied) note has no
+ * gate while it is held, so its gate is its own age and the gain
+ * stays on the attack/decay/sustain curve. */
+static float seq_note_envelope(const SeqNote *note, float time) {
+    float gate = note->held ? time : note->gateSeconds;
+    return seq_synth_envelope(time, gate, (float)note->attack / 127.0f * 0.02f,
+                              (float)note->decay / 127.0f * 0.30f,
+                              (float)note->release / 127.0f * 0.30f,
+                              (float)note->sustain / 127.0f);
 }
 
 static void seq_synth_apply_overrides(SeqWave *wave, const SeqTrack *track) {
@@ -580,7 +678,7 @@ static bool seq_continue_tied_note(SeqSlot *slot, int trackIdx, int note, int ve
         if (voice->wave) {
             s_channels[voice->dsCh].priority = track->priority;
             NNS_SndWaveOutSetSpeed(voice->wave, seq_sample_speed(voice->samplePitch + seq_track_pitch(track)));
-            NNS_SndWaveOutSetVolume(voice->wave, seq_final_volume(slot, track, velocity));
+            seq_apply_note_volume(slot, track, voice);
         }
         ++slot->noteCount;
         return true;
@@ -609,6 +707,7 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
     int loopStart, samples, rate, speed;
     int samplePitch = 0;
     u32 endTick;
+    float gateSeconds = 0.0f, releaseSeconds = 0.0f;
 
     if (track->muted) return;
     if (track->tie && seq_continue_tied_note(slot, trackIdx, note, velocity)) return;
@@ -636,6 +735,9 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
         slot->droppedNotes++;
         return;
     }
+    /* Track ADSR opcodes (0xD0-0xD3) override the instrument's
+     * envelope, for sampled and synthesized notes alike. */
+    seq_synth_apply_overrides(&wave, track);
     finalVol = seq_final_volume(slot, track, velocity);
     pan = seq_note_pan(track, wave.pan);
     endTick = slot->tick + duration;
@@ -648,12 +750,13 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
         loopStart = (int)wave.loopStart;
         samples = (int)wave.samples;
         rate = wave.rate;
+        gateSeconds = slot->tempo > 0 ? (float)duration / ((float)slot->tempo * 0.8f) : 0.0f;
+        releaseSeconds = (float)wave.release / 127.0f * 0.30f;
     } else {
-        /* PSG and noise use the instrument envelope with sequence overrides. */
-        seq_synth_apply_overrides(&wave, track);
+        /* PSG and noise bake the envelope into the generated buffer. */
         int pitch = track->transpose * 64 + seq_track_pitch(track);
         float noteSeconds = slot->tempo > 0 ? (float)duration / ((float)slot->tempo * 0.8f) : 0.0f;
-        float releaseSeconds = 0.0f;
+        releaseSeconds = 0.0f;
         u32 synthSamples = seq_synth_note(&wave, note, pitch, noteSeconds, &releaseSeconds);
         if (synthSamples == 0) {
             slot->synthesisFailed++;
@@ -676,7 +779,13 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
         .dsCh = -1, .note = (u8)note, .velocity = (u8)velocity, .instrumentPan = wave.pan,
         .endTick = endTick, .samplePitch = samplePitch, .key = note + track->transpose,
         .sampled = wave.kind == 0, .held = track->tie && wave.kind == 0,
+        .attack = wave.attack, .decay = wave.decay, .sustain = wave.sustain,
+        .release = wave.release, .gateSeconds = gateSeconds,
+        .releaseSeconds = releaseSeconds,
+        .releaseEndTick = endTick + (u32)(releaseSeconds * (float)slot->tempo * 0.8f),
+        .enveloped = wave.kind == 0,
     };
+    if (voice->enveloped) voice->envLevel = seq_note_envelope(voice, 0.0f);
     if (!Audio_IsNdspReady()) {
         /* Track timing still advances in the absence of a DSP. */
         if (!s_ndspDownLogged) {
@@ -703,6 +812,10 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
     }
     voice->active = TRUE;
     voice->wave = waveOut;
+    /* Start from the envelope's first gain rather than the full
+     * channel volume Start just set, so a slow attack does not blip
+     * at full volume until the first envelope step. */
+    if (voice->enveloped) seq_apply_note_volume(slot, track, voice);
 }
 
 /* Walk one track's events until a NOTE/REST sets a wait, or the track
@@ -939,7 +1052,16 @@ static void seq_advance(SeqSlot *slot, float ticks) {
             SeqTrack *track = &slot->tracks[t];
             for (n = 0; n < SEQ_TRACK_NOTES; ++n) {
                 SeqNote *note = &track->notes[n];
-                if (note->active && !note->held && slot->tick >= note->endTick) seq_note_off(slot, t, n);
+                if (!note->active || note->held || slot->tick < note->endTick) continue;
+                if (note->enveloped && !note->releasing && note->releaseSeconds > 0.0f) {
+                    /* Gate end: enter the release phase. The voice
+                     * keeps sounding (and keeps its channel, like
+                     * the real player) until the tail ends. */
+                    note->releasing = TRUE;
+                    note->endTick = note->releaseEndTick;
+                } else {
+                    seq_note_off(slot, t, n);
+                }
             }
         }
         for (t = 0; t < SEQ_TRACKS; ++t) {
@@ -991,11 +1113,55 @@ static void seq_start_fade(SeqSlot *slot, int target, int frames, BOOL stopAtEnd
     slot->stopAtFadeEnd = stopAtEnd;
 }
 
+/* Advance every sampled note's ADSR envelope by dt wall-clock
+ * seconds and re-apply its channel volume when the gain moved.
+ * Runs on the audio thread's tick cadence (the ~5 ms polls), the
+ * same cadence the sequence fades use. Synth notes are skipped:
+ * their envelope is baked into the generated buffer. */
+static void seq_envelope_step(SeqSlot *slot, float dt) {
+    int t, n;
+    if (dt <= 0.0f) return;
+    for (t = 0; t < SEQ_TRACKS; ++t) {
+        SeqTrack *track = &slot->tracks[t];
+        for (n = 0; n < SEQ_TRACK_NOTES; ++n) {
+            SeqNote *note = &track->notes[n];
+            float gain;
+            if (!note->active || !note->enveloped || !note->wave) continue;
+            note->envTime += dt;
+            gain = seq_note_envelope(note, note->envTime);
+            if (gain != note->envLevel) {
+                note->envLevel = gain;
+                seq_apply_note_volume(slot, track, note);
+            }
+        }
+    }
+}
+
+/* Backlog drain (audio decoupling audit, finding #2): a tick gap over
+ * 100 ms is DRAINED in <=100 ms chunks inside the same tick call, not
+ * discarded, so after an audio-thread stall the sequence and its
+ * envelopes return to wall time instead of lagging it permanently.
+ * The total catch-up in one call is capped at SEQ_CATCHUP_MAX_SECONDS;
+ * anything beyond it is dropped AND logged below (never silent). The
+ * cap is what makes a pathological stall safe: at most half a second
+ * of sequence time is processed per tick call, in bounded 100 ms
+ * steps, so the drain is a small multiple of a normal tick's worst
+ * case and cannot spiral (drain work is bounded while real time keeps
+ * arriving at 1x; an uncapped drain could take longer than the stall
+ * it repays and grow the next gap). The catch-up itself is a burst by
+ * nature: seq_advance walks the stalled span's event deadlines in
+ * order, so notes that began and ended inside the stall are turned on
+ * and off within the drain (inaudible), and notes still current start
+ * on their wall-time schedule — the audible result is the music back
+ * in sync, not a fast-forward. */
+#define SEQ_TICK_CHUNK_SECONDS 0.1f
+#define SEQ_CATCHUP_MAX_SECONDS 0.5f
+
 void SeqPlayer_Tick(void) {
-    static u64 windowStart, longestGap;
-    static unsigned cappedUpdates;
+    static u64 windowStart, longestGap, discardedMs;
+    static unsigned stalledUpdates;
     u64 now, gap;
-    float dt = 0.0f;
+    float dt = 0.0f, discarded = 0.0f;
     bool playing = false;
     int i;
     LightLock_Lock(&s_seqLock);
@@ -1005,33 +1171,55 @@ void SeqPlayer_Tick(void) {
     gap = s_lastTick ? now - s_lastTick : 0;
     if (s_lastTick) {
         dt = (float)gap / (float)SYSCLOCK_ARM11;
-        if (dt > 0.1f) dt = 0.1f;
         if (dt < 0.0f) dt = 0.0f;
+        if (dt > SEQ_CATCHUP_MAX_SECONDS) {
+            discarded = dt - SEQ_CATCHUP_MAX_SECONDS;
+            dt = SEQ_CATCHUP_MAX_SECONDS;
+        }
     }
     s_lastTick = now;
+    /* Fades are functions of absolute time; step them once per call. */
     for (i = 0; i < SEQ_SLOTS; ++i) {
         SeqSlot *slot = &s_slots[i];
-        float ticks;
         if (!slot->inUse) continue;
         seq_fade_step(slot, now);
         if (!slot->inUse) continue;
-        if (slot->paused) continue;
-        playing = true;
-        ticks = dt * (float)slot->tempo * 0.8f * ((float)slot->tempoRatio / 256.0f);
-        seq_advance(slot, ticks);
-        if (slot->inUse && !seq_slot_has_tracks(slot)) seq_finish_slot(i);
+        if (!slot->paused) playing = true;
+    }
+    /* Advance sequence + envelopes over dt in <=100 ms chunks. A
+     * normal ~5 ms tick is a single chunk — exactly the old path. */
+    {
+        float remaining = dt;
+        while (remaining > 0.0f) {
+            float chunk = remaining > SEQ_TICK_CHUNK_SECONDS ? SEQ_TICK_CHUNK_SECONDS : remaining;
+            remaining -= chunk;
+            for (i = 0; i < SEQ_SLOTS; ++i) {
+                SeqSlot *slot = &s_slots[i];
+                float ticks;
+                if (!slot->inUse) continue;
+                if (slot->paused) continue;
+                playing = true;
+                seq_envelope_step(slot, chunk);
+                ticks = chunk * (float)slot->tempo * 0.8f * ((float)slot->tempoRatio / 256.0f);
+                seq_advance(slot, ticks);
+                if (slot->inUse && !seq_slot_has_tracks(slot)) seq_finish_slot(i);
+            }
+        }
     }
     if (playing && windowStart) {
         if (gap > longestGap) longestGap = gap;
-        if (gap > SYSCLOCK_ARM11 / 10) ++cappedUpdates;
+        if (gap > SYSCLOCK_ARM11 / 10) ++stalledUpdates;
     }
+    if (discarded > 0.0f) discardedMs += (u64)(discarded * 1000.0f + 0.5f);
     if (!playing || !windowStart || now - windowStart >= 5ull * SYSCLOCK_ARM11) {
-        if (cappedUpdates)
-            Log_Line("AUDIO", "sequence updates over 100 ms: %u, longest gap %llu ms",
-                     cappedUpdates, (unsigned long long)(longestGap / (SYSCLOCK_ARM11 / 1000)));
+        if (stalledUpdates || discardedMs)
+            Log_Line("AUDIO", "sequence updates over 100 ms: %u, longest gap %llu ms, backlog discarded %llu ms",
+                     stalledUpdates, (unsigned long long)(longestGap / (SYSCLOCK_ARM11 / 1000)),
+                     (unsigned long long)discardedMs);
         windowStart = playing ? now : 0;
         longestGap = 0;
-        cappedUpdates = 0;
+        stalledUpdates = 0;
+        discardedMs = 0;
     }
     LightLock_Unlock(&s_seqLock);
 }

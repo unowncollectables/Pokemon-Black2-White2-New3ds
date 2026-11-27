@@ -92,12 +92,9 @@ void allocConfigDSSoftwareFeature(void) { PBW2_STUB_LOG("link", "allocConfigDSSo
  * online features (wifi sessions, Union Room link, Xtransceiver, photo).
  * These are void stubs following the existing DWC/MusComm precedent in
  * this file; if one fires during field play it shows in the stub log
- * and gets a typed stub then. DSProt_CallRunChecks1-4 are void like the
- * other stubs (the checksum never matches, so CHECKED_CALL call sites take
- * their benign tamper branch). DSProt_CallCrash/CallRunChecks below are
- * NOT void stubs: pokelist.c's DSPROT_CHECKED_RUN dereferences the tamper
- * path's return value, so CallRunChecks has a real implementation and
- * CallCrash a typed signature. Do NOT re-add the 9 typed GFL_Net*
+ * and gets a typed stub then. DSProt_CallCrash/CallRunChecks are void
+ * like CallRunChecks1-4 (the checksum never matches, so call sites take
+ * their benign tamper branch). Do NOT re-add the 9 typed GFL_Net*
  * functions here — they live in net_stubs.c with honest returns. */
 
 void CAMERA_ClearBufferCore(void) { PBW2_STUB_LOG("link", "CAMERA_ClearBufferCore"); }
@@ -133,23 +130,8 @@ void DSPi_ScalingCore(void) { PBW2_STUB_LOG("link", "DSPi_ScalingCore"); }
 void DSPi_StopSoundCore(void) { PBW2_STUB_LOG("link", "DSPi_StopSoundCore"); }
 void DSPi_UnloadG711Core(void) { PBW2_STUB_LOG("link", "DSPi_UnloadG711Core"); }
 void DSPi_UnloadGraphicsCore(void) { PBW2_STUB_LOG("link", "DSPi_UnloadGraphicsCore"); }
-/* DS Protect's overlay-165 entry points, with their real signatures
- * (lib/dsprot/include/dsprot/dsprot.h). The anti-piracy checks have
- * nothing to check on this host — the ROM is the user's own — so
- * CallRunChecks simply runs the game's callback and returns what it
- * returns, which is what the real function does once its checks pass.
- * CallCrash stays a logged no-op returning NULL: its only remaining
- * callers (dsprot_detect.c) ignore the return value, and the host
- * DSPROT_CHECKED_RUN never routes here. */
-void *DSProt_CallRunChecks(void *(*callback)(void *, void *), void *arg0, void *arg1) {
-    return callback(arg0, arg1);
-}
-void *DSProt_CallCrash(void *arg0, void *arg1) {
-    (void)arg0;
-    (void)arg1;
-    PBW2_STUB_LOG("link", "DSProt_CallCrash");
-    return 0;
-}
+void DSProt_CallCrash(void) { PBW2_STUB_LOG("link", "DSProt_CallCrash"); }
+void DSProt_CallRunChecks(void) { PBW2_STUB_LOG("link", "DSProt_CallRunChecks"); }
 void DWC_AddMatchKeyInt(void) { PBW2_STUB_LOG("link", "DWC_AddMatchKeyInt"); }
 void DWC_AddMatchKeyString(void) { PBW2_STUB_LOG("link", "DWC_AddMatchKeyString"); }
 void DWC_CheckDirtyFlag(void) { PBW2_STUB_LOG("link", "DWC_CheckDirtyFlag"); }

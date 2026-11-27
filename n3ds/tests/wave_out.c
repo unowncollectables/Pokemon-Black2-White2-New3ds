@@ -14,7 +14,8 @@ static unsigned s_logLines;
 
 bool Audio_IsNdspReady(void) { return true; }
 void Log_Line(const char *tag, const char *fmt, ...) { (void)tag; (void)fmt; ++s_logLines; }
-void __wrap_ndspChnSetFormat(int id, u16 format) { (void)id; s_format = format; }
+static int s_formatId = -1;
+void __wrap_ndspChnSetFormat(int id, u16 format) { s_formatId = id; s_format = format; }
 void __wrap_ndspChnSetInterp(int id, ndspInterpType type) { (void)id; (void)type; }
 void __wrap_ndspChnSetRate(int id, float rate) { (void)id; s_rate = rate; }
 void __wrap_ndspChnSetMix(int id, float mix[12]) { (void)id; s_left = mix[0]; s_right = mix[1]; }
@@ -86,6 +87,23 @@ static const char *check_waves(void) {
     NNS_SndWaveOutStop(wave);
     NNS_SndWaveOutFreeChannel(wave);
     if (s_count || s_logLines != before) return "sequence channel avoids note logs";
+
+    /* Overflow voices: host-only slots past the DS map. Overflow 0
+     * must land on NDSP 17 (stream 0 + DS 1..16 precede it), the
+     * game-facing alloc stays 16 wide, and out-of-range overflow
+     * indexes are refused. */
+    if (NNS_SndWaveOutAllocChannel(16) || WaveOut_AllocSequenceChannel(16) ||
+        WaveOut_AllocSequenceOverflowChannel(7) || WaveOut_AllocSequenceOverflowChannel(-1))
+        return "channel ranges stay in their lanes";
+    wave = WaveOut_AllocSequenceOverflowChannel(0);
+    if (!wave || WaveOut_AllocSequenceOverflowChannel(0)) return "overflow voice allocates once";
+    s_formatId = -1;
+    if (!NNS_SndWaveOutStart(wave, NNS_SND_WAVE_FORMAT_PCM8, pcm, FALSE, 0, 5, 16000, 127, 32768, 64) ||
+        s_formatId != 17 || s_count != 1 || !NNS_SndWaveOutIsPlaying(wave))
+        return "overflow voice plays on NDSP 17";
+    NNS_SndWaveOutStop(wave);
+    NNS_SndWaveOutFreeChannel(wave);
+    if (s_count || !WaveOut_AllocSequenceOverflowChannel(0)) return "overflow voice frees for reuse";
     WaveOut_Shutdown();
     return NULL;
 }

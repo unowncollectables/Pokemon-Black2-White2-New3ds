@@ -9,10 +9,18 @@ struct NNSSndWaveOut {
     bool playing;
     int pan, speed, volume;
 };
-static struct NNSSndWaveOut s_dspVoices[SEQ_DS_CHANNELS];
+static struct NNSSndWaveOut s_dspVoices[SEQ_VOICE_SLOTS];
 
 NNSSndWaveOutHandle WaveOut_AllocSequenceChannel(int channel) {
     struct NNSSndWaveOut *voice = &s_dspVoices[channel];
+    if (voice->allocated) return NULL;
+    voice->allocated = voice->playing = true;
+    return voice;
+}
+
+NNSSndWaveOutHandle WaveOut_AllocSequenceOverflowChannel(int overflow) {
+    if (overflow < 0 || overflow >= SEQ_OVERFLOW_CHANNELS) return NULL;
+    struct NNSSndWaveOut *voice = &s_dspVoices[SEQ_DS_CHANNELS + overflow];
     if (voice->allocated) return NULL;
     voice->allocated = voice->playing = true;
     return voice;
@@ -51,9 +59,15 @@ static const char *check_voices(void) {
     s_slots[0].tick = 900;
     s_slots[1].tick = 3;
     if (note_on(0, 90) != &s_dspVoices[1]) return "skip a direct wave allocation";
-    if (note_on(1, 20) || !s_slots[0].tracks[0].notes[0].active ||
-        s_dspVoices[SEQ_CRY_CHANNEL].allocated)
-        return "protect music priority and the cry channel";
+    /* With the DS voices busy, a lower-priority note no longer
+     * drops or steals: it sounds on the first overflow voice, the
+     * high-priority note keeps its DS voice, and the cry channel
+     * stays reserved. */
+    if (note_on(1, 20) != &s_dspVoices[SEQ_DS_CHANNELS] ||
+        !s_slots[0].tracks[0].notes[0].active || s_dspVoices[SEQ_CRY_CHANNEL].allocated)
+        return "overflow voice instead of a drop, cry channel protected";
+    seq_note_off(&s_slots[1], 0, 0);
+    if (s_dspVoices[SEQ_DS_CHANNELS].allocated) return "overflow voice frees";
 
     s_dspVoices[1].playing = false;
     if (note_on(1, 20) != &s_dspVoices[1] || s_slots[0].tracks[0].notes[0].active)
@@ -134,12 +148,39 @@ static const char *check_synth_release(void) {
     return NULL;
 }
 
+static const char *check_overflow_pool(void) {
+    /* Fresh allocator state; the default (zero) archive mask gives
+     * every DS channel except the cry reserve. */
+    memset(s_slots, 0, sizeof s_slots);
+    memset(s_channels, 0, sizeof s_channels);
+    memset(s_dspVoices, 0, sizeof s_dspVoices);
+    s_channelOrder = 0;
+    s_allocChBitFlag[0] = 0;
+
+    /* 22 usable voices: 15 DS-mapped + 7 overflow. */
+    for (int i = 0; i < SEQ_VOICE_SLOTS - 1; ++i) {
+        if (!note_on(i, 50)) return "pool fills to 22 usable voices";
+    }
+    if (s_dspVoices[SEQ_CRY_CHANNEL].allocated) return "cry channel stays reserved at full pool";
+    for (int i = SEQ_DS_CHANNELS; i < SEQ_VOICE_SLOTS; ++i) {
+        if (!s_dspVoices[i].allocated) return "every overflow voice is used before stealing";
+    }
+    /* Above the cap, stealing is the only valve — and it still
+     * respects priority: a quieter note cannot take a voice. */
+    if (note_on(SEQ_VOICE_SLOTS - 1, 10)) return "low priority note cannot steal above the cap";
+    if (note_on(SEQ_VOICE_SLOTS - 1, 90) != &s_dspVoices[0] ||
+        s_slots[0].tracks[0].notes[0].active || s_dspVoices[SEQ_CRY_CHANNEL].allocated)
+        return "high priority note steals the oldest voice above the cap";
+    return NULL;
+}
+
 int main(void) {
     archiveMountSdmc();
     const char *failure = check_voices();
     if (!failure) failure = check_mix();
     if (!failure) failure = check_tied_sample();
     if (!failure) failure = check_synth_release();
+    if (!failure) failure = check_overflow_pool();
     FILE *out = fopen("sdmc:/seq-voices-test.txt", "w");
     if (out) {
         fprintf(out, "%s\n", failure ? failure : "PASS");
