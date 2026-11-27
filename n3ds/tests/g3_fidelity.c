@@ -1175,7 +1175,7 @@ static uint32_t test_texel(const void *source, unsigned x, unsigned y) {
     return *(const uint32_t *)source;
 }
 
-static bool check_pica_storage_reuse(void) {
+static bool check_pica_storage_eviction(void) {
     uint32_t color = 0xff0000ff;
     PicaTexture texture = { .width = 8, .height = 8, .source = &color, .texel = test_texel };
     if (!PbW2_PicaBegin(0)) return false;
@@ -1190,8 +1190,10 @@ static bool check_pica_storage_reuse(void) {
     if (!PbW2_PicaBegin(0)) return false;
     color = 0x0000ff80;
     int slot = PbW2_PicaUpload(&texture);
+    /* The victim is deleted and re-initialised, never overwritten in place:
+     * exactly one fresh allocation, holding the new texture's data. */
     return slot >= 0 && PbW2_PicaTextureAlpha(slot) == PICA_TEX_ALPHA_FRACTIONAL &&
-           s_textureAllocations == allocations;
+           s_textureAllocations == allocations + 1;
 }
 
 static bool check_pinned_native_frame(void) {
@@ -1431,7 +1433,7 @@ int main(void) {
         fprintf(f, "Wide camera capture %s\n", check_wide_frame(true, true) ? "PASS" : "FAIL");
         fprintf(f, "Sharp text tiles %s\n", check_sharp_text() ? "PASS" : "FAIL");
         fprintf(f, "Wrapped texture and upload reuse %s\n", check_wrapped_texture() ? "PASS" : "FAIL");
-        fprintf(f, "PICA texture allocation reuse %s\n", check_pica_storage_reuse() ? "PASS" : "FAIL");
+        fprintf(f, "PICA texture eviction re-init %s\n", check_pica_storage_eviction() ? "PASS" : "FAIL");
         fprintf(f, "Pinned native frame %s\n", check_pinned_native_frame() ? "PASS" : "FAIL");
         fprintf(f, "Clipped OBJ priority %s\n", check_clipped_objs() ? "PASS" : "FAIL");
         fprintf(f, "Sub-screen input cache %s\n", check_sub_cache() ? "PASS" : "FAIL");

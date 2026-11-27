@@ -71,9 +71,12 @@ static const char *check_preferences(void) {
     Settings_Handle(KEY_Y, KEY_L | KEY_R | KEY_Y);
     Settings_Handle(KEY_A, KEY_A);
     if (!Settings_Open()) return "preferences menu stays open after a toggle";
-    Settings_Init(path);
-    if (Settings_DisplayFlags() != DISPLAY_LCD_FIT) return "selection is saved before closing the menu";
+    /* Menu parity P2: values are staged while the menu is open and
+     * only applied + saved when it closes (SoulSilver semantics). */
+    if (Settings_DisplayFlags()) return "staged selection applied before closing the menu";
     Settings_Handle(KEY_B, KEY_B);
+    Settings_Init(path);
+    if (Settings_DisplayFlags() != DISPLAY_LCD_FIT) return "selection is saved on closing the menu";
     toggle_lcd_fit();
     Settings_Init(path);
     if (Settings_DisplayFlags()) return "a new selection replaces old settings";

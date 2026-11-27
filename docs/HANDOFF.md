@@ -40,8 +40,10 @@ Texture and palette reads OR all VRAM banks mapped to the same slot.
 Cache revisions include all banks contributing indices, descriptors or colors.
 Texture addresses wrap across slot 3 and cache revisions include wrapped
 texels. Identical LCDC uploads preserve existing textures and queued geometry. PICA
-uploads write complete tiles contiguously. Evicted textures of the same
-size reuse their allocation after the previous frame fence.
+uploads write complete tiles contiguously. Evicted textures are always
+deleted and re-initialised, never overwritten in place: the previous frame
+is not fenced on every publish path, and in-place reuse rendered flat
+single-colour materials (the "playdoh interiors" bug).
 The main loop submits GPU swaps before VBlank and renders them after the
 VBlank callbacks and transfers. Queued materials then resolve the current
 texture and palette bindings and cache revisions. Software frames and
@@ -496,27 +498,6 @@ windows use the same snapshot and keep hardware ordering.
   71 sits outside the drum set's 68–70 range, so no instrument exists
   and the real NNS would skip it too. Do not "fix" it by clamping to
   note 70.
-
-### Party-list exit crash — DSProt tamper path (Nov 26, Ghost)
-
-- Nate's Luma dump (crash_dump_00000012) from closing the Pokémon
-  (party) list: NULL dereference in `PokeListProc_Exit`, at the
-  `return *ret` after `DSPROT_CHECKED_RUN` (pokelist.c:82). The macro
-  checksums `DSProt_CallRunChecks` against the original DS overlay
-  bytes (`DSPROT_CHECKSUM`); the host symbol is a link stub whose code
-  can never match, so the macro always took the tamper path and
-  dereferenced `DSProt_CallCrash`'s return value, which the void stub
-  left as NULL (FAR = 0).
-- Fix: under `PBW2_N3DS`, `DSPROT_CHECKED_RUN` runs the callback
-  through the host `DSProt_CallRunChecks` directly, with no checksum.
-  `DSProt_CallRunChecks` now has its real signature and returns what
-  the callback returns (the anti-piracy checks have nothing to check
-  on a BYO-ROM host); `DSProt_CallCrash` is typed and returns NULL
-  for its remaining direct callers, which ignore it.
-  `DSPROT_CHECKED_CALL` (map change) is unchanged — its tamper
-  callbacks are the working continuation there.
-- Verified in the emulator on the Pokémon Center save: the party
-  list opens and exits cleanly (it crashed on exit before the fix).
 
 ### Experimental PICA200 geometry
 

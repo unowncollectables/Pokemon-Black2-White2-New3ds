@@ -17,6 +17,18 @@ enum { SAVE_FLASH_BYTES = 512 * 1024, SAVE_ERASE_CHUNK = 4096 };
 static const char s_savePath[] = PBW2_SAVE_PATH;
 static const char s_temporaryPath[] = PBW2_SAVE_PATH ".tmp";
 
+extern uint64_t svcGetSystemTick(void);
+static volatile uint32_t s_saveGeneration;
+static volatile uint64_t s_lastWriteTick;
+
+uint32_t Save_Generation(void) {
+    return s_saveGeneration;
+}
+
+uint64_t Save_LastWriteTick(void) {
+    return s_lastWriteTick;
+}
+
 void Save_Init(void) {
     FILE *file = fopen(s_savePath, "rb");
     if (!file) {
@@ -84,6 +96,10 @@ bool Save_GameWrite(uint32_t offset, const void *data, uint32_t size) {
         if (written) written = rename(s_temporaryPath, s_savePath) == 0;
         if (!written) remove(s_temporaryPath);
         if (written) Log_Line("SAVE", "created %s (%u bytes)", PBW2_SAVE_FILE, SAVE_FLASH_BYTES);
+    }
+    if (written) {
+        ++s_saveGeneration;
+        s_lastWriteTick = svcGetSystemTick();
     }
     return written;
 }

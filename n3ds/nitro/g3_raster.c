@@ -53,6 +53,7 @@ static unsigned s_nativeReader = NATIVE_BUFFERS;
 static bool s_nativeFrame, s_haveNative;
 #endif
 static unsigned s_width = WIDTH, s_displayWidth = WIDTH;
+static bool s_frameCapture, s_publishedCapture;
 static unsigned char s_wideEnabled;
 static bool s_widePrimitive;
 
@@ -104,7 +105,7 @@ static struct {
 } s_fog;
 enum { FOG_ENABLED = 0x80, FOG_CLEAR_DEPTH = 0x40 };
 #ifdef PBW2_GPU_GEOMETRY
-enum { GPU_TRIANGLES_MAX = 8192, GPU_TEXTURES_MAX = 128 };
+enum { GPU_TRIANGLES_MAX = 8192, GPU_TEXTURES_MAX = 256 };
 typedef struct {
     Vertex vertex[3];
     u32 polygon;
@@ -128,6 +129,8 @@ static u32 s_gpuSourceBanks;
 static bool s_gpuFrame;
 static bool s_deferSwap, s_pendingSwap;
 static u32 s_pendingSwapFlags;
+/* Defined beside s_paletteSpans below; the raster reset clears it. */
+static void clear_palette_spans(void);
 enum {
     GPU_FALLBACK_EDGE = 1u << 0,
     GPU_FALLBACK_FOG = 1u << 1,
@@ -137,10 +140,11 @@ enum {
     GPU_FALLBACK_BATCH = 1u << 5,
 };
 
+static unsigned s_fallbackReported;
+
 static void report_gpu_fallback(unsigned reason, const char *name) {
-    static unsigned reported;
-    if (reported & reason) return;
-    reported |= reason;
+    if (s_fallbackReported & reason) return;
+    s_fallbackReported |= reason;
     Log_Line("GPU", "software geometry fallback: %s", name);
 }
 
@@ -160,8 +164,12 @@ static void report_geometry_rate(bool gpu, bool reused) {
     u64 elapsed = now - windowStart;
     if (elapsed >= 4 * ticksPerSecond) {
         unsigned rate = (unsigned)(frames * ticksPerSecond * 10 / elapsed);
-        Log_Line("PERF", "GX swaps %u.%u fps (%u GPU, %u CPU, %u reused)",
-                 rate / 10, rate % 10, gpuFrames, frames - gpuFrames - reusedFrames, reusedFrames);
+        /* The fallback mask rides the periodic line so one read of a
+         * hardware log shows which scenes are leaving the GPU path
+         * (1 edge, 2 fog, 4 toon, 8 shadow, 16 capacity, 32 batch). */
+        Log_Line("PERF", "GX swaps %u.%u fps (%u GPU, %u CPU, %u reused, fallback 0x%02x)",
+                 rate / 10, rate % 10, gpuFrames, frames - gpuFrames - reusedFrames, reusedFrames,
+                 s_fallbackReported);
         windowStart = now;
         frames = gpuFrames = reusedFrames = 0;
     }
@@ -185,6 +193,7 @@ void PbW2_G3RasterReset(void) {
     lock_display();
     memset(s_display, 0, sizeof s_display);
     s_displayWidth = WIDTH;
+    s_publishedCapture = false;
 #ifdef PBW2_GPU_GEOMETRY
     s_haveNative = false;
     s_previousGpuFrame = false;
@@ -195,6 +204,13 @@ void PbW2_G3RasterReset(void) {
     s_gpuCount = 0;
     s_sceneSwaps = 0;
     s_deferSwap = s_pendingSwap = false;
+    /* A scene/system recreate is a zone transition: texture VRAM is about
+     * to be rewritten wholesale and the PICA cache key is a write-order
+     * stamp, not content, so no resident texture or palette span may be
+     * trusted across it. Invalidate both; each zone then starts from the
+     * known-good empty-cache state. */
+    PbW2_PicaInvalidate();
+    clear_palette_spans();
 #endif
     s_count = 0;
     memset(s_xyz, 0, sizeof s_xyz);
@@ -249,6 +265,7 @@ static void clear_software_frame(void) {
 static void start_frame(void) {
     if (s_frameStarted) return;
     s_width = PbW2_G3WideCamera() ? WIDE_WIDTH : WIDTH;
+    s_frameCapture = (reg_GX_DISPCAPCNT & REG_GX_DISPCAPCNT_E_MASK) != 0;
     s_clearColor = reg_G3X_CLEAR_COLOR;
     s_clearDepth = reg_G3X_CLEAR_DEPTH & 0x7fff;
     u16 control = reg_G3X_DISP3DCNT;
@@ -542,6 +559,13 @@ static bool edge_against(unsigned i, unsigned id, float depth) {
 
 static void apply_edge_colors(void) {
     if (!s_edgeEnabled) return;
+#ifdef PBW2_GPU_GEOMETRY
+    /* GPU frames honor the user's no-outlines setting; CPU fallback
+     * frames used to ignore it, so the picture gained and lost its
+     * outlines as scenes alternated renderers. Match the GPU path:
+     * with GPU geometry enabled and outlines off, draw none here. */
+    if (PbW2_PicaEnabled() && PbW2_PicaSkipEdges()) return;
+#endif
     unsigned clearId = (s_clearColor >> 24) & 63;
     float clearDepth = software_clear_depth();
     for (unsigned y = 0; y < HEIGHT; ++y) {
@@ -738,6 +762,10 @@ typedef struct {
 } CompressedPaletteSpan;
 
 static CompressedPaletteSpan s_paletteSpans[GPU_TEXTURES_MAX];
+
+static void clear_palette_spans(void) {
+    memset(s_paletteSpans, 0, sizeof s_paletteSpans);
+}
 
 static PicaTextureKey texture_cache_key(const Texture *tex, unsigned material) {
     PicaTextureKey key = tex->key;
@@ -1237,9 +1265,23 @@ static void publish_swap(u32 flags, bool afterVBlank) {
     if (s_haveNative) s_nativeDisplayed = s_nativeDraw;
 #endif
     s_displayWidth = s_width;
+    s_publishedCapture = s_frameCapture;
     memcpy(s_display, s_drawing.color, s_width * HEIGHT * sizeof(*s_display));
     unlock_display();
     s_frameStarted = s_inPrimitive = 0;
+}
+
+/* What the frame actually on screen is, as published by the last
+ * swap. Compose decides side extension from this, never from live
+ * registers: the routing bit and capture state are sampled at three
+ * different times today, so transition frames could extend a narrow
+ * frame or squeeze a wide one for a frame or two. */
+bool PbW2_G3PublishedWide(void) {
+    return s_displayWidth == WIDE_WIDTH;
+}
+
+bool PbW2_G3PublishedNative(void) {
+    return !s_publishedCapture;
 }
 
 void PbW2_G3RasterDeferSwap(bool enabled) {
