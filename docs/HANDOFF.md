@@ -40,6 +40,12 @@ Texture addresses wrap across slot 3 and cache revisions include wrapped
 texels. Identical LCDC uploads preserve existing textures and queued geometry. PICA
 uploads write complete tiles contiguously. Evicted textures of the same
 size reuse their allocation after the previous frame fence.
+The main loop submits GPU swaps before VBlank and renders them after the
+VBlank callbacks and transfers. Queued materials then resolve the current
+texture and palette bindings and cache revisions. Software frames and
+swaps with display capture armed still publish immediately. The first
+four swaps and the eighth swap after a field zone opens log their render
+path and, for deferred GPU swaps, the material bank changes.
 
 When the GPU geometry, texture revisions, render settings and clear values
 match the last GPU frame exactly, a GX swap reuses the published 3D image.

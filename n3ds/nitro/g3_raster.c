@@ -126,6 +126,8 @@ static unsigned s_gpuCount, s_gpuMaterialCount, s_lastMaterial;
 static unsigned s_sceneSwaps;
 static u32 s_gpuSourceBanks;
 static bool s_gpuFrame;
+static bool s_deferSwap, s_pendingSwap;
+static u32 s_pendingSwapFlags;
 enum {
     GPU_FALLBACK_EDGE = 1u << 0,
     GPU_FALLBACK_FOG = 1u << 1,
@@ -192,6 +194,7 @@ void PbW2_G3RasterReset(void) {
 #ifdef PBW2_GPU_GEOMETRY
     s_gpuCount = 0;
     s_sceneSwaps = 0;
+    s_deferSwap = s_pendingSwap = false;
 #endif
     s_count = 0;
     memset(s_xyz, 0, sizeof s_xyz);
@@ -216,6 +219,12 @@ static float software_clear_depth(void) {
     if (s_wBuffer) return clear_w();
     /* The default cleared depth admits fragments on the far plane. */
     return s_clearDepth == 0x7fff ? 2.0f : s_clearDepth / 32767.0f;
+}
+
+void PbW2_G3RasterTraceScene(void) {
+#ifdef PBW2_GPU_GEOMETRY
+    s_sceneSwaps = 0;
+#endif
 }
 
 static void clear_software_frame(void) {
@@ -291,6 +300,43 @@ static void add_texture_bank(TextureSlot *slot, const u8 *bank) {
     }
 }
 
+static void bind_texture(Texture *t) {
+    const u8 texBanks[] = {reg_GX_VRAMCNT_A, reg_GX_VRAMCNT_B, reg_GX_VRAMCNT_C, reg_GX_VRAMCNT_D};
+    for (unsigned bank = 0; bank < 4; ++bank) {
+        u8 control = texBanks[bank];
+        if ((control & 0x87) == 0x83) {
+            add_texture_bank(&t->tiles[(control >> 3) & 3],
+                             PbW2_VramMap((void *)(uintptr_t)(HW_LCDC_VRAM_A + bank * 0x20000)));
+        }
+    }
+    if ((reg_GX_VRAMCNT_E & 0x87) == 0x83) {
+        const u8 *base = PbW2_VramMap((void *)HW_LCDC_VRAM_E);
+        for (unsigned i = 0; i < 4; ++i) add_texture_bank(&t->palette[i], base + 0x4000 * i);
+    }
+    const u8 palBanks[] = {reg_GX_VRAMCNT_F, reg_GX_VRAMCNT_G};
+    for (unsigned bank = 0; bank < 2; ++bank) {
+        u8 control = palBanks[bank];
+        if ((control & 0x87) == 0x83) {
+            unsigned offset = (control >> 3) & 3;
+            unsigned slot = (offset & 1) + ((offset & 2) << 1);
+            add_texture_bank(&t->palette[slot],
+                             PbW2_VramMap((void *)(uintptr_t)(HW_LCDC_VRAM_F + bank * 0x4000)));
+        }
+    }
+#ifdef PBW2_GPU_GEOMETRY
+    if (s_gpuFrame) {
+        const u8 regs[] = {texBanks[0], texBanks[1], texBanks[2], texBanks[3],
+                           reg_GX_VRAMCNT_E, palBanks[0], palBanks[1]};
+        for (unsigned bank = 0; bank < 7; ++bank) {
+            if ((regs[bank] & 0x87) == 0x83) {
+                t->key.banks |= (((regs[bank] >> 3) & 3) | 4) << (4 * bank);
+                t->key.revision[bank] = PbW2_VramBankRevision(bank);
+            }
+        }
+    }
+#endif
+}
+
 static Texture texture_state(void) {
     Texture t = {0};
     t.param = s_texture;
@@ -299,44 +345,13 @@ static Texture texture_state(void) {
     t.height = 8u << ((s_texture >> 23) & 7);
     t.address = (s_texture & 0xffffu) << 3;
     t.paletteAddress = (s_palette & 0x1fffu) << (t.format == GX_TEXFMT_PLTT4 ? 3 : 4);
-    if (t.format == GX_TEXFMT_NONE) return t;
-
-    const u8 texBanks[] = {reg_GX_VRAMCNT_A, reg_GX_VRAMCNT_B, reg_GX_VRAMCNT_C, reg_GX_VRAMCNT_D};
-    for (unsigned bank = 0; bank < 4; ++bank) {
-        u8 control = texBanks[bank];
-        if ((control & 0x87) == 0x83) {
-            add_texture_bank(&t.tiles[(control >> 3) & 3],
-                             PbW2_VramMap((void *)(uintptr_t)(HW_LCDC_VRAM_A + bank * 0x20000)));
-        }
-    }
-    if ((reg_GX_VRAMCNT_E & 0x87) == 0x83) {
-        const u8 *base = PbW2_VramMap((void *)HW_LCDC_VRAM_E);
-        for (unsigned i = 0; i < 4; ++i) add_texture_bank(&t.palette[i], base + 0x4000 * i);
-    }
-    const u8 palBanks[] = {reg_GX_VRAMCNT_F, reg_GX_VRAMCNT_G};
-    for (unsigned bank = 0; bank < 2; ++bank) {
-        u8 control = palBanks[bank];
-        if ((control & 0x87) == 0x83) {
-            unsigned offset = (control >> 3) & 3;
-            unsigned slot = (offset & 1) + ((offset & 2) << 1);
-            add_texture_bank(&t.palette[slot],
-                             PbW2_VramMap((void *)(uintptr_t)(HW_LCDC_VRAM_F + bank * 0x4000)));
-        }
-    }
 #ifdef PBW2_GPU_GEOMETRY
-    if (s_gpuFrame) {
-        const u8 regs[] = {texBanks[0], texBanks[1], texBanks[2], texBanks[3],
-                           reg_GX_VRAMCNT_E, palBanks[0], palBanks[1]};
+    if (s_gpuFrame && t.format) {
         t.key.param = t.param;
         t.key.palette = t.paletteAddress;
-        for (unsigned bank = 0; bank < 7; ++bank) {
-            if ((regs[bank] & 0x87) == 0x83) {
-                t.key.banks |= (((regs[bank] >> 3) & 3) | 4) << (4 * bank);
-                t.key.revision[bank] = PbW2_VramBankRevision(bank);
-            }
-        }
     }
 #endif
+    if (t.format) bind_texture(&t);
     return t;
 }
 
@@ -800,7 +815,7 @@ static float repeat_shift(float a, float b, float c, float period) {
     return min < 0.0f ? ceilf(-min / period) * period : 0.0f;
 }
 
-static bool render_with_pica(u32 swapFlags) {
+static bool render_with_pica(u32 swapFlags, bool afterVBlank) {
     if (!s_gpuCount) return false;
     PicaTextureKey textures[GPU_TEXTURES_MAX] = {0};
     s_nativeFrame = s_width == WIDE_WIDTH && !(reg_GX_DISPCAPCNT & REG_GX_DISPCAPCNT_E_MASK);
@@ -809,16 +824,33 @@ static bool render_with_pica(u32 swapFlags) {
         s_clearColor, s_clearDepth,
     };
     bool trace = s_sceneSwaps < 4 || s_sceneSwaps == 7;
+    Texture bindings = {0};
+    unsigned changedAtVBlank = 0;
+    if (afterVBlank) bind_texture(&bindings);
     for (unsigned i = 0; i < s_gpuMaterialCount; ++i) {
-        const Texture *tex = &s_gpuMaterials[i];
+        Texture *tex = &s_gpuMaterials[i];
         if (!tex->format) continue;
-        /* Reject an upload between geometry submission and rendering. */
-        for (unsigned bank = 0; bank < 7; ++bank) {
-            if ((tex->key.banks & (4u << (4 * bank))) &&
-                tex->key.revision[bank] != PbW2_VramBankRevision(bank)) return false;
+        if (afterVBlank) {
+            if (trace && (tex->key.banks != bindings.key.banks ||
+                memcmp(tex->key.revision, bindings.key.revision, sizeof tex->key.revision)))
+                ++changedAtVBlank;
+            if (tex->key.banks != bindings.key.banks) {
+                memcpy(tex->tiles, bindings.tiles, sizeof tex->tiles);
+                memcpy(tex->palette, bindings.palette, sizeof tex->palette);
+                tex->key.banks = bindings.key.banks;
+            }
+        } else {
+            /* Outside a queued VBlank swap, keep submission-time inputs. */
+            for (unsigned bank = 0; bank < 7; ++bank) {
+                if ((tex->key.banks & (4u << (4 * bank))) &&
+                    tex->key.revision[bank] != PbW2_VramBankRevision(bank)) return false;
+            }
         }
         textures[i] = texture_cache_key(tex, i);
     }
+    if (trace && afterVBlank)
+        Log_Line("GPU", "scene frame %u: VBlank changed banks for %u queued materials",
+                 s_sceneSwaps + 1, changedAtVBlank);
     /* Reuse the last published image only when all render inputs agree.
      * Texture revision keys include palette and compressed descriptor data. */
     if (s_previousGpuFrame && !memcmp(&frame, &s_previousFrame, sizeof frame) &&
@@ -1171,6 +1203,57 @@ static u16 lit_color(const s16 xyz[3], const MtxFx44 *matrix) {
     return color;
 }
 
+static void publish_swap(u32 flags, bool afterVBlank) {
+#ifndef PBW2_GPU_GEOMETRY
+    (void)flags;
+    (void)afterVBlank;
+#endif
+    start_frame();
+#ifdef PBW2_GPU_GEOMETRY
+    if (s_gpuFrame && !render_with_pica(flags, afterVBlank)) {
+        if (s_gpuCount) report_gpu_fallback(GPU_FALLBACK_BATCH, "batch requires software rendering");
+        s_wBuffer = (flags & (GX_BUFFERMODE_W << 1)) != 0;
+        replay_on_cpu();
+    }
+    if (!s_gpuFrame) {
+#endif
+        apply_edge_colors();
+        apply_fog();
+#ifdef PBW2_GPU_GEOMETRY
+    }
+    if (!s_gpuFrame && (s_sceneSwaps < 4 || s_sceneSwaps == 7))
+        Log_Line("GPU", "scene frame %u: software, width=%u", s_sceneSwaps + 1, s_width);
+    if (s_sceneSwaps < 8) ++s_sceneSwaps;
+    report_geometry_rate(s_gpuFrame, s_reusedFrame);
+    if (!s_gpuFrame) s_previousGpuFrame = false;
+    if (s_reusedFrame) {
+        s_frameStarted = s_inPrimitive = 0;
+        return;
+    }
+#endif
+    lock_display();
+#ifdef PBW2_GPU_GEOMETRY
+    s_haveNative = s_gpuFrame && s_nativeFrame;
+    if (s_haveNative) s_nativeDisplayed = s_nativeDraw;
+#endif
+    s_displayWidth = s_width;
+    memcpy(s_display, s_drawing.color, s_width * HEIGHT * sizeof(*s_display));
+    unlock_display();
+    s_frameStarted = s_inPrimitive = 0;
+}
+
+void PbW2_G3RasterDeferSwap(bool enabled) {
+#ifdef PBW2_GPU_GEOMETRY
+    s_deferSwap = enabled;
+    if (!enabled && s_pendingSwap) {
+        s_pendingSwap = false;
+        publish_swap(s_pendingSwapFlags, true);
+    }
+#else
+    (void)enabled;
+#endif
+}
+
 void PbW2_G3RasterCommand(u32 op, const u32 *p, const MtxFx44 *clip,
                          const MtxFx44 *texture, const MtxFx44 *vector) {
     switch (op) {
@@ -1232,6 +1315,9 @@ void PbW2_G3RasterCommand(u32 op, const u32 *p, const MtxFx44 *clip,
         for (unsigned i = 0; i < sizeof s_shininess; ++i) s_shininess[i] = p[i / 4] >> (8 * (i & 3));
         return;
     case G3OP_BEGIN:
+#ifdef PBW2_GPU_GEOMETRY
+        if (s_pendingSwap) PbW2_G3RasterDeferSwap(false);
+#endif
         start_frame();
         s_widePrimitive = s_width == WIDE_WIDTH && s_viewport == GX_PACK_VIEWPORT_PARAM(0, 0, WIDTH - 1, HEIGHT - 1);
         s_primitive = p[0] & 3;
@@ -1241,38 +1327,17 @@ void PbW2_G3RasterCommand(u32 op, const u32 *p, const MtxFx44 *clip,
         return;
     case G3OP_END: s_inPrimitive = 0; return;
     case 0x50:
-        start_frame();
 #ifdef PBW2_GPU_GEOMETRY
-        if (s_gpuFrame && !render_with_pica(p[0])) {
-            if (s_gpuCount) report_gpu_fallback(GPU_FALLBACK_BATCH, "batch requires software rendering");
-            s_wBuffer = (p[0] & (GX_BUFFERMODE_W << 1)) != 0;
-            replay_on_cpu();
-        }
-        if (!s_gpuFrame) {
-#endif
-            apply_edge_colors();
-            apply_fog();
-#ifdef PBW2_GPU_GEOMETRY
-        }
-        if (!s_gpuFrame && (s_sceneSwaps < 4 || s_sceneSwaps == 7))
-            Log_Line("GPU", "scene frame %u: software, width=%u", s_sceneSwaps + 1, s_width);
-        if (s_sceneSwaps < 8) ++s_sceneSwaps;
-        report_geometry_rate(s_gpuFrame, s_reusedFrame);
-        if (!s_gpuFrame) s_previousGpuFrame = false;
-        if (s_reusedFrame) {
-            s_frameStarted = s_inPrimitive = 0;
+        if (s_pendingSwap) PbW2_G3RasterDeferSwap(false);
+        if (s_deferSwap && s_gpuFrame && s_frameStarted && s_gpuCount &&
+            !(reg_GX_DISPCAPCNT & REG_GX_DISPCAPCNT_E_MASK)) {
+            s_pendingSwap = true;
+            s_pendingSwapFlags = p[0];
+            s_inPrimitive = 0;
             return;
         }
 #endif
-        lock_display();
-#ifdef PBW2_GPU_GEOMETRY
-        s_haveNative = s_gpuFrame && s_nativeFrame;
-        if (s_haveNative) s_nativeDisplayed = s_nativeDraw;
-#endif
-        s_displayWidth = s_width;
-        memcpy(s_display, s_drawing.color, s_width * HEIGHT * sizeof(*s_display));
-        unlock_display();
-        s_frameStarted = s_inPrimitive = 0;
+        publish_swap(p[0], false);
         return;
     case 0x60: s_viewport = p[0]; return;
     default: return;
@@ -1336,7 +1401,7 @@ void PbW2_G3RasterBeforeLcdcWrite(u32 address, u32 bytes) {
 #ifdef PBW2_GPU_GEOMETRY
     /* The CPU backend samples at submission. Resolve queued geometry while
      * its original texture bytes are still present. */
-    if (s_frameStarted && s_gpuFrame && s_gpuCount &&
+    if (!s_pendingSwap && s_frameStarted && s_gpuFrame && s_gpuCount &&
         (s_gpuSourceBanks & PbW2_VramLcdcBankMask(address, bytes))) {
         replay_on_cpu();
     }

@@ -50,6 +50,7 @@
 #include "field/weather/field_weather.h"
 #include "gfl/arc.h"
 #ifdef PBW2_N3DS
+#include "g3_raster.h"
 #include "log.h"
 #endif
 #include "gfl/billboard_actor.h"
@@ -289,6 +290,7 @@ u32 FieldRoutine_Open(GameSystem *gsys, Field *field) {
     HeapID heapId = field->heapId;
 
 #ifdef PBW2_N3DS
+    PbW2_G3RasterTraceScene();
     Log_Line("field", "FieldRoutine_Open enter zone=%u", field->zoneId);
 #endif
     GFL_BGSysSetVRAMBanks(&FIELDMAP_VRAM_CONFIG);

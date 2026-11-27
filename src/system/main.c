@@ -23,6 +23,7 @@
 #include "system/main.h"
 
 #ifdef PBW2_N3DS
+#include "g3_raster.h"
 #include "log.h"
 #endif
 #include "system/printsys.h"
@@ -67,6 +68,9 @@ void main(void) {
         GFLAppUpdate();
         GameUpdate();
         GflUse_NoOpFrameHook();
+#ifdef PBW2_N3DS
+        PbW2_G3RasterDeferSwap(true);
+#endif
         GFL_G3DSysCheckSwapBuffers();
 
         // The ARM9 has the main memory first while it waits for the VBlank, and the sound thread waits with it
@@ -79,6 +83,9 @@ void main(void) {
         }
         OS_WaitIrq(TRUE, OS_IE_V_BLANK);
         GameUpdateVBlank();
+#ifdef PBW2_N3DS
+        PbW2_G3RasterDeferSwap(false);
+#endif
         if (!OS_IsThreadTerminated(&g_GFLSndThread)) {
             OS_WakeupThreadDirect(&g_GFLSndThread);
         }
