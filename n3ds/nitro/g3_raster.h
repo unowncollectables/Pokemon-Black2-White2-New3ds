@@ -13,6 +13,10 @@ bool PbW2_G3PublishedWide(void);
 bool PbW2_G3PublishedNative(void);
 
 void PbW2_G3RasterReset(void);
+/* A new G3D system (zone/scene transition): drop the PICA texture cache
+ * and the raster side's cross-zone survivors. Called from
+ * GFL_G3DSysCreate, which FieldRoutine_Open runs once per zone entry. */
+void PbW2_G3RasterInvalidateZone(void);
 /* Software rasterization can begin before the GX swap command. */
 void PbW2_G3RasterSetWBuffer(bool enabled);
 /* Hold a queued GPU swap until the VBlank texture transfers finish. */

@@ -754,6 +754,23 @@ typedef struct {
 
 static CompressedPaletteSpan s_paletteSpans[GPU_TEXTURES_MAX];
 
+/* Zone transition (called from GFL_G3DSysCreate): texture VRAM is about
+ * to be rewritten wholesale and the PICA cache key is a write-order
+ * stamp, not content, so no resident texture or palette span may be
+ * trusted across it. Invalidate both; each zone then starts from the
+ * known-good empty-cache state (the first-entry state that always
+ * rendered textured). Also drop the previous-frame reuse state, which
+ * names textures from the old zone. Fix v1 put this call in
+ * PbW2_G3RasterReset, but REQ-18 proved RasterReset never runs per
+ * entry -- its only caller is PbW2_G3InterceptInit (boot-time). */
+void PbW2_G3RasterInvalidateZone(void) {
+#ifdef PBW2_GPU_GEOMETRY
+    PbW2_PicaInvalidate();
+    memset(s_paletteSpans, 0, sizeof s_paletteSpans);
+    s_previousGpuFrame = false;
+#endif
+}
+
 static PicaTextureKey texture_cache_key(const Texture *tex, unsigned material) {
     PicaTextureKey key = tex->key;
     memset(key.revision, 0, sizeof key.revision);
