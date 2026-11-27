@@ -70,6 +70,11 @@ static void evict(unsigned i) {
     C3D_TexDelete(&s_texture[i].texture);
     s_cacheBytes -= s_texture[i].bytes;
     s_texture[i].bytes = 0;
+    /* Leave no stale record behind: the slot must not carry the evicted
+     * texture's key, frame stamp or alpha into its next life. */
+    memset(&s_texture[i].key, 0, sizeof s_texture[i].key);
+    s_texture[i].frame = 0;
+    s_texture[i].alpha = 0;
 }
 
 void PbW2_PicaExit(void) {
@@ -147,11 +152,28 @@ int PbW2_PicaUpload(const PicaTexture *texture) {
         }
     }
     unsigned bytes = width * height * 4;
+    if (bytes > TEXTURE_CACHE_BYTES) return -1;
+    /* Choose the slot and prove the byte budget before evicting anything.
+     * A free slot is kept even when the cache is over budget -- the budget
+     * is then met by evicting other unreferenced slots, not by throwing
+     * the free slot away and evicting a live victim instead. And a failing
+     * upload must leave the resident set untouched: the old code evicted
+     * the chosen slot (then further LRU slots) before it could discover
+     * every remaining slot was pinned this frame, permanently thinning
+     * the cache on each failure -- a ratchet that guaranteed harder
+     * eviction work on every later zone entry. */
     unsigned slot = 0;
     while (slot < TEXTURES && s_texture[slot].bytes) ++slot;
-    if (slot == TEXTURES || s_cacheBytes + bytes > TEXTURE_CACHE_BYTES)
+    if (slot == TEXTURES) {
         slot = oldest_unreferenced();
-    if (slot == TEXTURES) return -1;
+        if (slot == TEXTURES) return -1;
+    }
+    unsigned reclaimable = 0;
+    for (unsigned i = 0; i < TEXTURES; ++i) {
+        if (s_texture[i].bytes && (i == slot || s_texture[i].frame != s_frame))
+            reclaimable += s_texture[i].bytes;
+    }
+    if (s_cacheBytes - reclaimable + bytes > TEXTURE_CACHE_BYTES) return -1;
 
     C3D_Tex *tex = &s_texture[slot].texture;
     /* A victim is always fully evicted and re-initialised, never overwritten
@@ -164,7 +186,7 @@ int PbW2_PicaUpload(const PicaTexture *texture) {
     evict(slot);
     while (s_cacheBytes + bytes > TEXTURE_CACHE_BYTES) {
         unsigned oldest = oldest_unreferenced();
-        if (oldest == TEXTURES) return -1;
+        if (oldest == TEXTURES) return -1; /* Unreachable: the budget was proven above. */
         evict(oldest);
     }
     if (!C3D_TexInit(tex, width, height, GPU_RGBA8)) return -1;
