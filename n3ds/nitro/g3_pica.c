@@ -7,7 +7,7 @@
 #include <citro3d.h>
 #include <string.h>
 
-enum { WIDTH = 256, LCD_WIDTH = 400, HEIGHT = 192, TARGET_HEIGHT = 256, VERTICES = 24576, BATCHES = 1024, TEXTURES = 128 };
+enum { WIDTH = 256, HEIGHT = 192, LCD_WIDTH = 400, LCD_HEIGHT = 240, VERTICES = 24576, BATCHES = 1024, TEXTURES = 128 };
 enum { TEXTURE_CACHE_BYTES = 6 * 1024 * 1024 };
 
 extern const u8 _binary_g3_pass_shbin_start[], _binary_g3_pass_shbin_end[];
@@ -51,9 +51,9 @@ enum { PICA_ENABLED = 1u << 0, PICA_SKIP_EDGES = 1u << 1 };
 bool PbW2_PicaInit(void) {
     if (!C3D_Init(C3D_DEFAULT_CMDBUF_SIZE)) return false;
     s_ready = true;
-    s_target = C3D_RenderTargetCreate(WIDTH, TARGET_HEIGHT, GPU_RB_RGBA8, GPU_RB_DEPTH24_STENCIL8);
+    s_target = C3D_RenderTargetCreate(WIDTH, HEIGHT, GPU_RB_RGBA8, GPU_RB_DEPTH24_STENCIL8);
     s_vertices = linearAlloc(sizeof(*s_vertices) * VERTICES);
-    s_pixels = linearAlloc(WIDTH * TARGET_HEIGHT * sizeof(*s_pixels));
+    s_pixels = linearAlloc(WIDTH * HEIGHT * sizeof(*s_pixels));
     s_shader = DVLB_ParseFile((u32 *)_binary_g3_pass_shbin_start,
                               _binary_g3_pass_shbin_end - _binary_g3_pass_shbin_start);
     if (!s_target || !s_vertices || !s_pixels || !s_shader) {
@@ -218,9 +218,9 @@ bool PbW2_PicaFinish(uint32_t clearColor, float clearDepth, uint16_t *result) {
      * uses a 320-wide viewport in the same allocation as native widescreen. */
     bool wide = s_renderWidth > WIDTH;
     if (wide && !s_wideTarget) {
-        s_widePixels = linearAlloc(LCD_WIDTH * TARGET_HEIGHT * sizeof(*s_widePixels));
+        s_widePixels = linearAlloc(LCD_WIDTH * LCD_HEIGHT * sizeof(*s_widePixels));
         if (!s_widePixels) return false;
-        s_wideTarget = C3D_RenderTargetCreate(LCD_WIDTH, TARGET_HEIGHT, GPU_RB_RGBA8, GPU_RB_DEPTH24_STENCIL8);
+        s_wideTarget = C3D_RenderTargetCreate(LCD_WIDTH, LCD_HEIGHT, GPU_RB_RGBA8, GPU_RB_DEPTH24_STENCIL8);
         if (!s_wideTarget) {
             linearFree(s_widePixels);
             s_widePixels = NULL;
@@ -231,7 +231,8 @@ bool PbW2_PicaFinish(uint32_t clearColor, float clearDepth, uint16_t *result) {
     C3D_RenderTarget *target = wide ? s_wideTarget : s_target;
     u32 *pixels = wide ? s_widePixels : s_pixels;
     unsigned stride = wide ? LCD_WIDTH : WIDTH;
-    unsigned height = s_native ? 240 : HEIGHT;
+    unsigned height = s_native ? LCD_HEIGHT : HEIGHT;
+    unsigned targetHeight = wide ? LCD_HEIGHT : HEIGHT;
     GSPGPU_FlushDataCache(s_vertices, s_vertexCount * sizeof(*s_vertices));
     C3D_RenderTargetClear(target, C3D_CLEAR_ALL, clearColor, (unsigned)(0xffffff * clearDepth));
     C3D_FrameDrawOn(target);
@@ -296,7 +297,7 @@ bool PbW2_PicaFinish(uint32_t clearColor, float clearDepth, uint16_t *result) {
         C3D_DrawArrays(GPU_TRIANGLES, batch->first, batch->count);
         previous = batch;
     }
-    u32 dims = GX_BUFFER_DIM(stride, TARGET_HEIGHT);
+    u32 dims = GX_BUFFER_DIM(stride, targetHeight);
     u32 flags = GX_TRANSFER_FLIP_VERT(1) | GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8)
                 | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGBA8);
     /* Vertex and texture writes are flushed where they are made. Flush
@@ -310,12 +311,12 @@ bool PbW2_PicaFinish(uint32_t clearColor, float clearDepth, uint16_t *result) {
     GSPGPU_InvalidateDataCache(pixels, stride * height * sizeof(*pixels));
     u16 *output = s_native ? s_native : result;
     unsigned outputWidth = s_native ? LCD_WIDTH : s_renderWidth;
-    /* Prefetch the next ARM11 cache lines while converting this one.
-     * The readback allocation includes the unused rows below the image. */
+    /* Prefetch the next row before converting the current one. The render
+     * targets are exactly as tall as the longest viewport they serve. */
     for (unsigned y = 0; y < height; ++y) {
+        if (y + 1 < height) __builtin_prefetch(pixels + (y + 1) * stride, 0, 0);
         for (unsigned x = 0; x < outputWidth; x += 8) {
             unsigned startPixel = y * stride + x;
-            __builtin_prefetch(pixels + startPixel + 32, 0, 0);
             for (unsigned j = 0; j < 8; ++j) {
                 u32 rgba = pixels[startPixel + j];
                 output[y * outputWidth + x + j] = ((rgba >> 27) & 31) | ((rgba >> 14) & 0x3e0) | ((rgba >> 1) & 0x7c00)

@@ -22,8 +22,8 @@ presentation and keeps DS window data intact. Glyph pixels with transparent
 backgrounds, incompatible effects or clipping use the existing sampling path.
 Text baked into OBJ sprites remains open.
 
-Ordinary PICA200 frames use a 256-column render target and readback.
-Widescreen and wide capture share a separate 400-column allocation.
+Ordinary PICA200 frames use a 256x192 render target and readback.
+Widescreen and wide capture share a separate 400x240 allocation.
 Texture addresses wrap across slot 3 and cache revisions include wrapped
 texels. Identical LCDC uploads preserve existing textures and queued geometry. PICA
 uploads write complete tiles contiguously. Evicted textures of the same
