@@ -154,20 +154,21 @@ int PbW2_PicaUpload(const PicaTexture *texture) {
     if (slot == TEXTURES) return -1;
 
     C3D_Tex *tex = &s_texture[slot].texture;
-    /* The previous frame is fenced before we get here. Refresh only a victim
-     * that has no references in this frame, matching SoulSilver's in-place
-     * upload without sacrificing cache hits for other live materials. */
-    bool reuse = s_texture[slot].bytes && tex->width == width && tex->height == height;
-    if (!reuse) {
-        evict(slot);
-        while (s_cacheBytes + bytes > TEXTURE_CACHE_BYTES) {
-            unsigned oldest = oldest_unreferenced();
-            if (oldest == TEXTURES) return -1;
-            evict(oldest);
-        }
-        if (!C3D_TexInit(tex, width, height, GPU_RGBA8)) return -1;
-        s_cacheBytes += bytes;
+    /* A victim is always fully evicted and re-initialised, never overwritten
+     * in place: the previous frame is not fenced on every publish path (the
+     * frame-reuse early return submits no Pica work at all), so the previous
+     * command list may still be sampling the victim's data. Overwriting it
+     * in place rendered flat single-colour materials while every host-side
+     * counter reported success (the "playdoh interiors" bug). Eviction is
+     * already the slow path; an alloc/free per eviction is acceptable. */
+    evict(slot);
+    while (s_cacheBytes + bytes > TEXTURE_CACHE_BYTES) {
+        unsigned oldest = oldest_unreferenced();
+        if (oldest == TEXTURES) return -1;
+        evict(oldest);
     }
+    if (!C3D_TexInit(tex, width, height, GPU_RGBA8)) return -1;
+    s_cacheBytes += bytes;
     u32 *tiles = tex->data;
     unsigned alpha = 0;
     /* Walk complete PICA tiles so writes stay within contiguous cache lines.

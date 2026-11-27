@@ -40,8 +40,10 @@ Texture and palette reads OR all VRAM banks mapped to the same slot.
 Cache revisions include all banks contributing indices, descriptors or colors.
 Texture addresses wrap across slot 3 and cache revisions include wrapped
 texels. Identical LCDC uploads preserve existing textures and queued geometry. PICA
-uploads write complete tiles contiguously. Evicted textures of the same
-size reuse their allocation after the previous frame fence.
+uploads write complete tiles contiguously. Evicted textures are always
+deleted and re-initialised, never overwritten in place: the previous frame
+is not fenced on every publish path, and in-place reuse rendered flat
+single-colour materials (the "playdoh interiors" bug).
 The main loop submits GPU swaps before VBlank and renders them after the
 VBlank callbacks and transfers. Queued materials then resolve the current
 texture and palette bindings and cache revisions. Software frames and
