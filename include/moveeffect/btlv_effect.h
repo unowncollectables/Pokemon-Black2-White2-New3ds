@@ -91,6 +91,7 @@ void BtlvEffect_StartEffect285(u8 pos);
 void BtlvEffect_StartEffect286(u8 pos);
 void BtlvEffect_StartEffect26E(u8 pos);
 void BtlvEffect_StartEffect26F(u8 pos);
+BOOL BtlvEffect_IsInitialized(void);
 BOOL BtlvEffect_IsBusy(void);
 
 // The Pokémon and the trainers, by position; the trainers' from 8 on

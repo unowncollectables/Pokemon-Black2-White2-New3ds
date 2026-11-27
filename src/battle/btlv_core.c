@@ -270,9 +270,14 @@ void BtlvCore_Update(BtlvCore *core) {
      * log must name the gate it is waiting on. Log the view-core
      * command state whenever it changes, plus a slow heartbeat so a
      * frozen tuple reads as frozen. BtlvEffect_IsBusy dereferences
-     * the effect system with no NULL check, so it is only called
-     * once a display command has started (its setup step creates the
-     * effect system before any wait can begin). */
+     * the effect system with no NULL check, and a started command
+     * does NOT imply it exists: StartCommand only records the
+     * command, while the effect system is created later by the
+     * command's own SETUP step (CmdBattleStart seq 0). Build 13's
+     * version of this probe gated on cmd alone and crashed a
+     * battle's first frames (Run 6, crash dump 13: PC in
+     * BtlvEffect_IsBusy, fault address 0x1f0, sBtlvEffect NULL).
+     * Build 14 also gates on BtlvEffect_IsInitialized. */
     {
         static u32 s_frames;
         static u32 s_lastCmd = 0xffffffff;
@@ -284,7 +289,7 @@ void BtlvCore_Update(BtlvCore *core) {
         if (core->cmd != BTLV_CMD_NONE) {
             s_cmdSeen = TRUE;
         }
-        busy = s_cmdSeen ? (BtlvEffect_IsBusy() ? 1 : 0) : 2;
+        busy = (s_cmdSeen && BtlvEffect_IsInitialized()) ? (BtlvEffect_IsBusy() ? 1 : 0) : 2;
         if (core->cmd != s_lastCmd || core->seq != s_lastSeq || busy != s_lastBusy ||
             (s_frames % 600) == 0) {
             Log_Line("BTL", "core cmd=%u seq=%d effBusy=%u", core->cmd, core->seq, busy);

@@ -580,6 +580,10 @@ void BtlvEffect_StartEffect26F(u8 pos) {
     BtlvEffect_StartPos(pos, 0x26f);
 }
 
+BOOL BtlvEffect_IsInitialized(void) {
+    return sBtlvEffect != NULL;
+}
+
 BOOL BtlvEffect_IsBusy(void) {
     if ((sBtlvEffect->executing | sBtlvEffect->damageTasks | sBtlvEffect->changeTasks | sBtlvEffect->rotateTasks) !=
         0) {
