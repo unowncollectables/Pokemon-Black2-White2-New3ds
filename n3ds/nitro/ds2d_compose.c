@@ -288,7 +288,10 @@ static void put_text_pixel(u16 *out, BgBlend *blend, unsigned i, unsigned plane,
     blend->ink[i] = PBW2_TEXT_INK;
     if (blend->nativeText && (ink & PBW2_TEXT_NATIVE)) {
         if (ink & PBW2_TEXT_CLEAR_UNDER)
-            blend->ink[i] = (ink & ~0xffu & ~PBW2_TEXT_CLEAR_UNDER) | PBW2_TEXT_INK | below;
+            /* Keep CLEAR_UNDER in the finished word: it marks the restore
+             * colour as composed-frame (not palette) and exempts the pixel
+             * from the plane-match downgrade in compose_engine. */
+            blend->ink[i] = (ink & ~0xffu) | PBW2_TEXT_INK | below;
         else
             blend->ink[i] = (ink & ~0xffu) | PBW2_TEXT_INK | palette[ink & 255];
     }
@@ -951,7 +954,8 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
             int x = PbW2_TextNativeCoordinate(i % 256, (info >> 16) & 31);
             int y = PbW2_TextNativeCoordinate(i / 256, (info >> 21) & 31);
             if (!bg_blend.nativeText || !bg_blend.planes[i] || (unsigned)x >= 320 || (unsigned)y >= 240 ||
-                bg_blend.planes[i] != bg_blend.planes[PbW2_TextSourceCoordinate(y) * 256 + PbW2_TextSourceCoordinate(x)])
+                (!(info & PBW2_TEXT_CLEAR_UNDER) &&
+                 bg_blend.planes[i] != bg_blend.planes[PbW2_TextSourceCoordinate(y) * 256 + PbW2_TextSourceCoordinate(x)]))
                 ink[i] = PBW2_TEXT_INK;
         }
     }
