@@ -102,11 +102,15 @@ static uint64_t top_frame_hash(const u16 *pic, const u32 *ink) {
 #if defined(PBW2_LINK_GAME)
 /* Compose worker (Build 19, SoulSilver's threaded present): the sub
  * engine's compose — and, in stereo, the right eye's — runs on a
- * core-2 worker while the present thread composes the main engine /
- * draws, instead of every compose running serially on core 0. Core 2
- * already hosts the audio (prio 0x20) and IO (0x28) workers; the
- * compose worker runs at 0x30 so both preempt it and audio is never
- * starved by compose work.
+ * worker while the present thread composes the main engine / draws,
+ * instead of every compose running serially on core 0. Build 24 moves
+ * the worker from core 2 to core 1: core 2 hosts the audio (prio
+ * 0x20) and IO (0x28) workers, which preempted compose work there,
+ * while core 1 was completely idle (the game thread is core 3, the
+ * shell core 0). SoulSilver's stereo pattern makes the same move —
+ * its engine-B compose runs on a core-1 syscore thread (stereo_c1).
+ * The worker runs at prio 0x30, below audio and IO, so audio is never
+ * starved by compose work on any core.
  *
  * Synchronization: one job slot, submitted and joined by the present
  * thread only. A job is always joined inside the present that
@@ -166,7 +170,11 @@ static bool ComposeWorker_Ensure(void) {
         Log_Line("GX", "compose worker: event create failed, serial compose");
         return false;
     }
-    if (!Workers_Start("compose", Compose_WorkerMain, 0x30, 2, &s_composeWorker)) {
+    /* Core 1 is the syscore: the app only gets real time on it after
+     * raising its CPU time limit (SoulSilver's stereo_c1 does the
+     * same, at the same 80%). One-shot, like SS's setup. */
+    APT_SetAppCpuTimeLimit(80);
+    if (!Workers_Start("compose", Compose_WorkerMain, 0x30, 1, &s_composeWorker)) {
         Log_Line("GX", "compose worker: start failed, serial compose");
         return false;
     }

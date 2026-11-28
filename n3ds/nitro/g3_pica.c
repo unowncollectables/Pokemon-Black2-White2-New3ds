@@ -47,7 +47,26 @@ static unsigned s_alphaRef;
 static uint64_t s_frame;
 static bool s_ready;
 static unsigned s_options;
-enum { PICA_ENABLED = 1u << 0, PICA_SKIP_EDGES = 1u << 1 };
+enum { PICA_ENABLED = 1u << 0, PICA_SKIP_EDGES = 1u << 1, PICA_ASYNC = 1u << 2 };
+
+/* Async readback state (Build 24): at most one frame is ever pending —
+ * the raster resolves it at the top of the next publish, before any
+ * upload or eviction, so the readback buffer is fenced before reuse
+ * exactly as the sync path's own fence guarantees. The pending frame's
+ * centre image converts into s_stage (never into the caller's result
+ * buffer: by resolve time that buffer may hold a CPU-rendered frame);
+ * its native image converts into the native buffer captured here. */
+typedef struct {
+    bool active;
+    u32 *pixels;
+    unsigned stride, height, outputWidth, renderWidth;
+    u16 *native;
+    uint64_t queueTicks;
+} PicaPending;
+
+static PicaPending s_pending;
+static u16 s_stage[LCD_WIDTH * LCD_HEIGHT];
+static bool s_forceSync;
 
 bool PbW2_PicaInit(void) {
     if (!C3D_Init(C3D_DEFAULT_CMDBUF_SIZE)) return false;
@@ -85,7 +104,33 @@ static void evict(unsigned i) {
  * re-upload cost is already being paid -- keys advance on every zone load
  * either way. Hits/uploads stay cumulative so tester comparisons across
  * entries still work; invalidations counts the resets themselves. */
+static bool pica_async(void) {
+    return (__atomic_load_n(&s_options, __ATOMIC_RELAXED) & PICA_ASYNC) != 0;
+}
+
+/* Waits until the pending frame's draw + transfer have completed (the
+ * same FrameBegin/End pair the sync path fences with: beginning a
+ * frame waits for its predecessor, including the transfer). Returns
+ * false when the fence could not be run, leaving the frame pending. */
+static bool fence_pending(void) {
+    if (!C3D_FrameBegin(0)) return false;
+    C3D_FrameEnd(GX_CMDLIST_FLUSH);
+    return true;
+}
+
+/* Drops the pending frame without converting it (zone transitions and
+ * shutdown): the fence still runs, so no later work can race the
+ * in-flight transfer or sample a texture being evicted. */
+static void drop_pending(void) {
+    if (!s_pending.active) return;
+    fence_pending();
+    s_pending.active = false;
+}
+
 void PbW2_PicaInvalidate(void) {
+    /* A pending async frame may still be sampling resident textures;
+     * fence it before any eviction (the playdoh lesson). */
+    drop_pending();
     for (unsigned i = 0; i < PICA_TEXTURE_SLOTS; ++i) evict(i);
     s_cacheBytes = 0;
     ++s_invalidations;
@@ -93,6 +138,7 @@ void PbW2_PicaInvalidate(void) {
 
 void PbW2_PicaExit(void) {
     if (!s_ready) return;
+    drop_pending();
     for (unsigned i = 0; i < PICA_TEXTURE_SLOTS; ++i) evict(i);
     if (s_shader) {
         if (s_program.vertexShader) shaderProgramFree(&s_program);
@@ -110,12 +156,22 @@ void PbW2_PicaExit(void) {
 static bool s_initTried;
 
 void PbW2_PicaSetOptions(bool enabled, bool skipEdges) {
-    unsigned options = (enabled ? PICA_ENABLED : 0) | (skipEdges ? PICA_SKIP_EDGES : 0);
+    unsigned previous = __atomic_load_n(&s_options, __ATOMIC_RELAXED);
+    unsigned options = (enabled ? PICA_ENABLED : 0) | (skipEdges ? PICA_SKIP_EDGES : 0)
+                       | (previous & PICA_ASYNC);
     __atomic_store_n(&s_options, options, __ATOMIC_RELAXED);
     /* Turning the GPU off re-arms the one-shot setup: a failed first
      * attempt used to latch for the whole session, so the toggle
      * could never bring the GPU back after a transient setup miss. */
     if (!enabled) s_initTried = false;
+}
+
+void PbW2_PicaSetAsync(bool async) {
+    unsigned previous = __atomic_load_n(&s_options, __ATOMIC_RELAXED);
+    unsigned options = async ? (previous | PICA_ASYNC) : (previous & ~PICA_ASYNC);
+    if (options == previous) return;
+    __atomic_store_n(&s_options, options, __ATOMIC_RELAXED);
+    Log_Line("GPU", "async readback %s (3D layer one publish late when on)", async ? "on" : "off");
 }
 
 bool PbW2_PicaSkipEdges(void) {
@@ -253,6 +309,110 @@ bool PbW2_PicaTriangle(const PicaVertex vertex[3], int texture, PicaAlphaTest te
     return true;
 }
 
+/* Converts a fenced readback buffer into DS RGB5551 pixels. With a
+ * native destination the centre image is resampled from each native
+ * row in the same pass, while the row is still hot: the resample's
+ * source-row map ((10y+5)/8) rises by 1 or 2 per result row, so each
+ * native row feeds at most one centre row and no second pass over the
+ * native buffer is needed. Pixel output is identical to the old
+ * two-pass version. */
+static void convert_frame(const u32 *pixels, unsigned stride, unsigned height,
+                          unsigned outputWidth, unsigned renderWidth,
+                          u16 *native, u16 *centre) {
+    u16 *output = native ? native : centre;
+    static int16_t rowMap[LCD_HEIGHT];
+    static bool rowMapReady;
+    if (native && !rowMapReady) {
+        for (unsigned y = 0; y < LCD_HEIGHT; ++y) rowMap[y] = -1;
+        for (unsigned y = 0; y < HEIGHT; ++y) rowMap[(10 * y + 5) / 8] = (int16_t)y;
+        rowMapReady = true;
+    }
+    /* Prefetch the next row before converting the current one. The render
+     * targets are exactly as tall as the longest viewport they serve. */
+    for (unsigned y = 0; y < height; ++y) {
+        if (y + 1 < height) __builtin_prefetch(pixels + (y + 1) * stride, 0, 0);
+        const u32 *src = pixels + y * stride;
+        u16 *dst = output + y * outputWidth;
+        for (unsigned x = 0; x < outputWidth; x += 8) {
+            for (unsigned j = 0; j < 8; ++j) {
+                u32 rgba = src[x + j];
+                dst[x + j] = ((rgba >> 27) & 31) | ((rgba >> 14) & 0x3e0) | ((rgba >> 1) & 0x7c00)
+                             | ((rgba & 255) > 3 ? 0x8000 : 0);
+            }
+        }
+        if (native) {
+            int centreRow = rowMap[y];
+            if (centreRow >= 0) {
+                /* Map DS pixel centers to the nearest native sample for legacy capture. */
+                u16 *dstRow = centre + centreRow * renderWidth;
+                for (unsigned x = 0; x < renderWidth; ++x)
+                    dstRow[x] = dst[(10 * x + 5) / 8];
+            }
+        }
+    }
+}
+
+static void finish_stats(uint64_t ticks, uint64_t queueTicks, uint64_t resolveTicks) {
+    static bool reported;
+    static uint64_t totalTicks;
+    static unsigned sampleCount;
+    static uint64_t asyncQueueTicks, asyncResolveTicks;
+    static unsigned asyncCount;
+    totalTicks += ticks;
+    ++sampleCount;
+    if (queueTicks || resolveTicks) {
+        asyncQueueTicks += queueTicks;
+        asyncResolveTicks += resolveTicks;
+        ++asyncCount;
+    }
+    if (!reported) {
+        Log_Line("GPU", "first PICA200 frame (%u triangles, %u batches, %u uploads)", s_vertexCount / 3,
+                 s_batchCount, s_uploads);
+        reported = true;
+    }
+    if (s_frame == 2 || sampleCount == 120) {
+        unsigned averageUs = totalTicks * 1000000ull / ((uint64_t)sampleCount * SYSCLOCK_ARM11);
+        Log_Line("GPU", "texture cache: %u hits, %u uploads, %u invalidations, frame and readback avg %u us (%u frames)",
+                 s_hits, s_uploads, s_invalidations, averageUs, sampleCount);
+        if (asyncCount) {
+            Log_Line("GPU", "async readback: queue avg %u us, resolve avg %u us (%u frames)",
+                     (unsigned)(asyncQueueTicks * 1000000ull / ((uint64_t)asyncCount * SYSCLOCK_ARM11)),
+                     (unsigned)(asyncResolveTicks * 1000000ull / ((uint64_t)asyncCount * SYSCLOCK_ARM11)),
+                     asyncCount);
+            asyncQueueTicks = asyncResolveTicks = 0;
+            asyncCount = 0;
+        }
+        totalTicks = 0;
+        sampleCount = 0;
+    }
+}
+
+void PbW2_PicaSetForceSync(bool force) {
+    s_forceSync = force;
+}
+
+bool PbW2_PicaAsyncPending(void) {
+    return s_pending.active;
+}
+
+const uint16_t *PbW2_PicaResolvedCentre(void) {
+    return s_stage;
+}
+
+bool PbW2_PicaResolvePending(void) {
+    if (!s_pending.active) return false;
+    uint64_t start = svcGetSystemTick();
+    if (!fence_pending()) return false; /* Still in flight; retry next publish. */
+    GSPGPU_InvalidateDataCache(s_pending.pixels, s_pending.stride * s_pending.height * sizeof(*s_pending.pixels));
+    convert_frame(s_pending.pixels, s_pending.stride, s_pending.height, s_pending.outputWidth,
+                  s_pending.renderWidth, s_pending.native, s_stage);
+    uint64_t resolveTicks = svcGetSystemTick() - start;
+    uint64_t queueTicks = s_pending.queueTicks;
+    s_pending.active = false;
+    finish_stats(queueTicks + resolveTicks, queueTicks, resolveTicks);
+    return true;
+}
+
 bool PbW2_PicaFinish(uint32_t clearColor, float clearDepth, uint16_t *result) {
     u64 start = svcGetSystemTick();
     if (!s_batchCount) return false;
@@ -269,6 +429,11 @@ bool PbW2_PicaFinish(uint32_t clearColor, float clearDepth, uint16_t *result) {
             return false;
         }
     }
+    bool async = pica_async() && !s_forceSync;
+    s_forceSync = false;
+    /* Never queue over an unresolved frame. The raster resolves at the
+     * top of every publish, so this is only a safety net. */
+    if (async && s_pending.active && !PbW2_PicaResolvePending()) return false;
     if (!C3D_FrameBegin(0)) return false;
     C3D_RenderTarget *target = wide ? s_wideTarget : s_target;
     u32 *pixels = wide ? s_widePixels : s_pixels;
@@ -347,49 +512,21 @@ bool PbW2_PicaFinish(uint32_t clearColor, float clearDepth, uint16_t *result) {
     C3D_FrameSplit(GX_CMDLIST_FLUSH);
     GX_DisplayTransfer(target->frameBuf.colorBuf, dims, pixels, dims, flags);
     C3D_FrameEnd(GX_CMDLIST_FLUSH);
+    unsigned outputWidth = s_native ? LCD_WIDTH : s_renderWidth;
+    if (async) {
+        /* Queue only: the fence + convert run at the next publish's
+         * resolve, after a full frame of game update has given the GPU
+         * time to finish. The draw + transfer wait leaves the game
+         * thread's serial path — that is the entire saving. */
+        s_pending = (PicaPending){true, pixels, stride, height, outputWidth, s_renderWidth,
+                                  s_native, svcGetSystemTick() - start};
+        return true;
+    }
     /* Beginning the next frame waits for its predecessor, including the transfer. */
     if (!C3D_FrameBegin(0)) return false;
     C3D_FrameEnd(GX_CMDLIST_FLUSH);
     GSPGPU_InvalidateDataCache(pixels, stride * height * sizeof(*pixels));
-    u16 *output = s_native ? s_native : result;
-    unsigned outputWidth = s_native ? LCD_WIDTH : s_renderWidth;
-    /* Prefetch the next row before converting the current one. The render
-     * targets are exactly as tall as the longest viewport they serve. */
-    for (unsigned y = 0; y < height; ++y) {
-        if (y + 1 < height) __builtin_prefetch(pixels + (y + 1) * stride, 0, 0);
-        for (unsigned x = 0; x < outputWidth; x += 8) {
-            unsigned startPixel = y * stride + x;
-            for (unsigned j = 0; j < 8; ++j) {
-                u32 rgba = pixels[startPixel + j];
-                output[y * outputWidth + x + j] = ((rgba >> 27) & 31) | ((rgba >> 14) & 0x3e0) | ((rgba >> 1) & 0x7c00)
-                                       | ((rgba & 255) > 3 ? 0x8000 : 0);
-            }
-        }
-    }
-    if (s_native) {
-        /* Map DS pixel centers to the nearest native sample for legacy capture. */
-        for (unsigned y = 0; y < HEIGHT; ++y) {
-            const u16 *row = s_native + ((10 * y + 5) / 8) * LCD_WIDTH;
-            for (unsigned x = 0; x < s_renderWidth; ++x)
-                result[y * s_renderWidth + x] = row[(10 * x + 5) / 8];
-        }
-    }
-    static bool reported;
-    static u64 totalTicks;
-    static unsigned sampleCount;
-    totalTicks += svcGetSystemTick() - start;
-    ++sampleCount;
-    if (!reported) {
-        Log_Line("GPU", "first PICA200 frame (%u triangles, %u batches, %u uploads)", s_vertexCount / 3,
-                 s_batchCount, s_uploads);
-        reported = true;
-    }
-    if (s_frame == 2 || sampleCount == 120) {
-        unsigned averageUs = totalTicks * 1000000ull / ((u64)sampleCount * SYSCLOCK_ARM11);
-        Log_Line("GPU", "texture cache: %u hits, %u uploads, %u invalidations, frame and readback avg %u us (%u frames)",
-                 s_hits, s_uploads, s_invalidations, averageUs, sampleCount);
-        totalTicks = 0;
-        sampleCount = 0;
-    }
+    convert_frame(pixels, stride, height, outputWidth, s_renderWidth, s_native, result);
+    finish_stats(svcGetSystemTick() - start, 0, 0);
     return true;
 }

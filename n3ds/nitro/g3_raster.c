@@ -52,6 +52,11 @@ static u16 s_nativeFrames[NATIVE_BUFFERS][PBW2_NATIVE_TOP_WIDTH * PBW2_NATIVE_TO
 static unsigned s_nativeDisplayed, s_nativeDraw;
 static unsigned s_nativeReader = NATIVE_BUFFERS;
 static bool s_nativeFrame, s_haveNative;
+/* Async readback (Build 24): display state of the GPU frame currently
+ * in flight, recorded when it is queued and applied when it resolves
+ * at the next publish. */
+static unsigned s_pendingAsyncWidth, s_pendingAsyncNativeDraw;
+static bool s_pendingAsyncNative;
 #endif
 static unsigned s_width = WIDTH, s_displayWidth = WIDTH;
 static bool s_frameCapture, s_publishedCapture;
@@ -1262,6 +1267,9 @@ static bool render_with_pica(u32 swapFlags, bool afterVBlank) {
         unlock_display();
     }
     PbW2_PicaSetFrameWidth(s_width, s_nativeFrame ? s_nativeFrames[s_nativeDraw] : NULL);
+    /* A capture frame must read back its own pixels, not the previous
+     * frame's: force this finish synchronous under async readback. */
+    PbW2_PicaSetForceSync(s_frameCapture);
     if (trace) {
         Log_Line("GPU", "scene frame %u: %u triangles, %u/%u materials textured (%u transparent), formats=%02x, width=%u%s",
                  s_sceneSwaps + 1, s_gpuCount, textured, s_gpuMaterialCount, blank, formats, s_width,
@@ -1500,6 +1508,24 @@ static void publish_swap(u32 flags, bool afterVBlank) {
 #endif
     start_frame();
 #ifdef PBW2_GPU_GEOMETRY
+    /* Async readback (Build 24): resolve the previous GPU frame first —
+     * before anything in this publish can upload or evict a texture it
+     * samples — and publish its image now. The 3D layer runs one
+     * publish behind (SoulSilver's gpu3d_async trade). In sync mode
+     * nothing is ever pending and this is a no-op. The display state
+     * set here describes the frame actually going on screen, which is
+     * what the compositor's published-frame accessors promise. */
+    if (PbW2_PicaResolvePending()) {
+        lock_display();
+        s_haveNative = s_pendingAsyncNative;
+        if (s_haveNative) s_nativeDisplayed = s_pendingAsyncNativeDraw;
+        s_displayWidth = s_pendingAsyncWidth;
+        s_publishedCapture = false; /* Capture frames force the sync path, so a pending frame is never one. */
+        memcpy(s_display, PbW2_PicaResolvedCentre(), s_pendingAsyncWidth * HEIGHT * sizeof(*s_display));
+        s_displayHasDepth = false; /* GPU frames never publish depth. */
+        s_publishGeneration++;
+        unlock_display();
+    }
     if (s_gpuFrame && !render_with_pica(flags, afterVBlank)) {
         if (s_gpuCount) report_gpu_fallback(GPU_FALLBACK_BATCH, "batch requires software rendering");
         s_wBuffer = (flags & (GX_BUFFERMODE_W << 1)) != 0;
@@ -1520,6 +1546,19 @@ static void publish_swap(u32 flags, bool afterVBlank) {
         s_frameStarted = s_inPrimitive = 0;
         return;
     }
+    /* A GPU frame queued for async readback is not in s_drawing yet:
+     * record the display state it will publish with when it resolves
+     * at the next publish, and skip the copy below — the image on
+     * screen remains the resolved frame published above (or earlier). */
+    bool queuedAsync = PbW2_PicaAsyncPending();
+    if (queuedAsync) {
+        s_pendingAsyncWidth = s_width;
+        s_pendingAsyncNative = s_nativeFrame;
+        s_pendingAsyncNativeDraw = s_nativeDraw;
+    }
+#endif
+#ifdef PBW2_GPU_GEOMETRY
+    if (!queuedAsync) {
 #endif
     lock_display();
 #ifdef PBW2_GPU_GEOMETRY
@@ -1542,6 +1581,9 @@ static void publish_swap(u32 flags, bool afterVBlank) {
     }
     s_publishGeneration++;
     unlock_display();
+#ifdef PBW2_GPU_GEOMETRY
+    }
+#endif
     s_frameStarted = s_inPrimitive = 0;
     /* GX record/replay: report the publish. Only a synchronous,
      * CPU-rendered, non-capture publish can be replayed (see

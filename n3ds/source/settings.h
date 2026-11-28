@@ -13,6 +13,7 @@ enum {
     DISPLAY_SHARP_PIXELS = 1u << 2,
     DISPLAY_PICA_GEOMETRY = 1u << 3,
     DISPLAY_PICA_NO_EDGES = 1u << 4,
+    DISPLAY_PICA_ASYNC = 1u << 7,
 };
 
 /* Load preferences from the game's SD directory (config.txt inside

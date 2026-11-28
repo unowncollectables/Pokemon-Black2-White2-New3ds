@@ -18,6 +18,7 @@ static const struct {
 } kCfgDefaults[] = {
     { "lcd_fit", 0 },      { "top_fit", 0 },   { "sharp_pixels", 0 },
     { "gpu_geometry", 0 }, { "gpu_no_edges", 0 }, { "wide_field", 0 },
+    { "gpu_async", 0 },
     { "sharp_text", 0 },
 };
 

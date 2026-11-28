@@ -122,13 +122,14 @@ static const struct {
 #ifdef PBW2_GPU_GEOMETRY
     {"GPU geometry (exp.)", "gpu_geometry", DISPLAY_PICA_GEOMETRY, "Use the New 3DS GPU for supported Nintendo DS scenes."},
     {"GPU 3D without outlines", "gpu_no_edges", DISPLAY_PICA_NO_EDGES, "Skip polygon outlines to keep more scenes on the GPU."},
+    {"GPU async readback (exp.)", "gpu_async", DISPLAY_PICA_ASYNC, "Let the GPU draw ahead: frame rate up, the 3D layer shows one frame late."},
     {"Widescreen 3D", "wide_field", DISPLAY_WIDE_FIELD, "Extend supported 3D scenes to the sides of the top LCD."},
 #endif
 };
 
 enum {
     ROWS = sizeof s_options / sizeof s_options[0],
-    DISPLAY_MASK = DISPLAY_SHARP_TEXT | DISPLAY_WIDE_FIELD | DISPLAY_LCD_FIT | DISPLAY_TOP_FIT | DISPLAY_SHARP_PIXELS | DISPLAY_PICA_GEOMETRY | DISPLAY_PICA_NO_EDGES,
+    DISPLAY_MASK = DISPLAY_SHARP_TEXT | DISPLAY_WIDE_FIELD | DISPLAY_LCD_FIT | DISPLAY_TOP_FIT | DISPLAY_SHARP_PIXELS | DISPLAY_PICA_GEOMETRY | DISPLAY_PICA_NO_EDGES | DISPLAY_PICA_ASYNC,
 };
 
 /* ------------------------- row model ------------------------- */
@@ -337,6 +338,7 @@ static void apply_display(void) {
     PbW2_G3SetWide((s_display & DISPLAY_WIDE_FIELD) != 0);
     PbW2_PicaSetOptions((s_display & DISPLAY_PICA_GEOMETRY) != 0,
                         (s_display & DISPLAY_PICA_NO_EDGES) != 0);
+    PbW2_PicaSetAsync((s_display & DISPLAY_PICA_ASYNC) != 0);
 #endif
 }
 
