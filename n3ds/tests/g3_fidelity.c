@@ -18,6 +18,11 @@ void Log_Line(const char *tag, const char *fmt, ...) {
     (void)fmt;
 }
 
+void Log_Error(const char *tag, const char *fmt, ...) {
+    (void)tag;
+    (void)fmt;
+}
+
 static void cmd(u32 op, u32 param) {
     PbW2_G3Command(op, &param);
 }

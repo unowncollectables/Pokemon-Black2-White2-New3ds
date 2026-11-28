@@ -54,6 +54,17 @@ static void draw_native_text(gfxScreen_t screen, const u16 *src, unsigned source
 static void draw_scaled(gfxScreen_t screen, const u16 *src, unsigned sourceWidth, uint32_t options, const u32 *ink);
 #endif
 
+#if defined(PBW2_LINK_GAME)
+static bool has_text_ink(const u32 *ink) {
+    /* Glyph-free scenes can use the plain presenter and bottom-screen cache. */
+    if (!ink) return false;
+    for (unsigned i = 0; i < GAME_WIDTH * GAME_HEIGHT; i += 4) {
+        if (ink[i] | ink[i + 1] | ink[i + 2] | ink[i + 3]) return true;
+    }
+    return false;
+}
+#endif
+
 void GxShim_Present(uint32_t flags) {
 #if defined(PBW2_LINK_GAME)
     static u16 s_top[256 * 192];
@@ -71,16 +82,15 @@ void GxShim_Present(uint32_t flags) {
                              ? s_topInk : NULL;
             u32 *bottomInk = bottom && sharpText && (options & DISPLAY_LCD_FIT) ? s_bottomInk : NULL;
             PbW2_ComposeScreensWithText(top, bottom, topInk, bottomInk);
+            if (!has_text_ink(topInk)) topInk = NULL;
+            if (!has_text_ink(bottomInk)) bottomInk = NULL;
             if (top) {
                 const u16 *sides = PbW2_TopSides();
                 const u16 *native = PbW2_NativeTop();
                 const u16 *wideTop = PbW2_WideTop();
                 if (wideTop && (options & DISPLAY_WIDE_FIELD)) {
-                    /* Wide 2D layout picture (320 wide, centre unmoved).
-                     * No native ink: glyph coordinates are DS-space and
-                     * a layout screen's text rides the scaled path until
-                     * the REQ-14 map says which of its layers are native. */
-                    draw_scaled(GFX_TOP, wideTop, 320, options, NULL);
+                    /* The Bag keeps its DS centre at column 32. */
+                    draw_scaled(GFX_TOP, wideTop, 320, options, topInk);
                 } else if (native && (options & DISPLAY_WIDE_FIELD)) {
                     Present_BlitRGB565(GFX_TOP, native, PBW2_NATIVE_TOP_WIDTH, PBW2_NATIVE_TOP_HEIGHT);
                     if (topInk) draw_native_text(GFX_TOP, top, GAME_WIDTH, topInk, true);
@@ -97,7 +107,8 @@ void GxShim_Present(uint32_t flags) {
             {
                 const u16 *wideBottom = PbW2_WideBottom();
                 if (bottom && wideBottom && (options & DISPLAY_WIDE_FIELD)) {
-                    draw_scaled(GFX_BOTTOM, wideBottom, 320, options, NULL);
+                    Present_DrawBottomCached(NULL, 0, NULL);
+                    Present_BlitRGB565(GFX_BOTTOM, wideBottom, 320, GAME_HEIGHT);
                 } else {
                     Present_DrawBottomCached(bottom, options, bottomInk);
                 }
@@ -138,9 +149,9 @@ bool Present_TouchToGame(uint16_t px, uint16_t py, uint16_t *x, uint16_t *y) {
      * centre unmoved at +32: invert that mapping, or taps on the X
      * menu's tiles would land a strip-width off. */
     if (PbW2_WideBottom() && (Settings_DisplayFlags() & DISPLAY_WIDE_FIELD)) {
-        if (px < 32 || px >= 288) return false;
+        if (px < 32 || px >= 288 || py < 24 || py >= 216) return false;
         *x = px - 32;
-        *y = (2 * py + 1) * GAME_HEIGHT / (2 * 240);
+        *y = py - 24;
         return true;
     }
     GameRect rect = game_rect(GFX_BOTTOM, 320, 240, Settings_DisplayFlags());
@@ -397,13 +408,18 @@ void Present_BlitRGB565(gfxScreen_t screen, const uint16_t *pic, int pic_w, int 
     clear_side_margins(fb, stride, land_w, ox, ox + pic_w);
     unsigned bottom = stride - oy - pic_h;
 
-    for (x = 0; x < pic_w; x++) {
+    for (x = 0; x < pic_w; ++x) {
         u16 *column = fb + (ox + x) * stride;
         if (bottom) memset(column, 0, bottom * sizeof(*column));
         if (oy) memset(column + stride - oy, 0, oy * sizeof(*column));
-        u16 *out = column + stride - 1 - oy;
-        for (y = 0; y < pic_h; y++) {
-            out[-y] = pic[y * pic_w + x];
+    }
+    /* Work on a short band so neighbouring columns reuse the same source
+     * cache lines during the row-major to column-major transpose. */
+    for (int row = 0; row < pic_h; row += 16) {
+        int end = row + 16 < pic_h ? row + 16 : pic_h;
+        for (x = 0; x < pic_w; ++x) {
+            u16 *out = fb + (ox + x) * stride + stride - 1 - oy;
+            for (y = row; y < end; ++y) out[-y] = pic[y * pic_w + x];
         }
     }
 }

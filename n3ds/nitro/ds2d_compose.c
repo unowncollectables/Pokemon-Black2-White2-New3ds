@@ -1074,18 +1074,22 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
             unsigned dsRow = ((8 * y + 4) / 10) * 256;
             u16 *row = s_nativeTop + y * PBW2_NATIVE_TOP_WIDTH;
             const u16 *geometry = nativeFrame + y * PBW2_NATIVE_TOP_WIDTH;
-            for (unsigned x = 0; x < PBW2_NATIVE_TOP_WIDTH; ++x) {
-                u16 pixel = geometry[x];
-                if (x >= 40 && x < 360) {
-                    unsigned i = dsRow + (8 * (x - 40) + 4) / 10;
-                    bool visible = !window || (window[i] & GX_WND_PLANEMASK_BG0);
-                    if (bg_blend.planes[i]) row[x] = out[i];
-                    else row[x] = visible && (pixel & 0x8000) ? rgb555_to_565(pixel) : underGeometry[i];
-                } else {
-                    unsigned edge = x < 40 ? 0 : 255;
-                    bool visible = !window || (window[dsRow + edge] & GX_WND_PLANEMASK_BG0);
+            /* The two margins share their DS edge pixel's window mask. */
+            for (unsigned side = 0; side < 2; ++side) {
+                unsigned start = side ? 360 : 0;
+                bool visible = !window || (window[dsRow + (side ? 255 : 0)] & GX_WND_PLANEMASK_BG0);
+                for (unsigned x = start; x < start + 40; ++x) {
+                    u16 pixel = geometry[x];
                     row[x] = visible && (pixel & 0x8000) ? rgb555_to_565(pixel) : backdrop;
                 }
+            }
+            for (unsigned x = 40; x < 360; ++x) {
+                unsigned i = dsRow + (8 * (x - 40) + 4) / 10;
+                u16 pixel = geometry[x];
+                if (bg_blend.planes[i]) row[x] = out[i];
+                else if ((pixel & 0x8000) && (!window || (window[i] & GX_WND_PLANEMASK_BG0)))
+                    row[x] = rgb555_to_565(pixel);
+                else row[x] = underGeometry[i];
             }
         }
         PbW2_G3ReleaseNative();

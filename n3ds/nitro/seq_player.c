@@ -120,7 +120,7 @@ typedef struct {
      * curve is the synth's model (seq_synth_envelope): attack
      * a/127*0.02 s, decay d/127*0.30 s, release r/127*0.30 s,
      * sustain s/127 as a gain. envTime and gateSeconds are
-     * wall-clock seconds (gate uses the tempo at note-on). At the
+     * wall-clock seconds (gate records the age at note-off). At the
      * gate end the voice enters the release phase instead of
      * cutting off, keeps its channel through the tail like the
      * real player, and is freed at releaseEndTick. */
@@ -661,21 +661,20 @@ static void seq_update_track_pitch(SeqTrack *track) {
 
 static float seq_synth_envelope(float time, float noteSeconds, float attack, float decay, float release,
                                 float sustain) {
-    float heldTime = time < noteSeconds ? time : noteSeconds;
+    float heldTime = noteSeconds < 0 || time < noteSeconds ? time : noteSeconds;
     float gain = sustain;
     if (heldTime < attack) gain = heldTime / attack;
     else if (heldTime < attack + decay) gain = 1.0f - (1.0f - sustain) * (heldTime - attack) / decay;
-    if (time < noteSeconds) return gain;
+    if (noteSeconds < 0 || time < noteSeconds) return gain;
     return release > 0.0f ? gain * (1.0f - (time - noteSeconds) / release) : 0.0f;
 }
 
 /* Live envelope gain for a sampled note at `time` seconds after
  * note-on, using the same curve and time constants as the synth's
- * baked envelope (seq_synth_envelope). A held (tied) note has no
- * gate while it is held, so its gate is its own age and the gain
- * stays on the attack/decay/sustain curve. */
+ * baked envelope (seq_synth_envelope). Follow the sequencer's actual
+ * note-off so ties and tempo changes preserve the sustain phase. */
 static float seq_note_envelope(const SeqNote *note, float time) {
-    float gate = note->held ? time : note->gateSeconds;
+    float gate = note->releasing ? note->gateSeconds : -1.0f;
     return seq_synth_envelope(time, gate, (float)note->attack / 127.0f * 0.02f,
                               (float)note->decay / 127.0f * 0.30f,
                               (float)note->release / 127.0f * 0.30f,
@@ -769,7 +768,7 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
     int loopStart, samples, rate, speed;
     int samplePitch = 0;
     u32 endTick;
-    float gateSeconds = 0.0f, releaseSeconds = 0.0f;
+    float releaseSeconds = 0.0f;
 
     if (track->muted) return;
     if (track->tie && seq_continue_tied_note(slot, trackIdx, note, velocity)) return;
@@ -812,7 +811,6 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
         loopStart = (int)wave.loopStart;
         samples = (int)wave.samples;
         rate = wave.rate;
-        gateSeconds = slot->tempo > 0 ? (float)duration / ((float)slot->tempo * 0.8f) : 0.0f;
         releaseSeconds = (float)wave.release / 127.0f * 0.30f;
     } else {
         /* PSG and noise bake the envelope into the generated buffer. */
@@ -842,7 +840,7 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
         .endTick = endTick, .samplePitch = samplePitch, .key = note + track->transpose,
         .sampled = wave.kind == 0, .held = track->tie && wave.kind == 0,
         .attack = wave.attack, .decay = wave.decay, .sustain = wave.sustain,
-        .release = wave.release, .gateSeconds = gateSeconds,
+        .release = wave.release,
         .releaseSeconds = releaseSeconds,
         .releaseEndTick = endTick + (u32)(releaseSeconds * (float)slot->tempo * 0.8f),
         .enveloped = wave.kind == 0,
@@ -1119,6 +1117,7 @@ static void seq_advance(SeqSlot *slot, float ticks) {
                     /* Gate end: enter the release phase. The voice
                      * keeps sounding (and keeps its channel, like
                      * the real player) until the tail ends. */
+                    note->gateSeconds = note->envTime;
                     note->releasing = TRUE;
                     note->endTick = note->releaseEndTick;
                 } else {

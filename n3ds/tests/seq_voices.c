@@ -141,6 +141,11 @@ static const char *check_tied_sample(void) {
 }
 
 static const char *check_synth_release(void) {
+    SeqNote sample = {.sustain = 127, .release = 0};
+    if (seq_note_envelope(&sample, 1.0f) != 1.0f) return "sample stays audible until its sequencer gate";
+    sample.releasing = TRUE;
+    sample.gateSeconds = 1.0f;
+    if (seq_note_envelope(&sample, 1.0f) != 0.0f) return "zero release at note-off";
     SeqWave wave = {.attack = 32, .decay = 48, .sustain = 64, .release = 80};
     SeqTrack track = {.attack = 0xff, .decay = 0, .sustain = 0xff, .release = 24};
     seq_synth_apply_overrides(&wave, &track);

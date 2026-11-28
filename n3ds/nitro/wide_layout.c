@@ -35,6 +35,7 @@
 #include "scene.h"
 
 #include <stddef.h>
+#include <string.h>
 
 void PbW2_WideBuildColumnMap(const WlPart *parts, unsigned count, unsigned row, short map[WL_WIDE_WIDTH]) {
     for (int wideX = -WL_LEFT; wideX < WL_WIDE_WIDTH - WL_LEFT; ++wideX) {
@@ -68,11 +69,32 @@ void PbW2_WideBuildColumnMap(const WlPart *parts, unsigned count, unsigned row, 
 
 void PbW2_WideApplyLayout(const uint16_t *src, uint16_t *dst, const WlPart *parts, unsigned count) {
     short map[WL_WIDE_WIDTH];
+    unsigned nextChange = 0;
+    bool centreUnmoved = false;
     for (unsigned y = 0; y < WL_HEIGHT; ++y) {
         const uint16_t *srcRow = src + y * WL_DS_WIDTH;
         uint16_t *dstRow = dst + y * WL_WIDE_WIDTH;
-        PbW2_WideBuildColumnMap(parts, count, y, map);
-        for (unsigned x = 0; x < WL_WIDE_WIDTH; ++x) dstRow[x] = srcRow[map[x]];
+        if (y == nextChange) {
+            PbW2_WideBuildColumnMap(parts, count, y, map);
+            nextChange = WL_HEIGHT;
+            for (unsigned i = 0; parts && i < count && parts[i].kind != WL_KIND_END; ++i) {
+                if (parts[i].top > (int)y && parts[i].top < (int)nextChange) nextChange = parts[i].top;
+                if (parts[i].bottom > (int)y && parts[i].bottom < (int)nextChange) nextChange = parts[i].bottom;
+            }
+            centreUnmoved = true;
+            for (int x = 0; x < WL_DS_WIDTH; ++x) {
+                if (map[WL_LEFT + x] != x) { centreUnmoved = false; break; }
+            }
+        }
+        if (centreUnmoved) {
+            memcpy(dstRow + WL_LEFT, srcRow, WL_DS_WIDTH * sizeof(*srcRow));
+            for (unsigned x = 0; x < WL_LEFT; ++x) {
+                dstRow[x] = srcRow[map[x]];
+                dstRow[WL_LEFT + WL_DS_WIDTH + x] = srcRow[map[WL_LEFT + WL_DS_WIDTH + x]];
+            }
+        } else {
+            for (unsigned x = 0; x < WL_WIDE_WIDTH; ++x) dstRow[x] = srcRow[map[x]];
+        }
     }
 }
 
