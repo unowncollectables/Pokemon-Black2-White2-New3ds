@@ -88,3 +88,22 @@ Full clean build (`PBW2_LINK_GAME=1 bash scripts/n3ds_build.sh -j2 b2`)
 green; reloc check OK. `.3dsx` 10,033,660 B vs Build 20's 9,214,136 B
 (+819,524 B — the real stack). White 2 objects compile in the same
 pass (game 1218/1218 both); the w2 link was not run in this stage.
+
+## Build 22 correction (Nov 28, 2026) — the boot hang
+
+Stage 1 as shipped in Build 21 did **not** boot on hardware: the
+boot-time `GFL_NetBoot` prepare starts the DWC library, whose settings
+check (`DWC_BM_Init` → `NCFG_CheckConfig` → `DWCi_BACKUPlInit`) reads
+the DS NVRAM through the SDK's synchronous NVRAM calls. Those wait on
+an ARM7 PXI answer the host layer never delivers, so the game thread
+blocked forever inside `GameInit` and the display never powered on.
+Build 22 fixes the platform layer, not the library: (1)
+`n3ds/nitro/nvram_host.c` provides a fail-fast DS-NVRAM bottom
+(sync read/write/verify return `NVRAM_RESULT_FATAL_ERROR` at once;
+the closure takes the shell definitions, as with `RTC_Init`, and the
+SDK's blocking `nvram.o` leaves the link), and (2) `GFL_NetBoot`
+defers the DWC library start on this platform — with unreadable
+settings the start would otherwise end in the modal WFC user-info
+warning at boot. The session prepare in `GFL_NetInit` still starts
+the library and remains Stage 2 debt, as does a real (fabricated)
+settings bottom.

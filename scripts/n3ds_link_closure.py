@@ -109,6 +109,11 @@ EXCLUDE_LIB_NITRO_FILES = {
     "lib/nitro/src/fx/fx_mtx43.c",
     "lib/nitro/src/fx/fx_mtx44.c",
     "lib/nitro/src/spi/pm.c",
+    # Build 22: the host provides the DS NVRAM bottom (nvram_host.c).
+    # The SDK's synchronous calls wait on an ARM7 PXI answer this
+    # platform never delivers, so the real object must stay out of
+    # the link entirely.
+    "lib/nitro/src/nvram/nvram.c",
 }
 
 EXCLUDE_LIB_NITRO_PREFIXES = (

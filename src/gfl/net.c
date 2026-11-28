@@ -12,6 +12,10 @@
 #include "gfl/ui.h"
 #include "gfl/wm_icon.h"
 
+#ifdef PBW2_N3DS
+#include "log.h"
+#endif
+
 // The infrared packets' size limit
 #define GFL_NET_IRC_SEND_MAX 0x80
 
@@ -32,7 +36,21 @@ void GFL_NetBoot(int libraryHeapId, int unused, HeapID parentHeapId, HeapID heap
     const GFLNetDevTable *pDevTable = NetDefine_LoadDevice(GFL_NET_TYPE_WIFI);
 
     if (pDevTable != NULL) {
+#ifdef PBW2_N3DS
+        /* Build 22 hotfix: do not start the DWC library at boot on
+         * this platform. There is no DS NVRAM bottom yet, so the
+         * library start's settings check cannot succeed — and with
+         * unreadable settings it would end in the modal WFC
+         * user-info warning on the boot path. The device table's
+         * load/unload (the overlay swap) and the child heap below
+         * are unchanged, which restores Build 20's boot semantics;
+         * the library start stays with the session prepare
+         * (GFL_NetInit) until Wi-Fi Stage 2 gives DWC a real
+         * settings bottom. */
+        Log_Line("net", "GFL_NetBoot: DWC library start deferred on this platform");
+#else
         pDevTable->prepare(libraryHeapId, unused);
+#endif
     }
     NetDefine_UnloadDevice(GFL_NET_TYPE_WIFI);
     if (parentHeapId != heapId) {
