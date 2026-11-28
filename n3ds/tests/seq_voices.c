@@ -143,6 +143,8 @@ static const char *check_tied_sample(void) {
 static const char *check_synth_release(void) {
     SeqNote sample = {.sustain = 127, .release = 0};
     if (seq_note_envelope(&sample, 1.0f) != 1.0f) return "sample stays audible until its sequencer gate";
+    if (seq_synth_envelope(2.0f, 0.5f, 0.0f, 0.0f, 0.25f, 1.0f) != 0.0f)
+        return "late envelope poll stays silent past the release tail";
     sample.releasing = TRUE;
     sample.gateSeconds = 1.0f;
     if (seq_note_envelope(&sample, 1.0f) != 0.0f) return "zero release at note-off";

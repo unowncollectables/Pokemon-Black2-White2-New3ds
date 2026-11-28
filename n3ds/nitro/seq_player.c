@@ -666,7 +666,9 @@ static float seq_synth_envelope(float time, float noteSeconds, float attack, flo
     if (heldTime < attack) gain = heldTime / attack;
     else if (heldTime < attack + decay) gain = 1.0f - (1.0f - sustain) * (heldTime - attack) / decay;
     if (noteSeconds < 0 || time < noteSeconds) return gain;
-    return release > 0.0f ? gain * (1.0f - (time - noteSeconds) / release) : 0.0f;
+    float elapsed = time - noteSeconds;
+    if (elapsed >= release) return 0.0f;
+    return gain * (1.0f - elapsed / release);
 }
 
 /* Live envelope gain for a sampled note at `time` seconds after
