@@ -32,6 +32,15 @@
  * back up, mirrored front right, front left, 1 px bob as frame 2,
  * shiny palette from battle data. No extracted asset is ever
  * committed or shipped; the strip exists only in port RAM.
+ * Between the native tier and the floor sits the credited fan tier
+ * (design SS0.3): if the user supplied the fan overworld sprite pack
+ * to the builder, followers_fan.bin in the SD game folder holds
+ * build-time-converted strips for the 103 floor species (allowlisted
+ * fan art only, credited in FOLLOWER_CREDITS.txt). The floor branch
+ * consults it first; the runtime conversion is the fallback for
+ * species/forms the pack does not cover, and for every build made
+ * without the pack it behaves exactly as it did before the fan tier
+ * existed.
  * Native-tier sprites resolve through the ROM's TPoke and actor
  * archives. Their field palettes lack a shiny variant.
  */
@@ -475,6 +484,58 @@ done:
     return ok;
 }
 
+/* ----------------- credited fan tier (build-time pack) ----------------- */
+/* followers_fan.bin (written by the builder's fan_sprites.py) holds one
+ * directory entry per (species, form): u16 species, u8 form, u8 reserved,
+ * u32 normal record offset, u32 shiny record offset. A record is a u8
+ * frame size (32 or 64) followed by a floor-format strip -- 8 frames of
+ * 4bpp indices in s_stripIndices' own layout -- and its 16-colour RGB555
+ * palette. The pack carries a separate strip per shininess (its shiny
+ * art is not a palette swap), so the record for the lead's own shininess
+ * is loaded and its palette registered in both palette slots. Sex is not
+ * keyed: the pack has one gender's art for the three gender-variant
+ * species. Any failure -- no file, bad header, species/form absent --
+ * returns 0 and the runtime floor conversion runs, unchanged. */
+#define FOL_FAN_PATH FOL_SD_DIR "/followers_fan.bin"
+
+static int PbW2_FollowerLoadFan(u16 species, u8 form, int shiny) {
+    FILE *file = fopen(FOL_FAN_PATH, "rb");
+    if (!file) return 0;
+    int ok = 0;
+    u8 header[8];
+    if (fread(header, 1, sizeof header, file) != sizeof header || memcmp(header, "PBFN", 4) != 0) goto done;
+    {
+        unsigned version = header[4] | ((unsigned)header[5] << 8);
+        unsigned count = header[6] | ((unsigned)header[7] << 8);
+        if (version != 1 || count == 0 || count > 256) goto done;
+        for (unsigned i = 0; i < count; ++i) {
+            u8 dir[12];
+            u32 offset;
+            u8 frameSizeByte;
+            u16 palette[16];
+            unsigned bytes;
+            if (fseek(file, 8 + (long)i * 12, SEEK_SET) != 0 ||
+                fread(dir, 1, sizeof dir, file) != sizeof dir) goto done;
+            if ((dir[0] | ((unsigned)dir[1] << 8)) != species || dir[2] != form) continue;
+            memcpy(&offset, dir + (shiny ? 8 : 4), 4);
+            if (fseek(file, (long)offset, SEEK_SET) != 0) goto done;
+            if (fread(&frameSizeByte, 1, 1, file) != 1) goto done;
+            if (frameSizeByte != 32 && frameSizeByte != 64) goto done;
+            bytes = 4u * frameSizeByte * frameSizeByte;
+            if (fread(s_stripIndices, 1, bytes, file) != bytes ||
+                fread(palette, 2, 16, file) != 16) goto done;
+            memcpy(s_stripPalNormal, palette, sizeof palette);
+            memcpy(s_stripPalShiny, palette, sizeof palette);
+            s_frameSize = frameSizeByte;
+            ok = 1;
+            break;
+        }
+    }
+done:
+    fclose(file);
+    return ok;
+}
+
 static u16 little16(const u8 *bytes) {
     return bytes[0] | ((u16)bytes[1] << 8);
 }
@@ -620,8 +681,14 @@ static int follower_resolve_sprite(const PbW2FollowerFeed *feed) {
     enum PbW2FollowerTier tier = PbW2_FollowerCoverage(lead->species, lead->form, lead->sex);
     int ok = 0;
     if (tier == TIER_FLOOR) {
-        s_frameSize = 32;
-        ok = PbW2_FollowerLoadFloor(lead->species, lead->form, lead->sex);
+        ok = PbW2_FollowerLoadFan(lead->species, lead->form, lead->shiny != 0);
+        if (ok) {
+            Log_Line("FOL", "species %u form %u shiny %d: credited fan-tier strip (followers_fan.bin)",
+                     lead->species, lead->form, lead->shiny != 0);
+        } else {
+            s_frameSize = 32;
+            ok = PbW2_FollowerLoadFloor(lead->species, lead->form, lead->sex);
+        }
     } else if (tier == TIER_NATIVE_TPOKE) {
         ok = PbW2_FollowerLoadNative(lead->species, lead->form, lead->sex);
     }
