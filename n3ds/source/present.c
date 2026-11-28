@@ -16,6 +16,7 @@ void Pbw2_GspVblank(void) {
 #include "g3_raster.h"
 #include "game_text.h"
 #include "vram_host.h"
+#include "workers.h"
 #endif
 
 #include <3ds.h>
@@ -97,6 +98,101 @@ static uint64_t top_frame_hash(const u16 *pic, const u32 *ink) {
 }
 #endif
 
+#if defined(PBW2_LINK_GAME)
+/* Compose worker (Build 19, SoulSilver's threaded present): the sub
+ * engine's compose — and, in stereo, the right eye's — runs on a
+ * core-2 worker while the present thread composes the main engine /
+ * draws, instead of every compose running serially on core 0. Core 2
+ * already hosts the audio (prio 0x20) and IO (0x28) workers; the
+ * compose worker runs at 0x30 so both preempt it and audio is never
+ * starved by compose work.
+ *
+ * Synchronization: one job slot, submitted and joined by the present
+ * thread only. A job is always joined inside the present that
+ * submitted it, so the slot is never contended and the worker is
+ * idle whenever the main loop is outside GxShim_Present (in
+ * particular at shutdown, where Workers_Shutdown only has to see the
+ * run flag fall — the idle wait below is timed for exactly that).
+ * Job arguments are plain pointers to the present's own buffers,
+ * written before the kick event is signaled and read by the worker
+ * only after it observes the signal; the done event orders the
+ * worker's writes back. The composed buffers are disjoint per engine
+ * (compose scratch is per-engine since this build), and the two
+ * joins are the only points where the threads exchange results.
+ *
+ * Fallback: if the worker cannot be created, s_composeWorker stays
+ * NULL and every job runs inline on the present thread — the
+ * pre-Build-19 serial path, unchanged. */
+typedef enum {
+    CJ_NONE,
+    CJ_SUB, /* PbW2_ComposeSubScreen on the job buffers */
+    CJ_FULL /* PbW2_ComposeScreensWithText on the job buffers */
+} ComposeJobKind;
+
+static Worker *s_composeWorker;
+static bool s_composeTried;
+static Handle s_jobKick, s_jobDone;
+static volatile ComposeJobKind s_jobKind = CJ_NONE;
+static u16 *s_jobTop, *s_jobBottom;
+static u32 *s_jobTopInk, *s_jobBottomInk;
+
+static void Compose_WorkerMain(void *arg) {
+    Worker *worker = arg;
+    while (Worker_Run(worker)) {
+        /* Timed wait: Workers_Shutdown clears the run flag and joins
+         * without signaling, so the idle wait must expire on its own.
+         * 50 ms of shutdown latency; kicks wake it immediately. */
+        if (R_FAILED(svcWaitSynchronization(s_jobKick, 50000000LL))) continue;
+        ComposeJobKind kind = s_jobKind;
+        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+        if (kind == CJ_SUB) {
+            PbW2_ComposeSubScreen(s_jobTop, s_jobBottom, s_jobTopInk, s_jobBottomInk);
+        } else if (kind == CJ_FULL) {
+            PbW2_ComposeScreensWithText(s_jobTop, s_jobBottom, s_jobTopInk, s_jobBottomInk);
+        }
+        s_jobKind = CJ_NONE;
+        __atomic_thread_fence(__ATOMIC_RELEASE);
+        svcSignalEvent(s_jobDone);
+    }
+}
+
+static bool ComposeWorker_Ensure(void) {
+    if (s_composeWorker) return true;
+    if (s_composeTried) return false;
+    s_composeTried = true;
+    if (R_FAILED(svcCreateEvent(&s_jobKick, RESET_ONESHOT)) ||
+        R_FAILED(svcCreateEvent(&s_jobDone, RESET_ONESHOT))) {
+        Log_Line("GX", "compose worker: event create failed, serial compose");
+        return false;
+    }
+    if (!Workers_Start("compose", Compose_WorkerMain, 0x30, 2, &s_composeWorker)) {
+        Log_Line("GX", "compose worker: start failed, serial compose");
+        return false;
+    }
+    return true;
+}
+
+/* Submits a job to the compose worker. Returns false (job NOT
+ * submitted; caller runs it inline) when no worker is available. */
+static bool ComposeJob_Kick(ComposeJobKind kind, u16 *top, u16 *bottom, u32 *topInk, u32 *bottomInk) {
+    if (!ComposeWorker_Ensure()) return false;
+    s_jobTop = top;
+    s_jobBottom = bottom;
+    s_jobTopInk = topInk;
+    s_jobBottomInk = bottomInk;
+    s_jobKind = kind;
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    svcClearEvent(s_jobDone);
+    svcSignalEvent(s_jobKick);
+    return true;
+}
+
+static void ComposeJob_Join(void) {
+    svcWaitSynchronization(s_jobDone, U64_MAX);
+    __atomic_thread_fence(__ATOMIC_ACQUIRE);
+}
+#endif
+
 void GxShim_Present(uint32_t flags) {
 #if defined(PBW2_LINK_GAME)
     static u16 s_top[256 * 192];
@@ -132,7 +228,22 @@ void GxShim_Present(uint32_t flags) {
             }
             int eyeShift = s_stereoOn ? (int)(6.0f * slider + 0.5f) : 0;
             if (s_stereoOn) PbW2_ComposeSetEyeShift(-eyeShift);
-            PbW2_ComposeScreensWithText(top, bottom, topInk, bottomInk);
+            /* Compose in phases (Build 19): Begin samples the frame's
+             * LCD routing; the sub engine then composes on the worker
+             * while the main engine composes here, and FinishWide
+             * applies the wide layouts after the join — the same
+             * order the monolithic compose ran, with the two engine
+             * composes overlapped. If no worker is available the sub
+             * engine composes inline after the main engine, as
+             * before. */
+            PbW2_ComposeBegin(topInk, bottomInk);
+            bool subKicked = false;
+            if (PbW2_ComposeMainUpper() ? bottom : top)
+                subKicked = ComposeJob_Kick(CJ_SUB, top, bottom, topInk, bottomInk);
+            PbW2_ComposeMainScreen(top, bottom, topInk, bottomInk);
+            if (subKicked) ComposeJob_Join();
+            else PbW2_ComposeSubScreen(top, bottom, topInk, bottomInk);
+            PbW2_ComposeFinishWide(top, bottom);
             if (!has_text_ink(topInk)) topInk = NULL;
             if (!has_text_ink(bottomInk)) bottomInk = NULL;
             if (top) {
@@ -170,8 +281,27 @@ void GxShim_Present(uint32_t flags) {
                     draw_scaled(GFX_TOP, wide, 320, options, topInk);
                 } else Present_DrawGameWithText(GFX_TOP, top, options, topInk);
             }
+            /* Stereo right eye: kicked to the compose worker BEFORE
+             * the bottom draw so the compose overlaps it, and joined
+             * after. The wide-bottom pointer is fetched first: the
+             * worker's compose begins a new frame (resetting the
+             * have-flags), and the bottom draw must use this frame's
+             * result. The right compose writes only the right-eye
+             * buffers and its own wide-top output, neither of which
+             * the bottom draw reads; the top draw above has already
+             * consumed this frame's sides/native/wide-top outputs. */
+            const u16 *wideBottom = PbW2_WideBottom();
+            u32 *rightInk = NULL;
+            bool rightKicked = false;
+            if (s_stereoOn && top) {
+                rightInk = sharpText && (options & (DISPLAY_TOP_FIT | DISPLAY_LCD_FIT | DISPLAY_WIDE_FIELD))
+                               ? s_topInkRight : NULL;
+                PbW2_ComposeSetEyeShift(eyeShift);
+                rightKicked = ComposeJob_Kick(CJ_FULL, s_topRight, NULL, rightInk, NULL);
+                if (!rightKicked)
+                    PbW2_ComposeScreensWithText(s_topRight, NULL, rightInk, NULL);
+            }
             {
-                const u16 *wideBottom = PbW2_WideBottom();
                 if (bottom && wideBottom && (options & DISPLAY_WIDE_FIELD)) {
                     Present_DrawBottomCached(NULL, 0, NULL);
                     Present_BlitRGB565(GFX_BOTTOM, wideBottom, 320, GAME_HEIGHT);
@@ -180,14 +310,10 @@ void GxShim_Present(uint32_t flags) {
                 }
             }
             if (s_stereoOn && top) {
-                /* Right eye: compose the top screen again with the
-                 * opposite disparity and draw it to the right
-                 * framebuffer. The bottom screen has no second eye
-                 * and was already drawn from the left pass. */
-                u32 *rightInk = sharpText && (options & (DISPLAY_TOP_FIT | DISPLAY_LCD_FIT | DISPLAY_WIDE_FIELD))
-                                    ? s_topInkRight : NULL;
-                PbW2_ComposeSetEyeShift(eyeShift);
-                PbW2_ComposeScreensWithText(s_topRight, NULL, rightInk, NULL);
+                /* The bottom screen has no second eye and was already
+                 * drawn from the left pass; draw the right eye the
+                 * worker composed (or the inline compose above). */
+                if (rightKicked) ComposeJob_Join();
                 if (!has_text_ink(rightInk)) rightInk = NULL;
                 s_drawSide = GFX_RIGHT;
                 Present_DrawGameWithText(GFX_TOP, s_topRight, options, rightInk);

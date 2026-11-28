@@ -561,7 +561,9 @@ static void compose_bitmap_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bg
  * GX_BG_EXTMODE_256x16PLTT is 0) and never applies the transform, so
  * an extended BG — the battle standby screen's ball picture on sub
  * BG3 — came out as smeared garbage across the whole screen. */
-static u16 s_affinePltt[4096];
+/* Per-engine converted extended palette (see build_window_mask:
+ * no scratch is shared between the two engines since Build 19). */
+static u16 s_affinePltt[2][4096];
 
 static void compose_affine_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmode, u16 *out, BgBlend *blend) {
     u16 cnt = reg_u16(regs, 8 + bg * 2);
@@ -589,7 +591,7 @@ static void compose_affine_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bg
     u16 stdColors[256];
     if (useExt) {
         extPltt = (const u16 *)(void *)vram_ptr((is_sub ? HW_LCDC_VRAM_H : HW_LCDC_VRAM_E) + (u32)bg * 0x2000u);
-        for (unsigned i = 0; i < 4096; i++) s_affinePltt[i] = rgb555_to_565(extPltt[i]);
+        for (unsigned i = 0; i < 4096; i++) s_affinePltt[is_sub][i] = rgb555_to_565(extPltt[i]);
     } else {
         const u16 *pltt = engine_bg_pltt(is_sub);
         for (unsigned i = 0; i < 256; i++) stdColors[i] = rgb555_to_565(pltt[i]);
@@ -620,7 +622,7 @@ static void compose_affine_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bg
             unsigned index = chars[tile * 64 + py * 8 + px];
             if (!index) continue;
             put_bg_pixel(out, blend, y * 256 + x, plane,
-                         useExt ? s_affinePltt[palNum * 256 + index] : stdColors[index]);
+                         useExt ? s_affinePltt[is_sub][palNum * 256 + index] : stdColors[index]);
         }
     }
 }
@@ -826,30 +828,36 @@ static void apply_window_rect(u8 *window, u16 xBounds, u16 yBounds, u8 mask) {
     }
 }
 
-static u8 *build_window_mask(const u8 *regs, u32 dc, const ObjScene *objects) {
-    static u8 window[256 * 192];
+static u8 *build_window_mask(const u8 *regs, u32 dc, int is_sub, const ObjScene *objects) {
+    /* One mask buffer + rectangle cache per engine: since Build 19
+     * the two engines can compose concurrently (the sub engine runs
+     * on the compose worker), so no compose scratch may be shared
+     * between them. Indexed by is_sub everywhere below. */
+    static u8 window[2][256 * 192];
+    static u8 lastRegs[2][12];
+    static unsigned lastEnabled[2];
+    u8 *mask = window[is_sub];
     unsigned enabled = (dc >> 13) & 7;
     if (!enabled) return NULL;
     /* Rectangle masks depend only on WIN0H through WINOUT and the enable bits.
      * An OBJ window also depends on OAM and character data. */
-    static u8 lastRegs[12];
-    static unsigned lastEnabled;
     if (!(enabled & GX_WNDMASK_OW)) {
-        if (lastEnabled == enabled && memcmp(lastRegs, regs + 0x40, sizeof lastRegs) == 0)
-            return window;
-        memcpy(lastRegs, regs + 0x40, sizeof lastRegs);
-        lastEnabled = enabled;
+        if (lastEnabled[is_sub] == enabled &&
+            memcmp(lastRegs[is_sub], regs + 0x40, sizeof lastRegs[is_sub]) == 0)
+            return mask;
+        memcpy(lastRegs[is_sub], regs + 0x40, sizeof lastRegs[is_sub]);
+        lastEnabled[is_sub] = enabled;
     } else {
-        lastEnabled = 0;
+        lastEnabled[is_sub] = 0;
     }
     u16 outside = reg_u16(regs, 0x4a);
-    memset(window, outside & 0x3f, sizeof window);
-    if (enabled & GX_WNDMASK_OW) draw_obj_layer(objects, NULL, window, (outside >> 8) & 0x3f, OBJ_WINDOW_LIST, NULL);
+    memset(mask, outside & 0x3f, sizeof window[is_sub]);
+    if (enabled & GX_WNDMASK_OW) draw_obj_layer(objects, NULL, mask, (outside >> 8) & 0x3f, OBJ_WINDOW_LIST, NULL);
     /* Window 0 takes precedence over window 1, then over the OBJ window. */
     u16 inside = reg_u16(regs, 0x48);
-    if (enabled & GX_WNDMASK_W1) apply_window_rect(window, reg_u16(regs, 0x42), reg_u16(regs, 0x46), (inside >> 8) & 0x3f);
-    if (enabled & GX_WNDMASK_W0) apply_window_rect(window, reg_u16(regs, 0x40), reg_u16(regs, 0x44), inside & 0x3f);
-    return window;
+    if (enabled & GX_WNDMASK_W1) apply_window_rect(mask, reg_u16(regs, 0x42), reg_u16(regs, 0x46), (inside >> 8) & 0x3f);
+    if (enabled & GX_WNDMASK_W0) apply_window_rect(mask, reg_u16(regs, 0x40), reg_u16(regs, 0x44), inside & 0x3f);
+    return mask;
 }
 
 static void apply_master_bright(u16 *fb, unsigned pixels, u16 reg) {
@@ -1032,7 +1040,12 @@ const u16 *PbW2_TopSides(void) {
 }
 
 static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
-    static BgBlend bg_blend;
+    /* One blend state per engine: the main and sub engines can
+     * compose concurrently since Build 19 (sub on the compose
+     * worker), so the blend state is per-engine like the window
+     * mask and the affine palette above. */
+    static BgBlend s_blends[2];
+    BgBlend *bg_blend = &s_blends[is_sub];
     static u16 underGeometry[256 * 192];
     const u16 *nativeFrame = NULL;
     BgBlend *blend = NULL;
@@ -1053,7 +1066,7 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
     }
     ObjScene objects;
     prepare_obj_scene(&objects, dc, is_sub);
-    u8 *window = build_window_mask(regs, dc, &objects);
+    u8 *window = build_window_mask(regs, dc, is_sub, &objects);
     u16 bldcnt = reg_u16(regs, 0x50);
     unsigned effect = bldcnt & REG_G2_BLDCNT_EFFECT_MASK;
     unsigned factor = reg_u16(regs, 0x54) & 31;
@@ -1069,24 +1082,24 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
     bool bg0Brightness = (effect == REG_G2_BLDCNT_EFFECT_INCREASE || effect == REG_G2_BLDCNT_EFFECT_DECREASE)
                          && (bldcnt & 0x0001) && factor;
     bool bg0Alpha = effect == REG_G2_BLDCNT_EFFECT_ALPHA && ((bldcnt & 0x0001) || (bldcnt & 0x0100));
-    bg_blend.window = window;
-    bg_blend.track = layerAlpha || layerBrightness;
-    bg_blend.first = 0;
-    bg_blend.ink = ((dc >> REG_GX_DISPCNT_MODE_SHIFT) & 3) == 1 ? ink : NULL;
+    bg_blend->window = window;
+    bg_blend->track = layerAlpha || layerBrightness;
+    bg_blend->first = 0;
+    bg_blend->ink = ((dc >> REG_GX_DISPCNT_MODE_SHIFT) & 3) == 1 ? ink : NULL;
     /* Master brightness no longer vetoes native text: compose applies
      * it to the finished frame (and to the native top and sides), and
      * the native stamp samples its colours from that brightened
      * frame, so glyphs fade with everything else. The old veto made
      * sharp text downgrade to the DS-resolution rendering for the
      * whole length of every fade. */
-    bg_blend.nativeText = bg_blend.ink && !layerAlpha && !layerBrightness &&
+    bg_blend->nativeText = bg_blend->ink && !layerAlpha && !layerBrightness &&
                           (is_sub || !(reg_GX_DISPCAPCNT & REG_GX_DISPCAPCNT_E_MASK));
-    bg_blend.track |= bg_blend.nativeText;
-    if (window || bg_blend.track || bg_blend.ink) blend = &bg_blend;
-    if (bg_blend.track) memset(bg_blend.planes, 1u << 5, sizeof(bg_blend.planes));
+    bg_blend->track |= bg_blend->nativeText;
+    if (window || bg_blend->track || bg_blend->ink) blend = bg_blend;
+    if (bg_blend->track) memset(bg_blend->planes, 1u << 5, sizeof(bg_blend->planes));
     if (layerAlpha) {
         u16 alpha = reg_u16(regs, 0x52);
-        blend = &bg_blend;
+        blend = bg_blend;
         blend->first = bldcnt & 0x3f;
         blend->second = (bldcnt >> 8) & 0x3f;
         blend->eva = alpha & 31;
@@ -1114,15 +1127,15 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
                               !bg0Brightness && !bg0Alpha &&
                               PbW2_G3PublishedNative();
                 if (extend) memcpy(underGeometry, out, sizeof underGeometry);
-                s_haveSides = PbW2_G3RasterComposite(out, window, bg_blend.track ? bg_blend.planes : NULL,
-                                                     layerAlpha ? bg_blend.colors : NULL, extend ? s_sides : NULL,
-                                                     backdrop, extend ? &nativeFrame : NULL, bg_blend.ink,
+                s_haveSides = PbW2_G3RasterComposite(out, window, bg_blend->track ? bg_blend->planes : NULL,
+                                                     layerAlpha ? bg_blend->colors : NULL, extend ? s_sides : NULL,
+                                                     backdrop, extend ? &nativeFrame : NULL, bg_blend->ink,
                                                      s_mainEyeShift);
                 if (nativeFrame) {
                     /* Subsequent layers sit in front of the 3D layer. */
-                    bg_blend.track = true;
-                    memset(bg_blend.planes, 0, sizeof bg_blend.planes);
-                    blend = &bg_blend;
+                    bg_blend->track = true;
+                    memset(bg_blend->planes, 0, sizeof bg_blend->planes);
+                    blend = bg_blend;
                 }
             } else {
                 draw_bg_layer(regs, dc, is_sub, bg, bgmode, out, blend);
@@ -1147,7 +1160,7 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
             for (unsigned x = 40; x < 360; ++x) {
                 unsigned i = dsRow + (8 * (x - 40) + 4) / 10;
                 u16 pixel = geometry[x];
-                if (bg_blend.planes[i]) row[x] = out[i];
+                if (bg_blend->planes[i]) row[x] = out[i];
                 else if ((pixel & 0x8000) && (!window || (window[i] & GX_WND_PLANEMASK_BG0)))
                     row[x] = rgb555_to_565(pixel);
                 else row[x] = underGeometry[i];
@@ -1157,15 +1170,15 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
         s_haveNativeTop = true;
         apply_master_bright(s_nativeTop, PBW2_NATIVE_TOP_WIDTH * PBW2_NATIVE_TOP_HEIGHT, reg_u16(regs, 0x6cu));
     }
-    if (bg_blend.ink) {
+    if (bg_blend->ink) {
         for (unsigned i = 0; i < 256 * 192; ++i) {
             u32 info = ink[i];
             if (!(info & PBW2_TEXT_NATIVE)) continue;
             int x = PbW2_TextNativeCoordinate(i % 256, (info >> 16) & 31);
             int y = PbW2_TextNativeCoordinate(i / 256, (info >> 21) & 31);
-            if (!bg_blend.nativeText || !bg_blend.planes[i] || (unsigned)x >= 320 || (unsigned)y >= 240 ||
+            if (!bg_blend->nativeText || !bg_blend->planes[i] || (unsigned)x >= 320 || (unsigned)y >= 240 ||
                 (!(info & PBW2_TEXT_CLEAR_UNDER) &&
-                 bg_blend.planes[i] != bg_blend.planes[PbW2_TextSourceCoordinate(y) * 256 + PbW2_TextSourceCoordinate(x)]))
+                 bg_blend->planes[i] != bg_blend->planes[PbW2_TextSourceCoordinate(y) * 256 + PbW2_TextSourceCoordinate(x)]))
                 ink[i] = PBW2_TEXT_INK;
         }
     }
@@ -1414,23 +1427,35 @@ static void compose_main(const u8 *regs, u16 *out, u32 *ink) {
     }
 }
 
-void PbW2_ComposeScreensWithText(u16 *top_rgb565, u16 *bottom_rgb565, u32 *topInk, u32 *bottomInk) {
-    int main_upper = (*(const u16 *)(pbw2_io + 0x304) & 0x8000u) != 0;
-    u16 *main_fb;
-    u16 *sub_fb;
+/* Frame compose phases (Build 19): PbW2_ComposeScreensWithText is
+ * Begin -> Main -> Sub -> FinishWide, in exactly the order the
+ * monolithic version ran. Present drives the phases itself so the
+ * sub engine can compose on the compose worker while the main
+ * engine composes here; the phases share one cached main_upper,
+ * sampled in Begin, so every phase of a frame routes the engines
+ * the same way even if the game flips the LCD swap mid-present.
+ * Contract: Begin runs first, on the present thread; Main and Sub
+ * may then run concurrently (their scratch is per-engine); FinishWide
+ * runs after both, on the present thread. */
+static volatile int s_frameMainUpper;
 
+void PbW2_ComposeBegin(u32 *topInk, u32 *bottomInk) {
+    s_frameMainUpper = (*(const u16 *)(pbw2_io + 0x304) & 0x8000u) != 0;
     s_haveSides = s_haveNativeTop = false;
     s_haveWideTop = s_haveWideBottom = false;
     if (topInk) memset(topInk, 0, 256 * 192 * sizeof(*topInk));
     if (bottomInk) memset(bottomInk, 0, 256 * 192 * sizeof(*bottomInk));
     s_mode5_diag.compose_frames++;
-    if (main_upper) {
-        main_fb = top_rgb565;
-        sub_fb = bottom_rgb565;
-    } else {
-        main_fb = bottom_rgb565;
-        sub_fb = top_rgb565;
-    }
+}
+
+int PbW2_ComposeMainUpper(void) {
+    return s_frameMainUpper;
+}
+
+void PbW2_ComposeMainScreen(u16 *top_rgb565, u16 *bottom_rgb565, u32 *topInk, u32 *bottomInk) {
+    int main_upper = s_frameMainUpper;
+    u16 *main_fb = main_upper ? top_rgb565 : bottom_rgb565;
+
     if (main_fb) {
         /* The eye shift applies only when the main engine lands on
          * the top screen; a swapped or capture-only compose is flat. */
@@ -1442,11 +1467,29 @@ void PbW2_ComposeScreensWithText(u16 *top_rgb565, u16 *bottom_rgb565, u32 *topIn
         static u16 captureMain[256 * 192];
         compose_engine(pbw2_io + 0, 0, captureMain, NULL);
     }
+}
+
+void PbW2_ComposeSubScreen(u16 *top_rgb565, u16 *bottom_rgb565, u32 *topInk, u32 *bottomInk) {
+    int main_upper = s_frameMainUpper;
+    u16 *sub_fb = main_upper ? bottom_rgb565 : top_rgb565;
+
     if (sub_fb) {
         if (main_upper) compose_sub(pbw2_io + 0x1000, sub_fb, bottomInk);
         else compose_engine(pbw2_io + 0x1000, 1, sub_fb, topInk);
     }
-    apply_wide_layouts(main_upper, main_fb, sub_fb);
+}
+
+void PbW2_ComposeFinishWide(u16 *top_rgb565, u16 *bottom_rgb565) {
+    int main_upper = s_frameMainUpper;
+    apply_wide_layouts(main_upper, main_upper ? top_rgb565 : bottom_rgb565,
+                       main_upper ? bottom_rgb565 : top_rgb565);
+}
+
+void PbW2_ComposeScreensWithText(u16 *top_rgb565, u16 *bottom_rgb565, u32 *topInk, u32 *bottomInk) {
+    PbW2_ComposeBegin(topInk, bottomInk);
+    PbW2_ComposeMainScreen(top_rgb565, bottom_rgb565, topInk, bottomInk);
+    PbW2_ComposeSubScreen(top_rgb565, bottom_rgb565, topInk, bottomInk);
+    PbW2_ComposeFinishWide(top_rgb565, bottom_rgb565);
 }
 
 int PbW2_ComposeScreens(u16 *top_rgb565, u16 *bottom_rgb565) {
