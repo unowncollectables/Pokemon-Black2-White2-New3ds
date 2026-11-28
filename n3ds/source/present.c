@@ -194,6 +194,52 @@ static void ComposeJob_Join(void) {
 }
 #endif
 
+#if defined(PBW2_LINK_GAME)
+/* Draws the top screen through the configured presentation chain —
+ * the first variant the frame offers, in the flat path's order: the
+ * wide 2D layout, the GPU native frame, the wide sides assembly, the
+ * plain composed centre. Used for the flat draw and for each stereo
+ * eye: an eye pass composes its own variants (its FinishWide and its
+ * sides/native outputs replace the previous pass's), so the caller
+ * draws each eye while that eye's pass is the one the accessors
+ * describe — the left eye before the right compose is kicked, the
+ * right eye after it joins. Stereo adds per-eye separation and
+ * nothing else: the wide layout and the wide field stay exactly as
+ * configured (Build 22's stereo draw bypassed every variant and
+ * showed the bare centre — Run 15: engaging the slider "kills wide
+ * and the graphics setting").
+ *
+ * The one variant stereo may not use is the native frame: it is a
+ * single-viewpoint GPU render (the compositor's native handoff
+ * serves the live frame only, and only once per publish), so neither
+ * eye can be given a native frame of its own viewpoint; both eyes
+ * take the wide sides assembly of the GPU-published frame instead.
+ * The GPU renderer itself is untouched by stereo — every frame is
+ * still GPU-rendered, with its texture cache and edge settings; only
+ * the native-resolution upscale is flat-only. */
+static void draw_top_eye(const u16 *centre, uint32_t options, const u32 *ink, bool stereo) {
+    const u16 *sides = PbW2_TopSides();
+    const u16 *native = stereo ? NULL : PbW2_NativeTop();
+    const u16 *wideTop = PbW2_WideTop();
+    if (wideTop && (options & DISPLAY_WIDE_FIELD)) {
+        draw_scaled(GFX_TOP, wideTop, 320, options, ink);
+    } else if (native && (options & DISPLAY_WIDE_FIELD)) {
+        Present_BlitRGB565(GFX_TOP, native, PBW2_NATIVE_TOP_WIDTH, PBW2_NATIVE_TOP_HEIGHT);
+        if (ink) draw_native_text(GFX_TOP, centre, GAME_WIDTH, ink, true);
+    } else if (sides && (options & DISPLAY_WIDE_FIELD)) {
+        static u16 wide[320 * GAME_HEIGHT];
+        for (unsigned y = 0; y < GAME_HEIGHT; ++y) {
+            memcpy(wide + y * 320, sides + y * 64, 32 * sizeof(u16));
+            memcpy(wide + y * 320 + 32, centre + y * GAME_WIDTH, GAME_WIDTH * sizeof(u16));
+            memcpy(wide + y * 320 + 288, sides + y * 64 + 32, 32 * sizeof(u16));
+        }
+        draw_scaled(GFX_TOP, wide, 320, options, ink);
+    } else {
+        Present_DrawGameWithText(GFX_TOP, centre, options, ink);
+    }
+}
+#endif
+
 void GxShim_Present(uint32_t flags) {
 #if defined(PBW2_LINK_GAME)
     static u16 s_top[256 * 192];
@@ -264,30 +310,12 @@ void GxShim_Present(uint32_t flags) {
                 s_topHashValid = true;
             }
             if (top) {
-                const u16 *sides = PbW2_TopSides();
-                const u16 *native = PbW2_NativeTop();
-                const u16 *wideTop = PbW2_WideTop();
-                if (s_stereoOn) {
-                    /* The wide/native variants bake their own layout
-                     * into a single image; in stereo both eyes draw
-                     * the composed buffer so the disparity the
-                     * compositor produced stays consistent. */
-                    Present_DrawGameWithText(GFX_TOP, top, options, topInk);
-                } else if (wideTop && (options & DISPLAY_WIDE_FIELD)) {
-                    /* The Bag keeps its DS centre at column 32. */
-                    draw_scaled(GFX_TOP, wideTop, 320, options, topInk);
-                } else if (native && (options & DISPLAY_WIDE_FIELD)) {
-                    Present_BlitRGB565(GFX_TOP, native, PBW2_NATIVE_TOP_WIDTH, PBW2_NATIVE_TOP_HEIGHT);
-                    if (topInk) draw_native_text(GFX_TOP, top, GAME_WIDTH, topInk, true);
-                } else if (sides && (options & DISPLAY_WIDE_FIELD)) {
-                    static u16 wide[320 * GAME_HEIGHT];
-                    for (unsigned y = 0; y < GAME_HEIGHT; ++y) {
-                        memcpy(wide + y * 320, sides + y * 64, 32 * sizeof(u16));
-                        memcpy(wide + y * 320 + 32, top + y * GAME_WIDTH, GAME_WIDTH * sizeof(u16));
-                        memcpy(wide + y * 320 + 288, sides + y * 64 + 32, 32 * sizeof(u16));
-                    }
-                    draw_scaled(GFX_TOP, wide, 320, options, topInk);
-                } else Present_DrawGameWithText(GFX_TOP, top, options, topInk);
+                /* Through the configured presentation chain (wide
+                 * layout / native / wide sides / centre), for the
+                 * flat draw and the stereo left eye alike: this eye
+                 * pass's variants are the ones the accessors describe
+                 * until the right compose below replaces them. */
+                draw_top_eye(top, options, topInk, s_stereoOn);
             }
             /* Stereo right eye: kicked to the compose worker BEFORE
              * the bottom draw so the compose overlaps it, and joined
@@ -320,11 +348,13 @@ void GxShim_Present(uint32_t flags) {
             if (s_stereoOn && top) {
                 /* The bottom screen has no second eye and was already
                  * drawn from the left pass; draw the right eye the
-                 * worker composed (or the inline compose above). */
+                 * worker composed (or the inline compose above),
+                 * through the same presentation chain — the accessors
+                 * now describe the right pass's variants. */
                 if (rightKicked) ComposeJob_Join();
                 if (!has_text_ink(rightInk)) rightInk = NULL;
                 s_drawSide = GFX_RIGHT;
-                Present_DrawGameWithText(GFX_TOP, s_topRight, options, rightInk);
+                draw_top_eye(s_topRight, options, rightInk, true);
                 s_drawSide = GFX_LEFT;
             }
             if (s_stereoOn) PbW2_ComposeSetEyeShift(0);

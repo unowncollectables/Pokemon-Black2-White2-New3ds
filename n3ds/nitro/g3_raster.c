@@ -93,6 +93,13 @@ static u16 s_displayRight[MAX_PIXELS];
 static unsigned s_rightWidth = WIDTH;
 static unsigned s_rightGeneration;
 static bool s_rightValid;
+/* Stereo path instrumentation (Build 23): the last (mode, magnitude)
+ * PbW2_G3RasterCompositeStereo logged — 0 uniform reprojection,
+ * 1 depth-graded reprojection, 2 record/replay — so the log names
+ * the active stereo path once per change instead of once per frame.
+ * Reset when depth publish is switched off (the slider-down
+ * transition), so the next engagement logs its path again. */
+static int s_stereoLogMode = -1, s_stereoLogMag = -1;
 /* Bumps on every publish that replaces s_display (and on reset).
  * The compositor's main-engine frame cache keys on it: while the
  * generation is unchanged, the published 3D layer is unchanged. */
@@ -104,6 +111,7 @@ unsigned PbW2_G3PublishedGeneration(void) {
 
 void PbW2_G3RasterSetDepthPublish(bool enabled) {
     s_publishDepth = enabled;
+    if (!enabled) s_stereoLogMode = s_stereoLogMag = -1;
 }
 /* The game publishes a complete frame. Only the presentation thread reads it. */
 static unsigned char s_displayLock;
@@ -1666,6 +1674,26 @@ void PbW2_G3RasterCommand(u32 op, const u32 *p, const MtxFx44 *clip,
     emit_vertex(clip, texture);
 }
 
+/* The reprojection sampling offset for one source pixel, in source
+ * columns: out[x] samples src[x + off], so a feature appears at
+ * x - off. Sign convention, from the module's documented model (the
+ * 3D world behind the screen plane, 2D layers at screen depth):
+ * disparity — a feature's right-eye position minus its left-eye
+ * position — is positive behind the screen. The right eye
+ * (eyeShiftPx > 0) therefore needs off <= 0 at the far plane: far
+ * pixels take off = -eyeShiftPx, for a far disparity of
+ * +2*eyeShiftPx — the same sign and magnitude as the record/replay
+ * path's right-eye clip translation (+2*eyeShiftPx, g3_replay.c).
+ * Near pixels cross in front with the opposite sign, and the offset
+ * vanishes at the convergence depth 0.35. Builds 18-22 shipped this
+ * offset with the opposite sign, which put the far plane in front of
+ * the screen and near geometry behind it (Run 15: stereo "does not
+ * look proper"). */
+static int stereo_sample_offset(int eyeShiftPx, bool hasDepth, float depthNorm) {
+    if (!hasDepth) return -eyeShiftPx;
+    return -(int)lroundf(eyeShiftPx * (depthNorm - 0.35f) * (1.0f / 0.65f));
+}
+
 /* The composite body, with the display lock held by the caller.
  * src/srcWidth/srcHasDepth select the published image to sample:
  * s_display for the live frame, s_displayRight for the replayed
@@ -1686,7 +1714,31 @@ static bool composite_body(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawCo
         const u16 *row = src + y * srcWidth + (srcWidth - WIDTH) / 2;
         if (sides && srcWidth == WIDE_WIDTH) {
             for (int x = 0; x < 64; ++x) {
-                u16 p = row[x < 32 ? x - 32 : WIDTH + x - 32];
+                int cx = x < 32 ? x - 32 : WIDTH + x - 32;
+                u16 p = row[cx];
+                if (eyeShiftPx) {
+                    /* The margins are world content too: in an eye
+                     * pass they take the centre's per-eye offset
+                     * (same rule; graded by the margin pixel's own
+                     * depth), so the wide image present assembles
+                     * from sides + centre is one continuous sampling
+                     * of the source, not a shifted centre glued to
+                     * unshifted edges. Flat passes (eyeShiftPx == 0)
+                     * and the replay branch (shift 0: the margins are
+                     * the replayed frame's own) are untouched. */
+                    int off;
+                    if (srcHasDepth) {
+                        float dn = s_displayDepth[y * srcWidth + rowBase + cx] / s_displayDepthRef;
+                        if (dn < 0.0f) dn = 0.0f;
+                        else if (dn > 1.0f) dn = 1.0f;
+                        off = stereo_sample_offset(eyeShiftPx, true, dn);
+                    } else {
+                        off = stereo_sample_offset(eyeShiftPx, false, 0.0f);
+                    }
+                    int sx = cx + off;
+                    u16 shifted = (sx >= -rowBase && sx < (int)srcWidth - rowBase) ? row[sx] : 0;
+                    if (shifted & 0x8000) p = shifted;
+                }
                 unsigned edge = x < 32 ? 0 : WIDTH - 1;
                 bool visible = !window || (window[y * WIDTH + edge] & GX_WND_PLANEMASK_BG0);
                 sides[y * 64 + x] = visible && (p & 0x8000) ? ((p & 31) << 11) | ((p & 0x3e0) << 1) | ((p >> 10) & 31) : backdrop;
@@ -1696,19 +1748,23 @@ static bool composite_body(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawCo
             unsigned i = y * WIDTH + x;
             u16 pixel;
             if (eyeShiftPx) {
-                /* Stereo: sample the 3D layer at a per-eye offset.
-                 * With published depth the offset is graded (near
-                 * pixels cross in front of the screen plane, far
-                 * pixels recede, convergence at depth 0.35); without
-                 * it the whole layer recedes uniformly. An invalid
-                 * (transparent) shifted sample falls back to the
-                 * unshifted pixel, so silhouettes never tear open. */
-                int off = eyeShiftPx;
+                /* Stereo: sample the 3D layer at a per-eye offset
+                 * (stereo_sample_offset, above, for the sign
+                 * convention). With published depth the offset is
+                 * graded (near pixels cross in front of the screen
+                 * plane, far pixels recede, convergence at depth
+                 * 0.35); without it the whole layer recedes
+                 * uniformly. An invalid (transparent) shifted sample
+                 * falls back to the unshifted pixel, so silhouettes
+                 * never tear open. */
+                int off;
                 if (srcHasDepth) {
                     float dn = s_displayDepth[y * srcWidth + rowBase + (int)x] / s_displayDepthRef;
                     if (dn < 0.0f) dn = 0.0f;
                     else if (dn > 1.0f) dn = 1.0f;
-                    off = (int)lroundf(eyeShiftPx * (dn - 0.35f) * (1.0f / 0.65f));
+                    off = stereo_sample_offset(eyeShiftPx, true, dn);
+                } else {
+                    off = stereo_sample_offset(eyeShiftPx, false, 0.0f);
                 }
                 int sx = (int)x + off;
                 pixel = (sx >= -rowBase && sx < (int)srcWidth - rowBase) ? row[sx] : 0;
@@ -1751,8 +1807,10 @@ bool PbW2_G3RasterCompositeStereo(u16 *rgb565, const u8 *window, u8 *planes, u16
                                   u16 backdrop, const u16 **native, u32 *ink, int eyeShiftPx) {
     lock_display();
     bool wide;
-    if (eyeShiftPx && s_rightValid && s_rightGeneration == s_publishGeneration &&
-        s_rightWidth == s_displayWidth) {
+    bool replay = eyeShiftPx && s_rightValid && s_rightGeneration == s_publishGeneration &&
+                  s_rightWidth == s_displayWidth;
+    bool hasDepth = s_displayHasDepth;
+    if (replay) {
         if (eyeShiftPx > 0)
             wide = composite_body(rgb565, window, planes, rawColors, sides, backdrop, native, ink, 0,
                                   s_displayRight, s_rightWidth, false);
@@ -1764,6 +1822,28 @@ bool PbW2_G3RasterCompositeStereo(u16 *rgb565, const u8 *window, u8 *planes, u16
                               s_display, s_displayWidth, s_displayHasDepth);
     }
     unlock_display();
+    if (eyeShiftPx) {
+        /* One unambiguous line per change of the stereo path or its
+         * magnitude — engagement, slider moves, renderer/depth
+         * transitions — naming the path actually compositing the
+         * eyes and the disparity in use. (Run 15's log could not say
+         * which path produced its 3D: with the GPU renderer every
+         * frame is replay-ineligible and publishes no depth, so the
+         * uniform reprojection ran with nothing in the log to show
+         * it.) */
+        int mode = replay ? 2 : (hasDepth ? 1 : 0);
+        int mag = eyeShiftPx < 0 ? -eyeShiftPx : eyeShiftPx;
+        if (mode != s_stereoLogMode || mag != s_stereoLogMag) {
+            s_stereoLogMode = mode;
+            s_stereoLogMag = mag;
+            if (mode == 2)
+                Log_Line("GX", "stereo path: record/replay (true right-eye geometry), projection shift %d px", 2 * mag);
+            else if (mode == 1)
+                Log_Line("GX", "stereo path: reprojection (depth-graded), eye shift +/-%d px", mag);
+            else
+                Log_Line("GX", "stereo path: reprojection (uniform — no depth published), eye shift +/-%d px", mag);
+        }
+    }
     return wide;
 }
 
