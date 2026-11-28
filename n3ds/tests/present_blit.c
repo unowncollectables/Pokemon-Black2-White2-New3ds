@@ -29,6 +29,24 @@ u8 *__wrap_gfxGetFramebuffer(gfxScreen_t screen, gfx3dSide_t side, u16 *width, u
     return (u8 *)(screen == GFX_BOTTOM && useSecondBottom ? secondBottom : framebuffer);
 }
 
+static uint32_t touchOptions;
+static bool wideLayout;
+
+uint32_t Settings_DisplayFlags(void) { return touchOptions; }
+const u16 *PbW2_WideBottom(void) { return wideLayout ? picture : NULL; }
+
+static bool check_touch_mapping(void) {
+    u16 x, y;
+    touchOptions = DISPLAY_LCD_FIT | DISPLAY_WIDE_FIELD;
+    wideLayout = true;
+    if (Present_TouchToGame(31, 24, &x, &y) || Present_TouchToGame(32, 23, &x, &y) ||
+        Present_TouchToGame(288, 215, &x, &y) || Present_TouchToGame(287, 216, &x, &y)) return false;
+    if (!Present_TouchToGame(32, 24, &x, &y) || x || y) return false;
+    if (!Present_TouchToGame(287, 215, &x, &y) || x != 255 || y != 191) return false;
+    wideLayout = false;
+    return Present_TouchToGame(319, 239, &x, &y) && x == 255 && y == 191;
+}
+
 static bool check_blit(gfxScreen_t screen, unsigned picWidth, unsigned picHeight) {
     unsigned width = screen == GFX_TOP ? TOP_WIDTH : BOTTOM_WIDTH;
     unsigned left = (width - picWidth) / 2;
@@ -121,7 +139,7 @@ static bool check_bottom_cache(void) {
 int main(void) {
     archiveMountSdmc();
     memset(framebuffer, 0xff, sizeof framebuffer);
-    bool passed = check_blit(GFX_TOP, 320, 240) &&
+    bool passed = check_touch_mapping() && check_blit(GFX_TOP, 320, 240) &&
                   check_blit(GFX_TOP, 256, 192) &&
                   check_blit(GFX_BOTTOM, 255, 191) && check_game_fit() && check_native_text() && check_bottom_cache();
     FILE *out = fopen("sdmc:/present-blit-test.txt", "w");

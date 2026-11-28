@@ -145,16 +145,11 @@ static void clear_side_margins(u16 *fb, unsigned stride, unsigned width, unsigne
 
 #if defined(PBW2_LINK_GAME)
 bool Present_TouchToGame(uint16_t px, uint16_t py, uint16_t *x, uint16_t *y) {
-    /* Under a wide bottom layout the picture is 320 wide with the DS
-     * centre unmoved at +32: invert that mapping, or taps on the X
-     * menu's tiles would land a strip-width off. */
-    if (PbW2_WideBottom() && (Settings_DisplayFlags() & DISPLAY_WIDE_FIELD)) {
-        if (px < 32 || px >= 288 || py < 24 || py >= 216) return false;
-        *x = px - 32;
-        *y = py - 24;
-        return true;
-    }
-    GameRect rect = game_rect(GFX_BOTTOM, 320, 240, Settings_DisplayFlags());
+    uint32_t options = Settings_DisplayFlags();
+    /* The 320x192 wide bottom image centres its 256x192 touch area
+     * at native size. Ordinary gameplay follows the LCD fit setting. */
+    if ((options & DISPLAY_WIDE_FIELD) && PbW2_WideBottom()) options &= ~DISPLAY_LCD_FIT;
+    GameRect rect = game_rect(GFX_BOTTOM, 320, 240, options);
     if (px < rect.x || px >= rect.x + rect.width || py < rect.y || py >= rect.y + rect.height) return false;
     *x = (2 * (px - rect.x) + 1) * GAME_WIDTH / (2 * rect.width);
     *y = (2 * (py - rect.y) + 1) * GAME_HEIGHT / (2 * rect.height);

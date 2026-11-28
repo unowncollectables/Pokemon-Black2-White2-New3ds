@@ -852,21 +852,14 @@ static void apply_master_bright(u16 *fb, unsigned pixels, u16 reg) {
         memset(fb, brighten ? 0xff : 0, pixels * sizeof(*fb));
         return;
     }
-    for (u32 i = 0; i < pixels; i++) {
-        u16 p = fb[i];
-        u32 r = (p >> 11) & 0x1f;
-        u32 g = (p >> 5) & 0x3f;
-        u32 b = p & 0x1f;
-        if (brighten) {
-            r += (31u - r) * factor >> 4;
-            g += (63u - g) * factor >> 4;
-            b += (31u - b) * factor >> 4;
-        } else {
-            r -= r * factor >> 4;
-            g -= g * factor >> 4;
-            b -= b * factor >> 4;
-        }
-        fb[i] = (u16)((r << 11) | (g << 5) | b);
+    /* For a fade to white, darken the complement. Red and blue have
+     * enough bits between them to multiply both lanes together. */
+    u16 invert = brighten ? 0xffff : 0;
+    for (u32 i = 0; i < pixels; ++i) {
+        unsigned color = fb[i] ^ invert;
+        unsigned rb = (((color & 0xf81f) * factor) >> 4) & 0xf81f;
+        unsigned g = (((color & 0x07e0) * factor) >> 4) & 0x07e0;
+        fb[i] = (color - (rb | g)) ^ invert;
     }
 }
 
