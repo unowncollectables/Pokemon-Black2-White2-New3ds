@@ -54,6 +54,17 @@ static void draw_native_text(gfxScreen_t screen, const u16 *src, unsigned source
 static void draw_scaled(gfxScreen_t screen, const u16 *src, unsigned sourceWidth, uint32_t options, const u32 *ink);
 #endif
 
+#if defined(PBW2_LINK_GAME)
+static bool has_text_ink(const u32 *ink) {
+    /* Glyph-free scenes can use the plain presenter and bottom-screen cache. */
+    if (!ink) return false;
+    for (unsigned i = 0; i < GAME_WIDTH * GAME_HEIGHT; i += 4) {
+        if (ink[i] | ink[i + 1] | ink[i + 2] | ink[i + 3]) return true;
+    }
+    return false;
+}
+#endif
+
 void GxShim_Present(uint32_t flags) {
 #if defined(PBW2_LINK_GAME)
     static u16 s_top[256 * 192];
@@ -71,16 +82,15 @@ void GxShim_Present(uint32_t flags) {
                              ? s_topInk : NULL;
             u32 *bottomInk = bottom && sharpText && (options & DISPLAY_LCD_FIT) ? s_bottomInk : NULL;
             PbW2_ComposeScreensWithText(top, bottom, topInk, bottomInk);
+            if (!has_text_ink(topInk)) topInk = NULL;
+            if (!has_text_ink(bottomInk)) bottomInk = NULL;
             if (top) {
                 const u16 *sides = PbW2_TopSides();
                 const u16 *native = PbW2_NativeTop();
                 const u16 *wideTop = PbW2_WideTop();
                 if (wideTop && (options & DISPLAY_WIDE_FIELD)) {
-                    /* Wide 2D layout picture (320 wide, centre unmoved).
-                     * No native ink: glyph coordinates are DS-space and
-                     * a layout screen's text rides the scaled path until
-                     * the REQ-14 map says which of its layers are native. */
-                    draw_scaled(GFX_TOP, wideTop, 320, options, NULL);
+                    /* The Bag keeps its DS centre at column 32. */
+                    draw_scaled(GFX_TOP, wideTop, 320, options, topInk);
                 } else if (native && (options & DISPLAY_WIDE_FIELD)) {
                     Present_BlitRGB565(GFX_TOP, native, PBW2_NATIVE_TOP_WIDTH, PBW2_NATIVE_TOP_HEIGHT);
                     if (topInk) draw_native_text(GFX_TOP, top, GAME_WIDTH, topInk, true);
@@ -97,7 +107,8 @@ void GxShim_Present(uint32_t flags) {
             {
                 const u16 *wideBottom = PbW2_WideBottom();
                 if (bottom && wideBottom && (options & DISPLAY_WIDE_FIELD)) {
-                    draw_scaled(GFX_BOTTOM, wideBottom, 320, options, NULL);
+                    Present_DrawBottomCached(NULL, 0, NULL);
+                    Present_BlitRGB565(GFX_BOTTOM, wideBottom, 320, GAME_HEIGHT);
                 } else {
                     Present_DrawBottomCached(bottom, options, bottomInk);
                 }
@@ -134,16 +145,11 @@ static void clear_side_margins(u16 *fb, unsigned stride, unsigned width, unsigne
 
 #if defined(PBW2_LINK_GAME)
 bool Present_TouchToGame(uint16_t px, uint16_t py, uint16_t *x, uint16_t *y) {
-    /* Under a wide bottom layout the picture is 320 wide with the DS
-     * centre unmoved at +32: invert that mapping, or taps on the X
-     * menu's tiles would land a strip-width off. */
-    if (PbW2_WideBottom() && (Settings_DisplayFlags() & DISPLAY_WIDE_FIELD)) {
-        if (px < 32 || px >= 288) return false;
-        *x = px - 32;
-        *y = (2 * py + 1) * GAME_HEIGHT / (2 * 240);
-        return true;
-    }
-    GameRect rect = game_rect(GFX_BOTTOM, 320, 240, Settings_DisplayFlags());
+    uint32_t options = Settings_DisplayFlags();
+    /* The 320x192 wide bottom image centres its 256x192 touch area
+     * at native size. Ordinary gameplay follows the LCD fit setting. */
+    if ((options & DISPLAY_WIDE_FIELD) && PbW2_WideBottom()) options &= ~DISPLAY_LCD_FIT;
+    GameRect rect = game_rect(GFX_BOTTOM, 320, 240, options);
     if (px < rect.x || px >= rect.x + rect.width || py < rect.y || py >= rect.y + rect.height) return false;
     *x = (2 * (px - rect.x) + 1) * GAME_WIDTH / (2 * rect.width);
     *y = (2 * (py - rect.y) + 1) * GAME_HEIGHT / (2 * rect.height);
@@ -197,27 +203,47 @@ static void draw_scaled(gfxScreen_t screen, const u16 *src, unsigned sourceWidth
         src = background;
     }
     bool sharp = (options & DISPLAY_SHARP_PIXELS) != 0;
-    unsigned sampleY[240], nearestRow[240];
-    unsigned offset = (sourceWidth - GAME_WIDTH) / 2;
-    for (unsigned y = 0; y < rect.height; ++y) {
-        sampleY[y] = sample_axis(y, rect.height, GAME_HEIGHT, sharp);
-        if (ink) nearestRow[y] = ((2 * y + 1) * GAME_HEIGHT / (2 * rect.height)) * sourceWidth;
+    /* Both screens reuse the same sampling coordinates until their layout
+     * or filter changes. Keep separate tables so switching screens is free. */
+    static struct ScaleMap {
+        unsigned width, height, sourceWidth;
+        bool sharp;
+        u16 sampleX[400], sampleY[240], nearestX[400];
+        unsigned nearestRow[240];
+    } maps[2];
+    struct ScaleMap *map = &maps[screen == GFX_TOP];
+    if (rect.width > 400 || rect.height > 240) return;
+    if (map->width != rect.width || map->height != rect.height ||
+        map->sourceWidth != sourceWidth || map->sharp != sharp) {
+        map->width = rect.width;
+        map->height = rect.height;
+        map->sourceWidth = sourceWidth;
+        map->sharp = sharp;
+        for (unsigned y = 0; y < rect.height; ++y) {
+            map->sampleY[y] = sample_axis(y, rect.height, GAME_HEIGHT, sharp);
+            map->nearestRow[y] = ((2 * y + 1) * GAME_HEIGHT / (2 * rect.height)) * sourceWidth;
+        }
+        for (unsigned x = 0; x < rect.width; ++x) {
+            map->sampleX[x] = sample_axis(x, rect.width, sourceWidth, sharp);
+            map->nearestX[x] = (2 * x + 1) * sourceWidth / (2 * rect.width);
+        }
     }
+    unsigned offset = (sourceWidth - GAME_WIDTH) / 2;
     for (unsigned x = 0; x < rect.width; ++x) {
-        unsigned sx = sample_axis(x, rect.width, sourceWidth, sharp);
+        unsigned sx = map->sampleX[x];
         u16 *out = fb + (rect.x + x) * stride + stride - 1 - rect.y;
         unsigned xi = sx >> 5;
         unsigned xn = xi + (xi < sourceWidth - 1);
         bool canSampleInk = ink && xi >= offset && xn < offset + GAME_WIDTH;
-        unsigned nearX = canSampleInk ? (2 * x + 1) * sourceWidth / (2 * rect.width) : 0;
+        unsigned nearX = map->nearestX[x];
         for (unsigned y = 0; y < rect.height; ++y) {
-            unsigned sy = sampleY[y];
+            unsigned sy = map->sampleY[y];
             unsigned yi = sy >> 5;
             unsigned yn = yi + (yi < GAME_HEIGHT - 1);
             if (canSampleInk &&
                 (ink[yi * GAME_WIDTH + xi - offset] == PBW2_TEXT_INK || ink[yi * GAME_WIDTH + xn - offset] == PBW2_TEXT_INK ||
                  ink[yn * GAME_WIDTH + xi - offset] == PBW2_TEXT_INK || ink[yn * GAME_WIDTH + xn - offset] == PBW2_TEXT_INK)) {
-                out[-(int)y] = src[nearestRow[y] + nearX];
+                out[-(int)y] = src[map->nearestRow[y] + nearX];
                 continue;
             }
             u16 a = mix565(src[yi * sourceWidth + xi], src[yi * sourceWidth + xn], sx & 31);
@@ -397,13 +423,18 @@ void Present_BlitRGB565(gfxScreen_t screen, const uint16_t *pic, int pic_w, int 
     clear_side_margins(fb, stride, land_w, ox, ox + pic_w);
     unsigned bottom = stride - oy - pic_h;
 
-    for (x = 0; x < pic_w; x++) {
+    for (x = 0; x < pic_w; ++x) {
         u16 *column = fb + (ox + x) * stride;
         if (bottom) memset(column, 0, bottom * sizeof(*column));
         if (oy) memset(column + stride - oy, 0, oy * sizeof(*column));
-        u16 *out = column + stride - 1 - oy;
-        for (y = 0; y < pic_h; y++) {
-            out[-y] = pic[y * pic_w + x];
+    }
+    /* Work on a short band so neighbouring columns reuse the same source
+     * cache lines during the row-major to column-major transpose. */
+    for (int row = 0; row < pic_h; row += 16) {
+        int end = row + 16 < pic_h ? row + 16 : pic_h;
+        for (x = 0; x < pic_w; ++x) {
+            u16 *out = fb + (ox + x) * stride + stride - 1 - oy;
+            for (y = row; y < end; ++y) out[-y] = pic[y * pic_w + x];
         }
     }
 }

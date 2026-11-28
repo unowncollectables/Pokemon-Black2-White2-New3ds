@@ -2,6 +2,13 @@
 #ifndef PBW2_SEQ_PLAYER_H
 #define PBW2_SEQ_PLAYER_H
 
+#include <stdbool.h>
+#include <stdint.h>
+
+struct NNSSndHandle;
+struct SNDTrackInfo;
+uint16_t SeqPlayer_ReadTracks(struct NNSSndHandle *handle, struct SNDTrackInfo *tracks, unsigned count);
+
 /* Host NNS sequence player (see seq_player.c). NNS_SndMain drives it
  * from the game thread; when the audio thread owns the tick (see
  * SeqPlayer_SetAudioThreadTick), NNS_SndMain is a no-op and the audio

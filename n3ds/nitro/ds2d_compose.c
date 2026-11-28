@@ -157,11 +157,16 @@ static u32 bitmap_texel_addr(u16 cnt, int is_sub, int width, int tx, int ty, u32
     return engine_bg_vram_base(is_sub) + bitmap_vram_base_byte(cnt) + ((u32)ty * (u32)width + (u32)tx) * pixel_bytes;
 }
 
+static bool extended_bg(u32 mode, int bg) {
+    return (bg == 2 && mode == GX_BGMODE_5) ||
+           (bg == 3 && mode >= GX_BGMODE_3 && mode <= GX_BGMODE_5);
+}
+
 static u32 bg_screen_addr(u32 dc, u16 cnt, int is_sub, u32 bgmode, int bg) {
     u32 base = engine_bg_vram_base(is_sub);
     u32 off;
 
-    if (bg >= 2 && bgmode >= GX_BGMODE_3 && bgmode <= GX_BGMODE_5 && (cnt & REG_G2_BG0CNT_COLORMODE_MASK)) {
+    if (extended_bg(bgmode, bg) && (cnt & REG_G2_BG0CNT_COLORMODE_MASK)) {
         off = bitmap_vram_base_byte(cnt);
         if (!is_sub) {
             return main_bg_linear_addr(off);
@@ -549,7 +554,7 @@ static u16 s_affinePltt[4096];
 static void compose_affine_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmode, u16 *out, BgBlend *blend) {
     u16 cnt = reg_u16(regs, 8 + bg * 2);
     unsigned plane = 1u << bg;
-    bool extended = bgmode == 4 || (bgmode == 3 && bg == 3);
+    bool extended = extended_bg(bgmode, bg);
     bool wrap = (cnt & (1u << REG_G2_BG2CNT_AREAOVER_SHIFT)) != 0;
     const u8 *mapBytes = vram_ptr(bg_screen_addr(dc, cnt, is_sub, bgmode, bg));
     const u8 *chars = vram_ptr(bg_char_addr(dc, cnt, is_sub));
@@ -560,14 +565,14 @@ static void compose_affine_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bg
     if ((dc & (0x100u << bg)) == 0) {
         return;
     }
-    bitmap_dims(cnt, &width, &height);
+    width = height = 128 << (cnt >> 14);
     int tilesWide = width / 8;
 
     /* Extended BGs take their colours from the BG extended palette —
      * this BG's own 8 KiB slot — when DISPCNT enables it; otherwise
      * the plain engine palette applies and the map's palette field is
      * meaningless, exactly like a 256-colour text BG. */
-    bool useExt = (dc & REG_GX_DISPCNT_BG_MASK) != 0;
+    bool useExt = extended && (dc & REG_GX_DISPCNT_BG_MASK) != 0;
     const u16 *extPltt = NULL;
     u16 stdColors[256];
     if (useExt) {
@@ -611,9 +616,10 @@ static void compose_affine_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bg
 static void draw_bg_layer(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmode, u16 *out, BgBlend *blend) {
     u16 cnt = reg_u16(regs, 8 + bg * 2);
 
-    if (bg >= 2 && bgmode >= 3 && (cnt & REG_G2_BG0CNT_COLORMODE_MASK)) {
+    bool extended = extended_bg(bgmode, bg);
+    if (extended && (cnt & REG_G2_BG0CNT_COLORMODE_MASK)) {
         compose_bitmap_bg(regs, dc, is_sub, bg, bgmode, out, blend);
-    } else if (bg >= 2 && ((bgmode == 1 && bg == 3) || (bgmode >= 2 && bgmode <= 4))) {
+    } else if (extended || (bg == 3 && bgmode == 1) || (bg >= 2 && bgmode == 2) || (bg == 2 && bgmode == 4)) {
         /* An affine-family slot that is not a bitmap (bitmaps always
          * carry the colour-mode bit, checked above) is a tile BG. */
         compose_affine_bg(regs, dc, is_sub, bg, bgmode, out, blend);
@@ -676,6 +682,47 @@ static void prepare_obj_scene(ObjScene *scene, u32 dc, int is_sub) {
     }
 }
 
+static inline void put_obj_pixel(const ObjScene *scene, u16 *out, BgBlend *blend, u8 *window,
+                                 u8 inside, unsigned pixel, unsigned paletteIndex) {
+    if (!out) window[pixel] = inside;
+    else if (!window || (window[pixel] & GX_WND_PLANEMASK_OBJ)) {
+        u16 color = rgb555_to_565(scene->palette[paletteIndex]);
+        out[pixel] = color;
+        if (blend && blend->ink) blend->ink[pixel] = 0;
+        if (blend && blend->track) {
+            if (blend->first) blend->colors[pixel] = color;
+            blend->planes[pixel] = GX_WND_PLANEMASK_OBJ;
+        }
+    }
+}
+
+/* An untransformed OBJ uses contiguous eight-pixel tile rows, including
+ * when flipped. Skip transparent rows without visiting individual texels. */
+static void draw_obj_tile_row(const ObjScene *scene, u16 *out, BgBlend *blend, u8 *window, u8 inside,
+                              unsigned dst, unsigned count, unsigned px, bool flipped, unsigned base,
+                              bool bpp8, unsigned paletteBase) {
+    while (count) {
+        unsigned start = px & 7;
+        unsigned span = flipped ? start + 1 : 8 - start;
+        if (span > count) span = count;
+        const u8 *row = scene->vram + ((base + (px >> 3) * (bpp8 ? 64 : 32)) & 0x3ffffu);
+        u32 lo;
+        memcpy(&lo, row, sizeof lo);
+        u32 hi = 0;
+        if (bpp8) memcpy(&hi, row + 4, sizeof hi);
+        if (lo | hi) {
+            for (unsigned i = 0; i < span; ++i) {
+                unsigned tx = flipped ? start - i : start + i;
+                unsigned ci = bpp8 ? row[tx] : (lo >> (4 * tx)) & 15;
+                if (ci) put_obj_pixel(scene, out, blend, window, inside, dst + i, paletteBase + ci);
+            }
+        }
+        px = flipped ? px - span : px + span;
+        count -= span;
+        dst += span;
+    }
+}
+
 static void draw_obj_layer(const ObjScene *scene, u16 *out, u8 *window, u8 inside, unsigned list, BgBlend *blend) {
     static const u8 spw[3][4] = {{8, 16, 32, 64}, {16, 32, 32, 64}, {8, 8, 16, 32}};
     static const u8 sph[3][4] = {{8, 16, 32, 64}, {8, 8, 16, 32}, {16, 32, 32, 64}};
@@ -719,12 +766,19 @@ static void draw_obj_layer(const ObjScene *scene, u16 *out, u8 *window, u8 insid
             int y = ypos + yo;
             int sx = sxAtLeft + (yOrigin + yo) * pb;
             int sy = syAtLeft + (yOrigin + yo) * pd;
+            if (!affine) {
+                unsigned py = sy >> 8;
+                unsigned base = tile_base + (py >> 3) * tile_row_bytes + (py & 7) * (tile_bytes >> 3);
+                draw_obj_tile_row(scene, out, blend, window, inside, y * 256 + xs + left, right - left,
+                                  sx >> 8, pa < 0, base, bpp8, bpp8 ? 0 : (a[2] >> 12) * 16u);
+                continue;
+            }
             for (int xo = left; xo < right; ++xo, sx += pa, sy += pc) {
                 int x = xs + xo;
                 unsigned addr;
                 unsigned px = sx >> 8, py = sy >> 8;
                 unsigned ci, paletteIndex;
-                if (affine && (px >= (unsigned)width || py >= (unsigned)height)) continue;
+                if (px >= (unsigned)width || py >= (unsigned)height) continue;
                 addr = tile_base + (py >> 3) * tile_row_bytes + (py & 7u) * (tile_bytes >> 3)
                      + (px >> 3) * tile_bytes;
                 if (bpp8) {
@@ -737,18 +791,7 @@ static void draw_obj_layer(const ObjScene *scene, u16 *out, u8 *window, u8 insid
                     ci = (px & 1) ? (nib >> 4) : (nib & 0x0f);
                     paletteIndex = (a[2] >> 12) * 16u + ci;
                 }
-                if (!ci) continue;
-                unsigned pixel = y * 256 + x;
-                if (!out) window[pixel] = inside;
-                else if (!window || (window[pixel] & GX_WND_PLANEMASK_OBJ)) {
-                    u16 color = rgb555_to_565(scene->palette[paletteIndex]);
-                    out[pixel] = color;
-                    if (blend && blend->ink) blend->ink[pixel] = 0;
-                    if (blend && blend->track) {
-                        if (blend->first) blend->colors[pixel] = color;
-                        blend->planes[pixel] = GX_WND_PLANEMASK_OBJ;
-                    }
-                }
+                if (ci) put_obj_pixel(scene, out, blend, window, inside, y * 256 + x, paletteIndex);
             }
         }
     }
@@ -775,6 +818,18 @@ static u8 *build_window_mask(const u8 *regs, u32 dc, const ObjScene *objects) {
     static u8 window[256 * 192];
     unsigned enabled = (dc >> 13) & 7;
     if (!enabled) return NULL;
+    /* Rectangle masks depend only on WIN0H through WINOUT and the enable bits.
+     * An OBJ window also depends on OAM and character data. */
+    static u8 lastRegs[12];
+    static unsigned lastEnabled;
+    if (!(enabled & GX_WNDMASK_OW)) {
+        if (lastEnabled == enabled && memcmp(lastRegs, regs + 0x40, sizeof lastRegs) == 0)
+            return window;
+        memcpy(lastRegs, regs + 0x40, sizeof lastRegs);
+        lastEnabled = enabled;
+    } else {
+        lastEnabled = 0;
+    }
     u16 outside = reg_u16(regs, 0x4a);
     memset(window, outside & 0x3f, sizeof window);
     if (enabled & GX_WNDMASK_OW) draw_obj_layer(objects, NULL, window, (outside >> 8) & 0x3f, OBJ_WINDOW_LIST, NULL);
@@ -797,21 +852,14 @@ static void apply_master_bright(u16 *fb, unsigned pixels, u16 reg) {
         memset(fb, brighten ? 0xff : 0, pixels * sizeof(*fb));
         return;
     }
-    for (u32 i = 0; i < pixels; i++) {
-        u16 p = fb[i];
-        u32 r = (p >> 11) & 0x1f;
-        u32 g = (p >> 5) & 0x3f;
-        u32 b = p & 0x1f;
-        if (brighten) {
-            r += (31u - r) * factor >> 4;
-            g += (63u - g) * factor >> 4;
-            b += (31u - b) * factor >> 4;
-        } else {
-            r -= r * factor >> 4;
-            g -= g * factor >> 4;
-            b -= b * factor >> 4;
-        }
-        fb[i] = (u16)((r << 11) | (g << 5) | b);
+    /* For a fade to white, darken the complement. Red and blue have
+     * enough bits between them to multiply both lanes together. */
+    u16 invert = brighten ? 0xffff : 0;
+    for (u32 i = 0; i < pixels; ++i) {
+        unsigned color = fb[i] ^ invert;
+        unsigned rb = (((color & 0xf81f) * factor) >> 4) & 0xf81f;
+        unsigned g = (((color & 0x07e0) * factor) >> 4) & 0x07e0;
+        fb[i] = (color - (rb | g)) ^ invert;
     }
 }
 
@@ -1074,18 +1122,22 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
             unsigned dsRow = ((8 * y + 4) / 10) * 256;
             u16 *row = s_nativeTop + y * PBW2_NATIVE_TOP_WIDTH;
             const u16 *geometry = nativeFrame + y * PBW2_NATIVE_TOP_WIDTH;
-            for (unsigned x = 0; x < PBW2_NATIVE_TOP_WIDTH; ++x) {
-                u16 pixel = geometry[x];
-                if (x >= 40 && x < 360) {
-                    unsigned i = dsRow + (8 * (x - 40) + 4) / 10;
-                    bool visible = !window || (window[i] & GX_WND_PLANEMASK_BG0);
-                    if (bg_blend.planes[i]) row[x] = out[i];
-                    else row[x] = visible && (pixel & 0x8000) ? rgb555_to_565(pixel) : underGeometry[i];
-                } else {
-                    unsigned edge = x < 40 ? 0 : 255;
-                    bool visible = !window || (window[dsRow + edge] & GX_WND_PLANEMASK_BG0);
+            /* The two margins share their DS edge pixel's window mask. */
+            for (unsigned side = 0; side < 2; ++side) {
+                unsigned start = side ? 360 : 0;
+                bool visible = !window || (window[dsRow + (side ? 255 : 0)] & GX_WND_PLANEMASK_BG0);
+                for (unsigned x = start; x < start + 40; ++x) {
+                    u16 pixel = geometry[x];
                     row[x] = visible && (pixel & 0x8000) ? rgb555_to_565(pixel) : backdrop;
                 }
+            }
+            for (unsigned x = 40; x < 360; ++x) {
+                unsigned i = dsRow + (8 * (x - 40) + 4) / 10;
+                u16 pixel = geometry[x];
+                if (bg_blend.planes[i]) row[x] = out[i];
+                else if ((pixel & 0x8000) && (!window || (window[i] & GX_WND_PLANEMASK_BG0)))
+                    row[x] = rgb555_to_565(pixel);
+                else row[x] = underGeometry[i];
             }
         }
         PbW2_G3ReleaseNative();

@@ -5,6 +5,10 @@
 #include "nnsys/snd.h"
 #include "twl/sndex.h"
 
+#ifdef PBW2_N3DS
+#include "seq_player.h"
+#endif
+
 // The game's sound system: it opens the sound archive and sets up the players, plays the BGM (with the BGM stack of
 // snd_bgm_stack.c, which pushes and pops a BGM with its sequence and banks loaded) and the sound effects, and changes
 // the BGM with a fade, loading the next one in a thread while the old one fades out. The file's name is descriptive,
@@ -141,18 +145,24 @@ static void GFL_SndInitCore(BOOL loadGroup) {
 
 void GFL_SndUpdate(void) {
     NNSSndHandle *handle;
+#ifndef PBW2_N3DS
     int i;
+#endif
 
     UpdateBGMChange();
     NNS_SndMain();
     NNS_SndUpdateDriverInfo();
     handle = GFL_SndBGMGetHandle();
+#ifdef PBW2_N3DS
+    sTrackMask = SeqPlayer_ReadTracks(handle, sTrackInfo, SND_TRACK_COUNT);
+#else
     sTrackMask = 0;
     for (i = 0; i < SND_TRACK_COUNT; i++) {
         if (NNS_SndPlayerReadDriverTrackInfo(handle, i, &sTrackInfo[i]) == TRUE) {
             sTrackMask |= (u16)(1 << i);
         }
     }
+#endif
 #ifdef PBW2_N3DS
     // The audible fade is the player's wall-clock MoveVolume fade; the
     // report count follows the same clock (audit finding #6) instead of

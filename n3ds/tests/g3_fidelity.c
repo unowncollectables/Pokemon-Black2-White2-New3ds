@@ -18,6 +18,11 @@ void Log_Line(const char *tag, const char *fmt, ...) {
     (void)fmt;
 }
 
+void Log_Error(const char *tag, const char *fmt, ...) {
+    (void)tag;
+    (void)fmt;
+}
+
 static void cmd(u32 op, u32 param) {
     PbW2_G3Command(op, &param);
 }
@@ -778,6 +783,25 @@ static const char *checks(void) {
     if (pixels[0] || pixels[1] != 0x001f || pixels[2] != 0x001f || pixels[3] || pixels[258] != 0x001f)
         return "scrolled 8bpp text tiles use the full palette across screen blocks";
 
+    /* BG2 in mode 4 has byte map entries even with bit 7 set. Size 3
+     * reaches tiles past row and column 511. Mode 5 uses halfword entries. */
+    reg_GX_DISPCNT = (1u << 16) | 0x400 | GX_BGMODE_4;
+    PBW2_VU16(0x0400000c) = (3u << 14) | (8u << 8) | 0x80;
+    PBW2_VU16(0x04000020) = PBW2_VU16(0x04000026) = 256;
+    PBW2_VU16(0x04000022) = PBW2_VU16(0x04000024) = 0;
+    PBW2_VU32(0x04000028) = PBW2_VU32(0x0400002c) = 512u << 8;
+    PbW2_NoteBgAffineWrite((u32)(uintptr_t)(pbw2_io + 0x20));
+    bgVram[0x4000 + 64 * 128 + 64] = 7;
+    bgVram[7 * 64] = 200;
+    PbW2_ComposeScreens(pixels, NULL);
+    if (pixels[0] != 0x001f) return "mode 4 BG2 regular affine map at (512,512)";
+    reg_GX_DISPCNT = (1u << 16) | 0x400 | GX_BGMODE_5;
+    PBW2_VU16(0x0400000c) &= ~0x80;
+    ((u16 *)(void *)(bgVram + 0x4000))[64 * 128 + 64] = 7 | 0x400;
+    bgVram[7 * 64 + 7] = 33;
+    PbW2_ComposeScreens(pixels, NULL);
+    if (pixels[0] != 0x07c0) return "mode 5 BG2 extended tile with horizontal flip";
+
     /* Sample a flipped bitmap, then cross the left edge with and without wrap. */
     reg_GX_DISPCNT = (1u << 16) | 0x400 | GX_BGMODE_5;
     PBW2_VU16(0x0400000c) = 0x84;
@@ -1273,6 +1297,45 @@ static bool check_clipped_objs(void) {
            pixels[5 * 256 + 5] == 0x07c0 && !pixels[6 * 256] && !pixels[6];
 }
 
+static bool check_obj_tile_rows(void) {
+    u16 *oam = PbW2_VramMap((void *)HW_OAM);
+    u8 *tiles = PbW2_VramMap((void *)HW_OBJ_VRAM);
+    u16 *palette = PbW2_VramMap((void *)HW_OBJ_PLTT);
+    u16 *bgPalette = PbW2_VramMap((void *)HW_BG_PLTT);
+    bgPalette[0] = 0;
+    for (unsigned i = 0; i < 128; ++i) oam[4 * i] = 0x0200;
+    for (unsigned i = 0; i < 256; ++i) palette[i] = i * 113u;
+    for (unsigned i = 0; i < 2048; ++i) tiles[i] = ((i / 8) % 3) ? i * 19u : 0;
+    for (unsigned dim = 0; dim < 2; ++dim) {
+        reg_GX_DISPCNT = (1u << 16) | 0x1000 | (dim << 4);
+        for (unsigned depth = 0; depth < 2; ++depth) {
+            for (unsigned flip = 0; flip < 4; ++flip) {
+                oam[0] = 253 | (depth << 13);
+                oam[1] = 509 | (1u << 14) | (flip << 12);
+                oam[2] = 2u << 12;
+                PbW2_ComposeScreens(pixels, NULL);
+                for (int y = 0; y < 16; ++y) {
+                    for (int x = 0; x < 16; ++x) {
+                        unsigned px = (flip & 1) ? 15 - (x + 3) : x + 3;
+                        unsigned py = (flip & 2) ? 15 - (y + 3) : y + 3;
+                        unsigned ci = 0;
+                        if (x < 13 && y < 13) {
+                            unsigned size = depth ? 64 : 32;
+                            unsigned tile = (py / 8) * (dim ? 2 * size : 1024) + (px / 8) * size;
+                            unsigned ix = (py % 8) * 8 + px % 8;
+                            ci = depth ? tiles[tile + ix] : (tiles[tile + ix / 2] >> (4 * (ix % 2))) & 15;
+                        }
+                        u16 color = ci ? palette[depth ? ci : 32 + ci] : 0;
+                        u16 expected = ((color & 31) << 11) | ((color & 0x3e0) << 1) | ((color >> 10) & 31);
+                        if (expected != pixels[y * 256 + x]) return false;
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+
 static bool check_sub_cache(void) {
     static u16 bottom[256 * 192];
     static u32 ink[256 * 192];
@@ -1460,6 +1523,7 @@ int main(void) {
         fprintf(f, "PICA texture eviction re-init %s\n", check_pica_storage_eviction() ? "PASS" : "FAIL");
         fprintf(f, "Pinned native frame %s\n", check_pinned_native_frame() ? "PASS" : "FAIL");
         fprintf(f, "Clipped OBJ priority %s\n", check_clipped_objs() ? "PASS" : "FAIL");
+        fprintf(f, "Clipped tile rows and flips %s\n", check_obj_tile_rows() ? "PASS" : "FAIL");
         fprintf(f, "Sub-screen input cache %s\n", check_sub_cache() ? "PASS" : "FAIL");
         fprintf(f, "PICA frame reuse %s\n", check_frame_reuse() ? "PASS" : "FAIL");
         failure = check_buffer_depth(true, false);
