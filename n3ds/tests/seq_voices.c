@@ -225,6 +225,21 @@ static const char *check_residual_pool(void) {
     return NULL;
 }
 
+static const char *check_track_snapshot(void) {
+    SNDTrackInfo tracks[16];
+    NNSSndHandle handle = {.player = (struct NNSSndSeqPlayer *)&s_slots[0]};
+    memset(&s_slots[0], 0, sizeof s_slots[0]);
+    memset(tracks, 0x55, sizeof tracks);
+    s_slots[0].inUse = TRUE;
+    s_slots[0].tracks[15].active = TRUE;
+    s_slots[0].tracks[15].volume = 99;
+    if (SeqPlayer_ReadTracks(&handle, tracks, 15) != 0 ||
+        SeqPlayer_ReadTracks(&handle, tracks, 16) != 0x8000 ||
+        tracks[15].volume != 99 || tracks[0].volume != 0x55)
+        return "batched track status respects active mask and array length";
+    return NULL;
+}
+
 int main(void) {
     archiveMountSdmc();
     const char *failure = check_voices();
@@ -233,6 +248,7 @@ int main(void) {
     if (!failure) failure = check_synth_release();
     if (!failure) failure = check_overflow_pool();
     if (!failure) failure = check_residual_pool();
+    if (!failure) failure = check_track_snapshot();
     FILE *out = fopen("sdmc:/seq-voices-test.txt", "w");
     if (out) {
         fprintf(out, "%s\n", failure ? failure : "PASS");

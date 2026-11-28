@@ -783,6 +783,25 @@ static const char *checks(void) {
     if (pixels[0] || pixels[1] != 0x001f || pixels[2] != 0x001f || pixels[3] || pixels[258] != 0x001f)
         return "scrolled 8bpp text tiles use the full palette across screen blocks";
 
+    /* BG2 in mode 4 has byte map entries even with bit 7 set. Size 3
+     * reaches tiles past row and column 511. Mode 5 uses halfword entries. */
+    reg_GX_DISPCNT = (1u << 16) | 0x400 | GX_BGMODE_4;
+    PBW2_VU16(0x0400000c) = (3u << 14) | (8u << 8) | 0x80;
+    PBW2_VU16(0x04000020) = PBW2_VU16(0x04000026) = 256;
+    PBW2_VU16(0x04000022) = PBW2_VU16(0x04000024) = 0;
+    PBW2_VU32(0x04000028) = PBW2_VU32(0x0400002c) = 512u << 8;
+    PbW2_NoteBgAffineWrite((u32)(uintptr_t)(pbw2_io + 0x20));
+    bgVram[0x4000 + 64 * 128 + 64] = 7;
+    bgVram[7 * 64] = 200;
+    PbW2_ComposeScreens(pixels, NULL);
+    if (pixels[0] != 0x001f) return "mode 4 BG2 regular affine map at (512,512)";
+    reg_GX_DISPCNT = (1u << 16) | 0x400 | GX_BGMODE_5;
+    PBW2_VU16(0x0400000c) &= ~0x80;
+    ((u16 *)(void *)(bgVram + 0x4000))[64 * 128 + 64] = 7 | 0x400;
+    bgVram[7 * 64 + 7] = 33;
+    PbW2_ComposeScreens(pixels, NULL);
+    if (pixels[0] != 0x07c0) return "mode 5 BG2 extended tile with horizontal flip";
+
     /* Sample a flipped bitmap, then cross the left edge with and without wrap. */
     reg_GX_DISPCNT = (1u << 16) | 0x400 | GX_BGMODE_5;
     PBW2_VU16(0x0400000c) = 0x84;

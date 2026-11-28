@@ -208,27 +208,47 @@ static void draw_scaled(gfxScreen_t screen, const u16 *src, unsigned sourceWidth
         src = background;
     }
     bool sharp = (options & DISPLAY_SHARP_PIXELS) != 0;
-    unsigned sampleY[240], nearestRow[240];
-    unsigned offset = (sourceWidth - GAME_WIDTH) / 2;
-    for (unsigned y = 0; y < rect.height; ++y) {
-        sampleY[y] = sample_axis(y, rect.height, GAME_HEIGHT, sharp);
-        if (ink) nearestRow[y] = ((2 * y + 1) * GAME_HEIGHT / (2 * rect.height)) * sourceWidth;
+    /* Both screens reuse the same sampling coordinates until their layout
+     * or filter changes. Keep separate tables so switching screens is free. */
+    static struct ScaleMap {
+        unsigned width, height, sourceWidth;
+        bool sharp;
+        u16 sampleX[400], sampleY[240], nearestX[400];
+        unsigned nearestRow[240];
+    } maps[2];
+    struct ScaleMap *map = &maps[screen == GFX_TOP];
+    if (rect.width > 400 || rect.height > 240) return;
+    if (map->width != rect.width || map->height != rect.height ||
+        map->sourceWidth != sourceWidth || map->sharp != sharp) {
+        map->width = rect.width;
+        map->height = rect.height;
+        map->sourceWidth = sourceWidth;
+        map->sharp = sharp;
+        for (unsigned y = 0; y < rect.height; ++y) {
+            map->sampleY[y] = sample_axis(y, rect.height, GAME_HEIGHT, sharp);
+            map->nearestRow[y] = ((2 * y + 1) * GAME_HEIGHT / (2 * rect.height)) * sourceWidth;
+        }
+        for (unsigned x = 0; x < rect.width; ++x) {
+            map->sampleX[x] = sample_axis(x, rect.width, sourceWidth, sharp);
+            map->nearestX[x] = (2 * x + 1) * sourceWidth / (2 * rect.width);
+        }
     }
+    unsigned offset = (sourceWidth - GAME_WIDTH) / 2;
     for (unsigned x = 0; x < rect.width; ++x) {
-        unsigned sx = sample_axis(x, rect.width, sourceWidth, sharp);
+        unsigned sx = map->sampleX[x];
         u16 *out = fb + (rect.x + x) * stride + stride - 1 - rect.y;
         unsigned xi = sx >> 5;
         unsigned xn = xi + (xi < sourceWidth - 1);
         bool canSampleInk = ink && xi >= offset && xn < offset + GAME_WIDTH;
-        unsigned nearX = canSampleInk ? (2 * x + 1) * sourceWidth / (2 * rect.width) : 0;
+        unsigned nearX = map->nearestX[x];
         for (unsigned y = 0; y < rect.height; ++y) {
-            unsigned sy = sampleY[y];
+            unsigned sy = map->sampleY[y];
             unsigned yi = sy >> 5;
             unsigned yn = yi + (yi < GAME_HEIGHT - 1);
             if (canSampleInk &&
                 (ink[yi * GAME_WIDTH + xi - offset] == PBW2_TEXT_INK || ink[yi * GAME_WIDTH + xn - offset] == PBW2_TEXT_INK ||
                  ink[yn * GAME_WIDTH + xi - offset] == PBW2_TEXT_INK || ink[yn * GAME_WIDTH + xn - offset] == PBW2_TEXT_INK)) {
-                out[-(int)y] = src[nearestRow[y] + nearX];
+                out[-(int)y] = src[map->nearestRow[y] + nearX];
                 continue;
             }
             u16 a = mix565(src[yi * sourceWidth + xi], src[yi * sourceWidth + xn], sx & 31);

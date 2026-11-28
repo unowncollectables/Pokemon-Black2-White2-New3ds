@@ -1700,21 +1700,9 @@ int NNS_SndPlayerCountPlayingSeqBySeqNo(int seqNo) {
     return n;
 }
 
-BOOL NNS_SndPlayerReadDriverTrackInfo(NNSSndHandle *handle, int trackNo, SNDTrackInfo *trackInfo) {
-    SeqSlot *slot;
-    SeqTrack *track;
+static void seq_copy_track_info(const SeqSlot *slot, int trackNo, SNDTrackInfo *trackInfo) {
+    const SeqTrack *track = &slot->tracks[trackNo];
     int n, chCount = 0;
-    LightLock_Lock(&s_seqLock);
-    slot = seq_slot_from_handle(handle);
-    if (!slot || !trackInfo || trackNo < 0 || trackNo >= SEQ_TRACKS) {
-        LightLock_Unlock(&s_seqLock);
-        return FALSE;
-    }
-    track = &slot->tracks[trackNo];
-    if (!track->active) {
-        LightLock_Unlock(&s_seqLock);
-        return FALSE;
-    }
     memset(trackInfo, 0, sizeof *trackInfo);
     trackInfo->prgNo = track->program;
     trackInfo->volume = track->volume;
@@ -1729,8 +1717,30 @@ BOOL NNS_SndPlayerReadDriverTrackInfo(NNSSndHandle *handle, int trackNo, SNDTrac
         }
     }
     trackInfo->chCount = (u8)chCount;
+}
+
+uint16_t SeqPlayer_ReadTracks(NNSSndHandle *handle, SNDTrackInfo *tracks, unsigned count) {
+    u16 mask = 0;
+    LightLock_Lock(&s_seqLock);
+    SeqSlot *slot = seq_slot_from_handle(handle);
+    if (slot && tracks) {
+        for (unsigned i = 0; i < count && i < SEQ_TRACKS; ++i) {
+            if (!slot->tracks[i].active) continue;
+            seq_copy_track_info(slot, i, &tracks[i]);
+            mask |= 1u << i;
+        }
+    }
     LightLock_Unlock(&s_seqLock);
-    return TRUE;
+    return mask;
+}
+
+BOOL NNS_SndPlayerReadDriverTrackInfo(NNSSndHandle *handle, int trackNo, SNDTrackInfo *trackInfo) {
+    LightLock_Lock(&s_seqLock);
+    SeqSlot *slot = seq_slot_from_handle(handle);
+    BOOL active = slot && trackInfo && trackNo >= 0 && trackNo < SEQ_TRACKS && slot->tracks[trackNo].active;
+    if (active) seq_copy_track_info(slot, trackNo, trackInfo);
+    LightLock_Unlock(&s_seqLock);
+    return active;
 }
 
 void NNS_SndHandleInit(NNSSndHandle *handle) {

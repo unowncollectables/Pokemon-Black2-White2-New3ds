@@ -157,11 +157,16 @@ static u32 bitmap_texel_addr(u16 cnt, int is_sub, int width, int tx, int ty, u32
     return engine_bg_vram_base(is_sub) + bitmap_vram_base_byte(cnt) + ((u32)ty * (u32)width + (u32)tx) * pixel_bytes;
 }
 
+static bool extended_bg(u32 mode, int bg) {
+    return (bg == 2 && mode == GX_BGMODE_5) ||
+           (bg == 3 && mode >= GX_BGMODE_3 && mode <= GX_BGMODE_5);
+}
+
 static u32 bg_screen_addr(u32 dc, u16 cnt, int is_sub, u32 bgmode, int bg) {
     u32 base = engine_bg_vram_base(is_sub);
     u32 off;
 
-    if (bg >= 2 && bgmode >= GX_BGMODE_3 && bgmode <= GX_BGMODE_5 && (cnt & REG_G2_BG0CNT_COLORMODE_MASK)) {
+    if (extended_bg(bgmode, bg) && (cnt & REG_G2_BG0CNT_COLORMODE_MASK)) {
         off = bitmap_vram_base_byte(cnt);
         if (!is_sub) {
             return main_bg_linear_addr(off);
@@ -549,7 +554,7 @@ static u16 s_affinePltt[4096];
 static void compose_affine_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmode, u16 *out, BgBlend *blend) {
     u16 cnt = reg_u16(regs, 8 + bg * 2);
     unsigned plane = 1u << bg;
-    bool extended = bgmode == 4 || (bgmode == 3 && bg == 3);
+    bool extended = extended_bg(bgmode, bg);
     bool wrap = (cnt & (1u << REG_G2_BG2CNT_AREAOVER_SHIFT)) != 0;
     const u8 *mapBytes = vram_ptr(bg_screen_addr(dc, cnt, is_sub, bgmode, bg));
     const u8 *chars = vram_ptr(bg_char_addr(dc, cnt, is_sub));
@@ -560,14 +565,14 @@ static void compose_affine_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bg
     if ((dc & (0x100u << bg)) == 0) {
         return;
     }
-    bitmap_dims(cnt, &width, &height);
+    width = height = 128 << (cnt >> 14);
     int tilesWide = width / 8;
 
     /* Extended BGs take their colours from the BG extended palette —
      * this BG's own 8 KiB slot — when DISPCNT enables it; otherwise
      * the plain engine palette applies and the map's palette field is
      * meaningless, exactly like a 256-colour text BG. */
-    bool useExt = (dc & REG_GX_DISPCNT_BG_MASK) != 0;
+    bool useExt = extended && (dc & REG_GX_DISPCNT_BG_MASK) != 0;
     const u16 *extPltt = NULL;
     u16 stdColors[256];
     if (useExt) {
@@ -611,9 +616,10 @@ static void compose_affine_bg(const u8 *regs, u32 dc, int is_sub, int bg, u32 bg
 static void draw_bg_layer(const u8 *regs, u32 dc, int is_sub, int bg, u32 bgmode, u16 *out, BgBlend *blend) {
     u16 cnt = reg_u16(regs, 8 + bg * 2);
 
-    if (bg >= 2 && bgmode >= 3 && (cnt & REG_G2_BG0CNT_COLORMODE_MASK)) {
+    bool extended = extended_bg(bgmode, bg);
+    if (extended && (cnt & REG_G2_BG0CNT_COLORMODE_MASK)) {
         compose_bitmap_bg(regs, dc, is_sub, bg, bgmode, out, blend);
-    } else if (bg >= 2 && ((bgmode == 1 && bg == 3) || (bgmode >= 2 && bgmode <= 4))) {
+    } else if (extended || (bg == 3 && bgmode == 1) || (bg >= 2 && bgmode == 2) || (bg == 2 && bgmode == 4)) {
         /* An affine-family slot that is not a bitmap (bitmaps always
          * carry the colour-mode bit, checked above) is a tile BG. */
         compose_affine_bg(regs, dc, is_sub, bg, bgmode, out, blend);
@@ -775,6 +781,18 @@ static u8 *build_window_mask(const u8 *regs, u32 dc, const ObjScene *objects) {
     static u8 window[256 * 192];
     unsigned enabled = (dc >> 13) & 7;
     if (!enabled) return NULL;
+    /* Rectangle masks depend only on WIN0H through WINOUT and the enable bits.
+     * An OBJ window also depends on OAM and character data. */
+    static u8 lastRegs[12];
+    static unsigned lastEnabled;
+    if (!(enabled & GX_WNDMASK_OW)) {
+        if (lastEnabled == enabled && memcmp(lastRegs, regs + 0x40, sizeof lastRegs) == 0)
+            return window;
+        memcpy(lastRegs, regs + 0x40, sizeof lastRegs);
+        lastEnabled = enabled;
+    } else {
+        lastEnabled = 0;
+    }
     u16 outside = reg_u16(regs, 0x4a);
     memset(window, outside & 0x3f, sizeof window);
     if (enabled & GX_WNDMASK_OW) draw_obj_layer(objects, NULL, window, (outside >> 8) & 0x3f, OBJ_WINDOW_LIST, NULL);
