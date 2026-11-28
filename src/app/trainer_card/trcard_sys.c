@@ -11,6 +11,10 @@
 #include "gfl/heap.h"
 #include "gfl/overlay.h"
 #include "gfl/proc.h"
+
+#ifdef PBW2_N3DS
+#include "log.h"
+#endif
 #include "gfl/std.h"
 #include "gfl/str.h"
 #include "nitro/rtc.h"
@@ -161,6 +165,22 @@ static BOOL TrainerCardSys_InitView(GameProc *proc, u32 *state, void *param, voi
 }
 
 static BOOL TrainerCardSys_Main(GameProc *proc, u32 *state, void *param, void *work) {
+#ifdef PBW2_N3DS
+    /* Stuck-open probe: the sys proc's state on every change, with the
+     * screen's chosen next. If the screen proc ends (CARD_WAIT exits)
+     * but the sys never reaches END, the stall is in this layer; if
+     * the sys reaches END and the field still does not resume, it is
+     * in the field's app-call handoff. */
+    {
+        static u32 s_lastState = 0xffffffff;
+        TrainerCardSysWork *dbgWk = work;
+
+        if (*state != s_lastState) {
+            Log_Line("TCD", "sys state=%u next=%u", *state, dbgWk->param ? dbgWk->param->next : 0xff);
+            s_lastState = *state;
+        }
+    }
+#endif
     switch (*state) {
     case TRCARD_SEQ_START:
         *state = TrainerCardSys_SeqStart(work, param);

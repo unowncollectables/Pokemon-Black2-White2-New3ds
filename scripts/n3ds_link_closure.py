@@ -79,8 +79,10 @@ INCLUDE_SRC_PREFIXES = (
 
 EXCLUDE_SRC_FILES = {
     "src/system/main.c",
-    "src/gfl/net.c",
-    "src/system/net_err.c",
+    # Wi-Fi Stage 1: src/gfl/net.c and src/system/net_err.c are eligible
+    # again — the real GFL_Net session layer links in place of the
+    # net_stubs.c fiction (GFL_NetBoot runs at boot by the game's own
+    # design; its Wi-Fi prepare is DWCRapCommon_StartLibrary).
     "src/system/game_sync_settings_proc.c",
 }
 
@@ -166,8 +168,26 @@ def lib_nnsys_path_ok(src: str) -> bool:
     return src.startswith("lib/nnsys/src/fnd/")
 
 
+def lib_net_path_ok(src: str) -> bool:
+    # Wi-Fi Stage 1: the game's own network libraries. BFS only pulls
+    # objects that define a referenced symbol, so eligibility alone does
+    # not grow the image; it lets the closure resolve DWC/NitroWiFi/DPW/
+    # POKE_NET symbols to the real objects instead of the link stubs.
+    if src.startswith("lib/dwc/src/vct/"):
+        # Voice chat stays stubbed in link_stubs.c (no mic path; the
+        # SoulSilver port reached the same verdict). Excluding the real
+        # VCT objects keeps the stubs the only definition.
+        return False
+    return (
+        src.startswith("lib/dwc/")
+        or src.startswith("lib/nitrowifi/")
+        or src.startswith("lib/dpw/")
+        or src.startswith("lib/poke_net/")
+    )
+
+
 def eligible(src: str) -> bool:
-    return src_path_ok(src) or lib_nitro_path_ok(src) or lib_nnsys_path_ok(src)
+    return src_path_ok(src) or lib_nitro_path_ok(src) or lib_nnsys_path_ok(src) or lib_net_path_ok(src)
 
 
 def symbol_index(objdir: Path) -> dict[str, Path]:

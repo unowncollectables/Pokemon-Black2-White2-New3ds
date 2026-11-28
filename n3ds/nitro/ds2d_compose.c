@@ -1127,10 +1127,20 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
                               !bg0Brightness && !bg0Alpha &&
                               PbW2_G3PublishedNative();
                 if (extend) memcpy(underGeometry, out, sizeof underGeometry);
-                s_haveSides = PbW2_G3RasterComposite(out, window, bg_blend->track ? bg_blend->planes : NULL,
-                                                     layerAlpha ? bg_blend->colors : NULL, extend ? s_sides : NULL,
-                                                     backdrop, extend ? &nativeFrame : NULL, bg_blend->ink,
-                                                     s_mainEyeShift);
+                /* Eye passes (s_mainEyeShift != 0) go through the
+                 * stereo entry point, which substitutes the
+                 * record/replay layer's right-eye geometry frame
+                 * when one is current; the flat path (shift 0) is
+                 * the original call, untouched. */
+                s_haveSides = s_mainEyeShift
+                    ? PbW2_G3RasterCompositeStereo(out, window, bg_blend->track ? bg_blend->planes : NULL,
+                                                   layerAlpha ? bg_blend->colors : NULL, extend ? s_sides : NULL,
+                                                   backdrop, extend ? &nativeFrame : NULL, bg_blend->ink,
+                                                   s_mainEyeShift)
+                    : PbW2_G3RasterComposite(out, window, bg_blend->track ? bg_blend->planes : NULL,
+                                             layerAlpha ? bg_blend->colors : NULL, extend ? s_sides : NULL,
+                                             backdrop, extend ? &nativeFrame : NULL, bg_blend->ink,
+                                             s_mainEyeShift);
                 if (nativeFrame) {
                     /* Subsequent layers sit in front of the 3D layer. */
                     bg_blend->track = true;

@@ -60,6 +60,16 @@ def compile_one(cc: str, flags: list[str], source: Path, out: Path) -> tuple[str
     extra = list(flags)
     if source.as_posix() == "src/system/main.c":
         extra.append("-Dmain=Pbw2_GameMain")
+    # These three files call the MWCC builtin __memcpy by name (the port
+    # defines the symbol in n3ds/nitro/nitro_stubs.c). GCC 14 makes the
+    # implicit declaration a hard error; demote it for exactly these
+    # files so they can link the real network libraries.
+    if source.as_posix() in (
+        "lib/dpw/src/dpw_tr.c",
+        "lib/dpw/src/dpw_battle_tower.c",
+        "lib/poke_net/src/poke_net.c",
+    ):
+        extra.append("-Wno-error=implicit-function-declaration")
     extra += [f"-I{source.parent.as_posix()}"]
     if source.parent.parent != ROOT:
         extra.append(f"-I{source.parent.parent.as_posix()}")

@@ -3,6 +3,7 @@
 
 #include "nitro/fx.h"
 #include <stdbool.h>
+#include <stddef.h>
 
 enum { PBW2_NATIVE_TOP_WIDTH = 400, PBW2_NATIVE_TOP_HEIGHT = 240 };
 
@@ -39,6 +40,20 @@ void PbW2_G3RasterCommand(u32 opcode, const u32 *args, const MtxFx44 *clip,
  * stay at screen depth. */
 bool PbW2_G3RasterComposite(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawColors, u16 *sides, u16 backdrop,
                             const u16 **native, u32 *ink, int eyeShiftPx);
+/* Stereo composite: like PbW2_G3RasterComposite, but when the GX
+ * record/replay layer holds a right-eye geometry frame for the
+ * currently published generation, the eye passes use it (right eye:
+ * the replayed frame; left eye: the live frame unshifted) instead of
+ * reprojecting. Any mismatch falls back to the reprojection above. */
+bool PbW2_G3RasterCompositeStereo(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawColors, u16 *sides,
+                                  u16 backdrop, const u16 **native, u32 *ink, int eyeShiftPx);
+/* GX record/replay support (g3_replay.c): opaque save/restore of the
+ * rasterizer's per-frame state, and the replay's side-effect-free
+ * publish into the right-eye buffer. */
+size_t PbW2_G3RasterStateSize(void);
+void PbW2_G3RasterStateSave(void *dst);
+void PbW2_G3RasterStateRestore(const void *src);
+void PbW2_G3RasterPublishReplay(void);
 /* Stereo: ask the rasterizer to publish per-pixel depth alongside the
  * colour frame at swap time (CPU Z-buffer frames only). Off by
  * default; present enables it only while the 3D slider is up. */

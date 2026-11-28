@@ -582,7 +582,11 @@ static void PbW2_FollowerPublish(GameSystem *gsys, Field *field) {
         else if (feed->faceDir == DIR_LEFT) behind.x += tile;
         else if (feed->faceDir == DIR_RIGHT) behind.x -= tile;
         feed->terrainAtFollower = GetTileTypeAtPos(field->g3DMapper, &behind);
+        feed->terrainClassAtFollower = GetTileClass(feed->terrainAtFollower);
     }
+    /* Behaviour Stage 2: pressed-this-frame pad keys for the port
+     * layer's talk-to check (face the follower, press A). */
+    feed->pressedKeys = GCTX_HIDGetPressedKeys();
     feed->weatherId = GetNowWeather(field->gameData);
     feed->dayPeriod = Field_GetDayPeriod(field);
     feed->exState = FieldPlayer_GetExState(field->player);

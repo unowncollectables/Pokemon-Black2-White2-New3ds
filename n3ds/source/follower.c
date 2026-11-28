@@ -21,6 +21,18 @@
  *   resets and the follower hides for that frame (the SS5 respawn +
  *   ball pop are Stage 3); bike/surf/dive and script-owned-field
  *   frames hide it (their full hide/return rules are Stage 4).
+ * - Behaviour Stage 2 (SS5B, this file's behaviour sections +
+ *   follower_behaviour.c): ball-pop respawn (grow-in + arc) and an
+ *   idle respawn behind a stationary player, ledge and catch-up
+ *   hop arcs, talk-to reactions (feed-published A edge + facing
+ *   tile; cry via the game's PokeVoice_Play; reaction line staged
+ *   for the present-side overlay), the heal-transition reaction,
+ *   and grass find arming. All of it rides the same `follower`
+ *   config gate and writes nothing anywhere. NOT in Stage 2: the
+ *   indoor/huge rule -- the decomp exposes no decoded indoor
+ *   signal (the zone header's mapType byte has no named values or
+ *   comparisons anywhere in the tree), and guessing at it would
+ *   hide followers in the wrong places.
  *
  * Sprite sourcing (SS3, BYO-ROM): the coverage gate below decides
  * the tier BEFORE any lookup -- the native TPoke lookup is never
@@ -47,6 +59,7 @@
 #include "follower.h"
 
 #include "config.h"
+#include "follower_behaviour.h"
 #include "g3_raster.h"
 #include "constants/directions.h"
 #include "field/actor/field_actor_config.h"
@@ -81,6 +94,15 @@ extern void NNS_G3dGeFlushBuffer(void);
 #define TILE_FX (16 * FX32_ONE)
 /* FLD_PLAYER_EXSTATE_* (include/field/player/player_state.h) */
 #define EXSTATE_NONE 0
+/* PAD_BUTTON_A (include/gfl/key.h) */
+#define PBW2_PAD_A 0x1
+/* The game's own cry call (include/gfl/sound.h), as the Pokedex
+ * and the summary screen use it: centre pan, no chorus. Declared
+ * here with an opaque chatter type so this file need not pull the
+ * sound header's include chain into the shell build. */
+typedef struct PokeVoiceChatterInfo PokeVoiceChatterInfo;
+extern u32 PokeVoice_Play(u32 species, u32 form, u32 pan, u32 chorus, u32 chorusVolume, u32 chorusSpeed, u32 reverse,
+                          const PokeVoiceChatterInfo *chatterInfo);
 
 /* ------------------------- coverage gate ------------------------- */
 /* SS2.8: the gate is a port-owned table checked before any sprite
@@ -134,6 +156,23 @@ static struct {
     u8 form, sex;
     int shiny;
     int failedSpecies;  /* species whose load failed; don't retry every frame */
+    /* Behaviour Stage 2 (SS5B) -- port RAM only, like everything
+     * else in this struct. See the behaviour section below. */
+    unsigned hiddenFrames; /* consecutive frames not drawn */
+    unsigned popT;         /* ball-pop clock: 0..18, 18 = settled */
+    unsigned idleFrames;   /* frames the player has stood still */
+    VecFx32 lastPos;       /* player position last frame (idle check) */
+    int hopKind;           /* current step's arc: 0 none, 1 ledge, 2 catch-up */
+    unsigned emoteT;       /* frames left in the emote hop pattern */
+    int emoteKind;         /* PBW2_FOL_EMOTE_* while emoteT runs */
+    unsigned talkCooldown; /* frames before another talk can trigger */
+    int healedPending;     /* a heal transition was seen (SS5B.1) */
+    int findPending;       /* a grass find is armed (SS5B.1) */
+    unsigned grassSteps;   /* consecutive steps in grass */
+    u16 seenHp, seenMaxHp; /* last party snapshot's lead vitals */
+    u32 seenStatus;
+    u16 seenSpecies;
+    int seenValid;
 } s_fol;
 
 static u8 s_stripIndices[512 * 64 / 2];
@@ -711,6 +750,56 @@ static int follower_resolve_sprite(const PbW2FollowerFeed *feed) {
     return 1;
 }
 
+/* ----------------- Behaviour Stage 2 helpers (SS5B) ----------------- */
+/* The hop language: every behaviour arc is a parabola over its own
+ * window, in world units. Ledge and catch-up arcs ride the step's
+ * own progress in the draw below; emote and ball-pop arcs run on
+ * their own clocks here. No new rendering surface, no new assets --
+ * the follower's body language is the emote channel. */
+static fx32 fol_parabola(unsigned p, unsigned len, fx32 height) {
+    if (p >= len || len == 0) return 0;
+    return (fx32)(((s64)4 * (s64)p * (s64)(len - p) * (s64)height) / ((s64)len * (s64)len));
+}
+
+static unsigned fol_emote_duration(int kind) {
+    switch (kind) {
+    case PBW2_FOL_EMOTE_HAPPY:
+    case PBW2_FOL_EMOTE_FIND:
+        return 32;
+    case PBW2_FOL_EMOTE_EXCITED:
+    case PBW2_FOL_EMOTE_WORRIED:
+        return 24;
+    default:
+        return 16; /* CALM */
+    }
+}
+
+static fx32 fol_emote_offset(void) {
+    unsigned total = fol_emote_duration(s_fol.emoteKind);
+    unsigned phase = total - s_fol.emoteT; /* 0..total-1 while running */
+    switch (s_fol.emoteKind) {
+    case PBW2_FOL_EMOTE_HAPPY: /* two hops */
+        return fol_parabola(phase % 16, 16, 3 * FX32_ONE);
+    case PBW2_FOL_EMOTE_EXCITED: /* two fast, higher hops */
+        return fol_parabola(phase % 12, 12, 4 * FX32_ONE);
+    case PBW2_FOL_EMOTE_WORRIED: /* one slow, low hop */
+        return fol_parabola(phase, 24, 3 * FX32_ONE / 2);
+    case PBW2_FOL_EMOTE_FIND: /* hop, pause, hop -- presenting */
+        if (phase < 12) return fol_parabola(phase, 12, 3 * FX32_ONE);
+        if (phase < 20) return 0;
+        return fol_parabola(phase - 20, 12, 3 * FX32_ONE);
+    default: /* CALM: one small hop */
+        return fol_parabola(phase, 16, 2 * FX32_ONE);
+    }
+}
+
+/* Grass tile classes (field/map/fieldmap.h), for find arming. */
+static int fol_is_grass(u16 tileClass) {
+    return tileClass == 0x04 || tileClass == 0x05 || tileClass == 0x06 || tileClass == 0x07 ||
+           tileClass == 0x08 || tileClass == 0x09 || tileClass == 0x21 || tileClass == 0x22 ||
+           tileClass == 0x24;
+}
+
 /* ------------------------- draw ------------------------- */
 
 void PbW2_FollowerDraw(void) {
@@ -725,11 +814,13 @@ void PbW2_FollowerDraw(void) {
     }
     if (!s_cfg) {
         s_fol.valid = 0;
+        s_fol.hiddenFrames = 0;
         return;
     }
     const PbW2FollowerFeed *feed = &g_PbW2FollowerFeed;
     if (!feed->valid) {
         s_fol.valid = 0;
+        s_fol.hiddenFrames++;
         return;
     }
     /* Stage 1 hide rules: non-walk avatar states and a script/task
@@ -741,14 +832,18 @@ void PbW2_FollowerDraw(void) {
             s_fol.zone = feed->zoneId;
         }
         s_fol.valid = 0;
+        s_fol.hiddenFrames++;
         s_fol.px = feed->gridX;
         s_fol.pz = feed->gridZ;
         s_fol.ppos = feed->worldPos;
         s_fol.lpos = feed->worldPos;
+        s_fol.lastPos = feed->worldPos;
+        s_fol.idleFrames = 0;
         return;
     }
     if (!follower_resolve_sprite(feed)) {
         s_fol.valid = 0;
+        s_fol.hiddenFrames++;
         return;
     }
 
@@ -756,6 +851,65 @@ void PbW2_FollowerDraw(void) {
      * follower walks to the tile the player just left. */
     VecFx32 pos = feed->worldPos;
     int x = feed->gridX, z = feed->gridZ;
+
+    /* ---- Behaviour Stage 2 bookkeeping (SS5B; port RAM only) ---- */
+    /* Idle: the player standing still in a walk state. */
+    if (pos.x == s_fol.lastPos.x && pos.z == s_fol.lastPos.z) s_fol.idleFrames++;
+    else s_fol.idleFrames = 0;
+    s_fol.lastPos = pos;
+    /* Heal transition (SS5B.2: derivable from the party snapshot,
+     * no game hook): the lead was hurt or statused at the last
+     * snapshot and is now fully healed, with a real HP jump. The
+     * next talk is the healed reaction, and the respawn below pops
+     * with a happy emote -- the Pokemon Center moment. */
+    {
+        const PbW2FollowerPartySlot *lead =
+            feed->leadSlot < PBW2_FOLLOWER_PARTY_SLOTS ? &feed->party[feed->leadSlot] : NULL;
+        if (lead && lead->present) {
+            if (s_fol.seenValid && lead->species == s_fol.seenSpecies &&
+                (s_fol.seenHp < s_fol.seenMaxHp || s_fol.seenStatus != 0) &&
+                lead->maxHp > 0 && lead->hp == lead->maxHp && lead->status == 0 &&
+                lead->hp - s_fol.seenHp >= lead->maxHp / 4) {
+                s_fol.healedPending = 1;
+                Log_Line("FOL", "heal transition seen (species %u) -- healed reaction armed", lead->species);
+            }
+            s_fol.seenHp = lead->hp;
+            s_fol.seenMaxHp = lead->maxHp;
+            s_fol.seenStatus = lead->status;
+            s_fol.seenSpecies = lead->species;
+            s_fol.seenValid = 1;
+        }
+    }
+    /* Respawn correctness: after a warp / door / hide, Stage 1 left
+     * the follower absent until the player's NEXT step re-seeded
+     * the trail -- a player who stands still after arriving had no
+     * follower at all. HGSS pops it back in behind the player; so
+     * do we, once the player has stood still briefly in a stable
+     * zone (the hide rules above have had their frames, and the
+     * ball pop below marks the return). */
+    if (!s_fol.valid && s_fol.hiddenFrames >= 15 && s_fol.idleFrames >= 25) {
+        VecFx32 back = pos;
+        if (feed->faceDir == DIR_UP) back.z += TILE_FX;
+        else if (feed->faceDir == DIR_DOWN) back.z -= TILE_FX;
+        else if (feed->faceDir == DIR_LEFT) back.x += TILE_FX;
+        else if (feed->faceDir == DIR_RIGHT) back.x -= TILE_FX;
+        s_fol.cur = back;
+        s_fol.from = back;
+        s_fol.to = back;
+        s_fol.steps = 1;
+        s_fol.dir = feed->faceDir <= DIR_RIGHT ? (int)feed->faceDir : s_fol.dir;
+        s_fol.valid = 1;
+        s_fol.popT = 0; /* ball pop on the way back in */
+        s_fol.px = x;
+        s_fol.pz = z;
+        s_fol.lpos = pos;
+        if (s_fol.healedPending) {
+            s_fol.emoteKind = PBW2_FOL_EMOTE_HAPPY;
+            s_fol.emoteT = fol_emote_duration(PBW2_FOL_EMOTE_HAPPY);
+        }
+        Log_Line("FOL", "respawn behind idle player (hidden %u frames)", s_fol.hiddenFrames);
+    }
+
     if (x != s_fol.px || z != s_fol.pz) {
         int dx = x - s_fol.px, dz = z - s_fol.pz;
         int ad = (dx < 0 ? -dx : dx) + (dz < 0 ? -dz : dz);
@@ -765,13 +919,33 @@ void PbW2_FollowerDraw(void) {
             s_fol.valid = 0;
         } else {
             VecFx32 left = s_fol.ppos; /* where the player just stood */
+            int wasMoving = s_fol.moving; /* previous step unfinished = it fell behind */
             if (!s_fol.valid) {
                 s_fol.cur = left;
                 s_fol.valid = 1;
+                /* Ball pop when returning from a real absence
+                 * (door / warp / bike / script), not on the very
+                 * first seed of a trail. */
+                s_fol.popT = s_fol.hiddenFrames >= 15 ? 0 : 18;
             }
             s_fol.from = s_fol.cur;
             s_fol.to = left;
             s_fol.steps = ad;
+            /* Hop language: a two-tile step is a ledge (SS5) and
+             * gets the big arc; a step that starts before the last
+             * one finished is the catch-up hop (SS5B.1). */
+            s_fol.hopKind = ad == 2 ? 1 : (wasMoving ? 2 : 0);
+            /* Find arming (SS5B.1): a long walk through grass can
+             * arm one find reaction, delivered on the next talk.
+             * Reaction event only -- port RAM, never a bag write. */
+            if (fol_is_grass(feed->terrainClassAtFollower)) {
+                if (++s_fol.grassSteps >= 90) {
+                    s_fol.findPending = 1;
+                    s_fol.grassSteps = 0;
+                }
+            } else {
+                s_fol.grassSteps = 0;
+            }
             fx32 mdx = s_fol.to.x - s_fol.from.x, mdz = s_fol.to.z - s_fol.from.z;
             if (fol_abs(mdx) > 3 * TILE_FX || fol_abs(mdz) > 3 * TILE_FX) s_fol.from = s_fol.to;
             mdx = s_fol.to.x - s_fol.from.x;
@@ -795,6 +969,33 @@ void PbW2_FollowerDraw(void) {
         s_fol.dir = feed->faceDir <= DIR_RIGHT ? (int)feed->faceDir : s_fol.dir;
     }
 
+    /* Talk-to (SS5B.1): the player is idle, facing the follower's
+     * tile, and pressed A this frame (the feed publishes the pad
+     * edge). The follower turns to face the player, plays its cry
+     * through the game's own cry call, hops its emote, and the
+     * reaction module stages the port-authored line. The game
+     * itself finds no actor on that tile, so nothing else consumes
+     * the press. Port overlay only: no state change anywhere. */
+    if (s_fol.talkCooldown) s_fol.talkCooldown--;
+    if ((feed->pressedKeys & PBW2_PAD_A) && s_fol.talkCooldown == 0 && s_fol.idleFrames >= 3 && !s_fol.moving) {
+        int fx = x, fz = z;
+        if (feed->faceDir == DIR_UP) fz -= 1;
+        else if (feed->faceDir == DIR_DOWN) fz += 1;
+        else if (feed->faceDir == DIR_LEFT) fx -= 1;
+        else if (feed->faceDir == DIR_RIGHT) fx += 1;
+        if (fx == (int)(s_fol.cur.x / TILE_FX) && fz == (int)(s_fol.cur.z / TILE_FX)) {
+            int emote = PbW2_FollowerBehaviourTalk(feed, s_fol.healedPending, s_fol.findPending);
+            s_fol.healedPending = 0;
+            s_fol.findPending = 0;
+            s_fol.emoteKind = emote;
+            s_fol.emoteT = fol_emote_duration(emote);
+            if (feed->faceDir <= DIR_RIGHT) s_fol.dir = (int)feed->faceDir ^ 1;
+            PokeVoice_Play(s_fol.species, s_fol.form, 64, 0, 0, 0, 0, NULL);
+            s_fol.talkCooldown = 90;
+            Log_Line("FOL", "talk: species %u emote %d", s_fol.species, emote);
+        }
+    }
+
     /* Interpolate by the player's own step progress. */
     fx32 done = fol_abs(pos.x - s_fol.lpos.x) + fol_abs(pos.z - s_fol.lpos.z);
     fx32 len = s_fol.steps * TILE_FX;
@@ -809,6 +1010,26 @@ void PbW2_FollowerDraw(void) {
     /* Never stand on the player (first frame after a reversal). */
     if (fol_abs(s_fol.cur.x - pos.x) < 4 * FX32_ONE && fol_abs(s_fol.cur.z - pos.z) < 4 * FX32_ONE && !s_fol.moving) return;
     s_fol.anim++;
+
+    /* Behaviour Stage 2 arcs: ledge / catch-up hops ride this
+     * step's progress t; emote and ball-pop arcs run on their own
+     * clocks. The largest arc wins, so a talking follower that is
+     * also mid-ledge never gets two lifts stacked. */
+    fx32 yOff = 0;
+    if (s_fol.hopKind && s_fol.moving) {
+        fx32 par = (fx32)(((s64)4 * t * (FX32_ONE - t)) >> 12); /* 0..FX32_ONE */
+        fx32 off = (fx32)(((s64)(s_fol.hopKind == 1 ? 5 * FX32_ONE : 3 * FX32_ONE) * par) >> 12);
+        if (off > yOff) yOff = off;
+    }
+    if (s_fol.emoteT) {
+        fx32 off = fol_emote_offset();
+        if (off > yOff) yOff = off;
+        s_fol.emoteT--;
+    }
+    if (s_fol.popT < 18) {
+        fx32 off = fol_parabola(s_fol.popT, 18, 3 * FX32_ONE);
+        if (off > yOff) yOff = off;
+    }
 
     /* Draw a bottom-centred quad at the follower's feet, sized like the
      * game's own billboards (below). The strip stores up, down, right
@@ -826,7 +1047,15 @@ void PbW2_FollowerDraw(void) {
      * read larger still (Nate, Run 4: the Snivy towers over the
      * player). Half-extent = N * 7/16, exact for N = 32 and 64. */
     fx32 half = (fx32)((s_frameSize * 7 / 16) * FX32_ONE);
-    centre.y += half;
+    /* Ball pop: grow in from a quarter size over the pop clock.
+     * Scaling `half` scales the quad and its centre height
+     * together, so the feet stay planted while it grows. */
+    if (s_fol.popT < 18) {
+        fx32 scale = FX32_ONE / 4 + (fx32)(((s64)(FX32_ONE * 3 / 4) * s_fol.popT) / 18);
+        half = (fx32)(((s64)half * scale) >> 12);
+        s_fol.popT++;
+    }
+    centre.y += half + yOff;
     MTX_MultVec43(&centre, &NNS_G3dGlb.cameraMtx, &view);
     view.y += 3 * FX32_ONE; /* field sprites sit ~3 px lower in their cell */
 
@@ -853,4 +1082,5 @@ void PbW2_FollowerDraw(void) {
     G3_TexCoord(s1, 0); G3_Vtx(hw, hw, 0);
     G3_End();
     G3_PopMtx(1);
+    s_fol.hiddenFrames = 0; /* drawn this frame: the absence is over */
 }

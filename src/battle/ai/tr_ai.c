@@ -1099,7 +1099,14 @@ void CheckMove(VM *vm, TrAIContext *wk, u32 op) {
 // The list is 32-bit values, stored as 16-bit halves, and ends with 0xffffffff
 BOOL AIIfResultInList(VM *vm, void *work) {
     TrAIContext *wk = work;
-    const u16 *list = (const u16 *)(vm->pc + (s32)VM_Read32(vm));
+    /* Same sequencing fix as AIJumpByMoveEffect (Build 17): the offset
+     * read must complete BEFORE vm->pc is read for the list base, since
+     * the base is the pc AFTER this argument. Writing it as
+     * vm->pc + VM_Read32(vm) leaves the pc load unsequenced against the
+     * read's side effect (UB) — the 3DS compiler loads the pc first,
+     * putting the list 4 bytes early. */
+    s32 listOffset = VM_Read32(vm);
+    const u16 *list = (const u16 *)(vm->pc + listOffset);
     s32 offset = VM_Read32(vm);
     s32 i = 0;
     u32 value;
@@ -1117,7 +1124,14 @@ BOOL AIIfResultInList(VM *vm, void *work) {
 
 BOOL AIIfResultNotInList(VM *vm, void *work) {
     TrAIContext *wk = work;
-    const u16 *list = (const u16 *)(vm->pc + (s32)VM_Read32(vm));
+    /* Same sequencing fix as AIJumpByMoveEffect (Build 17): the offset
+     * read must complete BEFORE vm->pc is read for the list base, since
+     * the base is the pc AFTER this argument. Writing it as
+     * vm->pc + VM_Read32(vm) leaves the pc load unsequenced against the
+     * read's side effect (UB) — the 3DS compiler loads the pc first,
+     * putting the list 4 bytes early. */
+    s32 listOffset = VM_Read32(vm);
+    const u16 *list = (const u16 *)(vm->pc + listOffset);
     s32 offset = VM_Read32(vm);
     s32 i = 0;
     u32 value;

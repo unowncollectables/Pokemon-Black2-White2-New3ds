@@ -46,6 +46,15 @@ typedef struct {
     u32 terrainAtFollower; /* raw tile type at the follower's tile */
     u32 weatherId;         /* GetNowWeather */
     u16 dayPeriod;         /* Field_GetDayPeriod */
+    /* Behaviour Stage 2 inputs (SS5B): the tile CLASS at the
+     * follower's tile (GetTileClass of the raw type above -- grass /
+     * cave / sand / snow / electric / ledge classes are named in
+     * field/map/fieldmap.h) and the game pad's pressed-this-frame
+     * keys (GCTX_HIDGetPressedKeys; PAD_BUTTON_* in gfl/key.h). The
+     * talk-to check consumes the A edge; publication stays
+     * observation-only, exactly like the rest of the feed. */
+    u16 terrainClassAtFollower;
+    u32 pressedKeys;
     /* Avatar + script ownership: the hide rules' inputs. */
     u32 exState;           /* FLD_PLAYER_EXSTATE_*: walk/cycle/surf/dive */
     BOOL scriptOwnsField;  /* an event/task owns the field this frame */

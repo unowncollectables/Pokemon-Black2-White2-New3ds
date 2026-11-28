@@ -39,6 +39,10 @@
 #include "system/wipe.h"
 #include "system/wordset.h"
 
+#ifdef PBW2_N3DS
+#include "log.h"
+#endif
+
 // The trainer card screen of overlay 186: the card's front and back on the touch screen, which the player flips,
 // scrolls and signs. The ROM has no name for this file; trainer_card.c is a guess
 
@@ -361,6 +365,61 @@ static void TrainerCard_PlayPenSE(TrainerCardWork *wk, int count) {
 
 BOOL TrainerCard_Main(GameProc *proc, u32 *state, void *param, void *work) {
     TrainerCardWork *wk = work;
+
+#ifdef PBW2_N3DS
+    /* Trainer-card stuck-open probe: the screen's exit is a chain of
+     * gates (fade-in wipe -> input -> button-anim gate -> fade-out
+     * wipe), and on hardware the card never leaves. Log the state on
+     * every change, plus a slow heartbeat inside any gated state
+     * carrying that gate's live inputs, so one hardware log names the
+     * gate that never opens. */
+    {
+        static u32 s_lastState = 0xffffffff;
+        static u32 s_frames;
+
+        if (*state != s_lastState || (s_frames % 300) == 0) {
+            switch (*state) {
+            case TRCARD_SEQ_FADE_IN:
+            case TRCARD_SEQ_FADE_OUT:
+                Log_Line("TCD", "screen state=%u wipeFin=%d", *state, GFL_WipeIsFinished());
+                break;
+            case TRCARD_SEQ_RETURN:
+                Log_Line("TCD", "screen state=%u anim=%d seq=%u frame=%u", *state,
+                         ClActor_IsAnimActive(wk->obj.actors[TRCARD_ACTOR_RETURN]),
+                         ClActor_GetSequence(wk->obj.actors[TRCARD_ACTOR_RETURN]),
+                         ClActor_GetAnimFrame(wk->obj.actors[TRCARD_ACTOR_RETURN]));
+                break;
+            case TRCARD_SEQ_EXIT:
+                Log_Line("TCD", "screen state=%u anim=%d seq=%u frame=%u", *state,
+                         ClActor_IsAnimActive(wk->obj.actors[TRCARD_ACTOR_EXIT]),
+                         ClActor_GetSequence(wk->obj.actors[TRCARD_ACTOR_EXIT]),
+                         ClActor_GetAnimFrame(wk->obj.actors[TRCARD_ACTOR_EXIT]));
+                break;
+            case TRCARD_SEQ_BADGES:
+                Log_Line("TCD", "screen state=%u anim=%d seq=%u frame=%u", *state,
+                         ClActor_IsAnimActive(wk->obj.actors[TRCARD_ACTOR_BADGES]),
+                         ClActor_GetSequence(wk->obj.actors[TRCARD_ACTOR_BADGES]),
+                         ClActor_GetAnimFrame(wk->obj.actors[TRCARD_ACTOR_BADGES]));
+                break;
+            case TRCARD_SEQ_MEDALS:
+                Log_Line("TCD", "screen state=%u anim=%d seq=%u frame=%u", *state,
+                         ClActor_IsAnimActive(wk->obj.actors[TRCARD_ACTOR_RANK]),
+                         ClActor_GetSequence(wk->obj.actors[TRCARD_ACTOR_RANK]),
+                         ClActor_GetAnimFrame(wk->obj.actors[TRCARD_ACTOR_RANK]));
+                break;
+            case TRCARD_SEQ_MAIN:
+                Log_Line("TCD", "screen state=%u touch=%d held=0x%x", *state, wk->touchMode,
+                         GCTX_HIDGetHeldKeys());
+                break;
+            default:
+                Log_Line("TCD", "screen state=%u subSeq=%u", *state, wk->subSeq);
+                break;
+            }
+            s_lastState = *state;
+        }
+        s_frames++;
+    }
+#endif
 
     switch (*state) {
     case TRCARD_SEQ_FADE_IN:
@@ -1495,6 +1554,14 @@ static int TrainerCard_Input(TrainerCardWork *wk) {
 }
 
 static void TrainerCard_HandleInput(TrainerCardWork *wk, int input, u32 *state) {
+#ifdef PBW2_N3DS
+    /* Stuck-open probe: every real input the screen acts on. If B or
+     * the return button is pressed on hardware and no line appears,
+     * the input never became an INPUT_* value at all. */
+    if (input != TRCARD_INPUT_NONE) {
+        Log_Line("TCD", "input=%d touch=%d side=%u", input, wk->touchMode, wk->side);
+    }
+#endif
     switch (input) {
     case TRCARD_INPUT_FLIP:
         wk->subSeq = STEP_FLIP_START;

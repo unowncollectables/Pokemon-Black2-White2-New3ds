@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "g3_raster.h"
 
+#include "g3_replay.h"
 #include "nitro/gx.h"
 #include "vram_host.h"
 #ifdef PBW2_GPU_GEOMETRY
@@ -81,6 +82,17 @@ static u16 s_display[MAX_PIXELS];
 static float s_displayDepth[MAX_PIXELS];
 static bool s_publishDepth, s_displayHasDepth;
 static float s_displayDepthRef = 1.0f;
+/* GX record/replay (g3_replay.c): the right-eye geometry frame,
+ * rendered by replaying the published frame's recorded command
+ * stream with a shifted projection. Valid only for the publish
+ * generation in s_rightGeneration; the compositor's stereo entry
+ * point checks the pairing under the display lock and falls back to
+ * reprojection of s_display on any mismatch. Written only by
+ * PbW2_G3RasterPublishReplay, on the game thread at swap time. */
+static u16 s_displayRight[MAX_PIXELS];
+static unsigned s_rightWidth = WIDTH;
+static unsigned s_rightGeneration;
+static bool s_rightValid;
 /* Bumps on every publish that replaces s_display (and on reset).
  * The compositor's main-engine frame cache keys on it: while the
  * generation is unchanged, the published 3D layer is unchanged. */
@@ -106,11 +118,12 @@ static u16 s_vertexColor, s_diffuse, s_ambient, s_specular, s_emission;
 static unsigned s_lightMask;
 static bool s_useShininess;
 static u8 s_shininess[128];
-static struct {
+typedef struct {
     s16 direction[3];
     s32 specularReciprocal;
     u16 color;
-} s_lights[4];
+} LightState;
+static LightState s_lights[4];
 static u32 s_polygon, s_texture, s_palette, s_viewport;
 static u32 s_clearColor;
 static unsigned s_clearDepth;
@@ -122,12 +135,13 @@ static bool s_highlight;
 static u16 s_toon[32];
 static bool s_edgeEnabled;
 static u16 s_edgeColors[8];
-static struct {
+typedef struct {
     bool enabled, alphaOnly;
     unsigned offset, shift;
     u32 color;
     u8 density[32];
-} s_fog;
+} FogState;
+static FogState s_fog;
 enum { FOG_ENABLED = 0x80, FOG_CLEAR_DEPTH = 0x40 };
 #ifdef PBW2_GPU_GEOMETRY
 enum { GPU_TRIANGLES_MAX = 8192, GPU_TEXTURES_MAX = 256 };
@@ -218,6 +232,7 @@ void PbW2_G3RasterReset(void) {
     s_publishGeneration++;
     s_displayWidth = WIDTH;
     s_publishedCapture = false;
+    s_rightValid = false;
 #ifdef PBW2_GPU_GEOMETRY
     s_haveNative = false;
     s_previousGpuFrame = false;
@@ -242,6 +257,174 @@ void PbW2_G3RasterReset(void) {
     memset(s_lights, 0, sizeof s_lights);
     s_texture = s_palette = 0;
     s_viewport = GX_PACK_VIEWPORT_PARAM(0, 0, WIDTH - 1, HEIGHT - 1);
+    PbW2_G3ReplayInvalidate();
+}
+
+/* Defined below; the replay publish mirrors publish_swap's tail. */
+static void start_frame(void);
+static void apply_edge_colors(void);
+static void apply_fog(void);
+
+/* GX record/replay: the rasterizer's complete per-frame state — every
+ * attribute and register snapshot a command can observe. Deliberately
+ * NOT included: the published display state (s_display and its kin —
+ * replay publishes to its own buffer), host configuration
+ * (s_wideEnabled, s_publishDepth, s_requestedWBuffer, the deferred
+ * swap flags — replay eligibility already excludes deferred swaps),
+ * diagnostics (s_sceneSwaps, the fallback mask, the rate window —
+ * the replay publish must not re-fire them), the GPU batch and reuse
+ * state (replay is CPU-frame-only; on CPU frames the batch arrays
+ * are never read, and start_frame resets their counters, which ARE
+ * included below), and the follower texture (read-only while a frame
+ * renders). s_drawing is excluded for the reason given in
+ * g3_replay.c: its contents are dead after publish. */
+typedef struct {
+    unsigned width;
+    bool frameCapture, widePrimitive;
+    int frameStarted, inPrimitive;
+    unsigned primitive, count;
+    ClipVertex strip[4];
+    s16 xyz[3];
+    s16 rawTexcoord[2], texcoord[2];
+    u16 vertexColor, diffuse, ambient, specular, emission;
+    unsigned lightMask;
+    bool useShininess;
+    u8 shininess[128];
+    LightState lights[4];
+    u32 polygon, texture, palette, viewport;
+    u32 clearColor;
+    unsigned clearDepth;
+    bool wBuffer, previousShadowMask;
+    bool alphaTest;
+    unsigned alphaRef;
+    bool highlight;
+    u16 toon[32];
+    bool edgeEnabled;
+    u16 edgeColors[8];
+    FogState fog;
+#ifdef PBW2_GPU_GEOMETRY
+    unsigned gpuCount, gpuMaterialCount, lastMaterial;
+    u32 gpuSourceBanks;
+    bool gpuFrame, reusedFrame, nativeFrame;
+#endif
+} RasterState;
+
+size_t PbW2_G3RasterStateSize(void) {
+    return sizeof(RasterState);
+}
+
+void PbW2_G3RasterStateSave(void *dst) {
+    RasterState *state = dst;
+    state->width = s_width;
+    state->frameCapture = s_frameCapture;
+    state->widePrimitive = s_widePrimitive;
+    state->frameStarted = s_frameStarted;
+    state->inPrimitive = s_inPrimitive;
+    state->primitive = s_primitive;
+    state->count = s_count;
+    memcpy(state->strip, s_strip, sizeof state->strip);
+    memcpy(state->xyz, s_xyz, sizeof state->xyz);
+    memcpy(state->rawTexcoord, s_rawTexcoord, sizeof state->rawTexcoord);
+    memcpy(state->texcoord, s_texcoord, sizeof state->texcoord);
+    state->vertexColor = s_vertexColor;
+    state->diffuse = s_diffuse;
+    state->ambient = s_ambient;
+    state->specular = s_specular;
+    state->emission = s_emission;
+    state->lightMask = s_lightMask;
+    state->useShininess = s_useShininess;
+    memcpy(state->shininess, s_shininess, sizeof state->shininess);
+    memcpy(state->lights, s_lights, sizeof state->lights);
+    state->polygon = s_polygon;
+    state->texture = s_texture;
+    state->palette = s_palette;
+    state->viewport = s_viewport;
+    state->clearColor = s_clearColor;
+    state->clearDepth = s_clearDepth;
+    state->wBuffer = s_wBuffer;
+    state->previousShadowMask = s_previousShadowMask;
+    state->alphaTest = s_alphaTest;
+    state->alphaRef = s_alphaRef;
+    state->highlight = s_highlight;
+    memcpy(state->toon, s_toon, sizeof state->toon);
+    state->edgeEnabled = s_edgeEnabled;
+    memcpy(state->edgeColors, s_edgeColors, sizeof state->edgeColors);
+    state->fog = s_fog;
+#ifdef PBW2_GPU_GEOMETRY
+    state->gpuCount = s_gpuCount;
+    state->gpuMaterialCount = s_gpuMaterialCount;
+    state->lastMaterial = s_lastMaterial;
+    state->gpuSourceBanks = s_gpuSourceBanks;
+    state->gpuFrame = s_gpuFrame;
+    state->reusedFrame = s_reusedFrame;
+    state->nativeFrame = s_nativeFrame;
+#endif
+}
+
+void PbW2_G3RasterStateRestore(const void *src) {
+    const RasterState *state = src;
+    s_width = state->width;
+    s_frameCapture = state->frameCapture;
+    s_widePrimitive = state->widePrimitive;
+    s_frameStarted = state->frameStarted;
+    s_inPrimitive = state->inPrimitive;
+    s_primitive = state->primitive;
+    s_count = state->count;
+    memcpy(s_strip, state->strip, sizeof s_strip);
+    memcpy(s_xyz, state->xyz, sizeof s_xyz);
+    memcpy(s_rawTexcoord, state->rawTexcoord, sizeof s_rawTexcoord);
+    memcpy(s_texcoord, state->texcoord, sizeof s_texcoord);
+    s_vertexColor = state->vertexColor;
+    s_diffuse = state->diffuse;
+    s_ambient = state->ambient;
+    s_specular = state->specular;
+    s_emission = state->emission;
+    s_lightMask = state->lightMask;
+    s_useShininess = state->useShininess;
+    memcpy(s_shininess, state->shininess, sizeof s_shininess);
+    memcpy(s_lights, state->lights, sizeof s_lights);
+    s_polygon = state->polygon;
+    s_texture = state->texture;
+    s_palette = state->palette;
+    s_viewport = state->viewport;
+    s_clearColor = state->clearColor;
+    s_clearDepth = state->clearDepth;
+    s_wBuffer = state->wBuffer;
+    s_previousShadowMask = state->previousShadowMask;
+    s_alphaTest = state->alphaTest;
+    s_alphaRef = state->alphaRef;
+    s_highlight = state->highlight;
+    memcpy(s_toon, state->toon, sizeof s_toon);
+    s_edgeEnabled = state->edgeEnabled;
+    memcpy(s_edgeColors, state->edgeColors, sizeof s_edgeColors);
+    s_fog = state->fog;
+#ifdef PBW2_GPU_GEOMETRY
+    s_gpuCount = state->gpuCount;
+    s_gpuMaterialCount = state->gpuMaterialCount;
+    s_lastMaterial = state->lastMaterial;
+    s_gpuSourceBanks = state->gpuSourceBanks;
+    s_gpuFrame = state->gpuFrame;
+    s_reusedFrame = state->reusedFrame;
+    s_nativeFrame = state->nativeFrame;
+#endif
+}
+
+/* The replay's publish: publish_swap's CPU tail (finish the software
+ * frame, copy it out under the display lock) with none of its side
+ * effects — no generation bump, no rate/scene logging, no GPU reuse
+ * bookkeeping. The result lands in the right-eye buffer, paired with
+ * the generation the live pass just published. Called by g3_replay.c
+ * only, after a recorded stream has been re-executed. */
+void PbW2_G3RasterPublishReplay(void) {
+    start_frame();
+    apply_edge_colors();
+    apply_fog();
+    lock_display();
+    s_rightWidth = s_width;
+    memcpy(s_displayRight, s_drawing.color, s_width * HEIGHT * sizeof(*s_displayRight));
+    s_rightGeneration = s_publishGeneration;
+    s_rightValid = true;
+    unlock_display();
 }
 
 static float clear_w(void) {
@@ -830,6 +1013,9 @@ void PbW2_G3RasterInvalidateZone(void) {
     memset(s_paletteSpans, 0, sizeof s_paletteSpans);
     s_previousGpuFrame = false;
 #endif
+    /* A frame spanning a zone change sampled two different VRAM
+     * mappings; it must never be replayed. */
+    PbW2_G3ReplayInvalidate();
 }
 
 static PicaTextureKey texture_cache_key(const Texture *tex, unsigned material) {
@@ -1349,6 +1535,19 @@ static void publish_swap(u32 flags, bool afterVBlank) {
     s_publishGeneration++;
     unlock_display();
     s_frameStarted = s_inPrimitive = 0;
+    /* GX record/replay: report the publish. Only a synchronous,
+     * CPU-rendered, non-capture publish can be replayed (see
+     * g3_replay.c); a deferred publish also taints the frame now
+     * being recorded. The reused-frame early return above never
+     * reaches this, so a reused frame keeps the previous publish's
+     * right-eye pairing, exactly like its colour image. */
+    {
+        bool replayEligible = !afterVBlank && !s_publishedCapture;
+#ifdef PBW2_GPU_GEOMETRY
+        replayEligible = replayEligible && !s_gpuFrame && !s_reusedFrame;
+#endif
+        PbW2_G3ReplayNotePublish(replayEligible, afterVBlank);
+    }
 }
 
 /* What the frame actually on screen is, as published by the last
@@ -1467,20 +1666,25 @@ void PbW2_G3RasterCommand(u32 op, const u32 *p, const MtxFx44 *clip,
     emit_vertex(clip, texture);
 }
 
-bool PbW2_G3RasterComposite(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawColors, u16 *sides, u16 backdrop,
-                            const u16 **native, u32 *ink, int eyeShiftPx) {
-    lock_display();
+/* The composite body, with the display lock held by the caller.
+ * src/srcWidth/srcHasDepth select the published image to sample:
+ * s_display for the live frame, s_displayRight for the replayed
+ * right-eye geometry frame. The native-frame handoff only ever
+ * applies to the live frame (GPU frames are never replayed). */
+static bool composite_body(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawColors, u16 *sides, u16 backdrop,
+                           const u16 **native, u32 *ink, int eyeShiftPx,
+                           const u16 *src, unsigned srcWidth, bool srcHasDepth) {
     if (native) *native = NULL;
 #ifdef PBW2_GPU_GEOMETRY
-    if (native && s_haveNative && s_nativeReader == NATIVE_BUFFERS) {
+    if (native && src == s_display && s_haveNative && s_nativeReader == NATIVE_BUFFERS) {
         s_nativeReader = s_nativeDisplayed;
         *native = s_nativeFrames[s_nativeReader];
     }
 #endif
-    const int rowBase = (int)(s_displayWidth - WIDTH) / 2;
+    const int rowBase = (int)(srcWidth - WIDTH) / 2;
     for (unsigned y = 0; y < HEIGHT; ++y) {
-        const u16 *row = s_display + y * s_displayWidth + (s_displayWidth - WIDTH) / 2;
-        if (sides && s_displayWidth == WIDE_WIDTH) {
+        const u16 *row = src + y * srcWidth + (srcWidth - WIDTH) / 2;
+        if (sides && srcWidth == WIDE_WIDTH) {
             for (int x = 0; x < 64; ++x) {
                 u16 p = row[x < 32 ? x - 32 : WIDTH + x - 32];
                 unsigned edge = x < 32 ? 0 : WIDTH - 1;
@@ -1500,14 +1704,14 @@ bool PbW2_G3RasterComposite(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawC
                  * (transparent) shifted sample falls back to the
                  * unshifted pixel, so silhouettes never tear open. */
                 int off = eyeShiftPx;
-                if (s_displayHasDepth) {
-                    float dn = s_displayDepth[y * s_displayWidth + rowBase + (int)x] / s_displayDepthRef;
+                if (srcHasDepth) {
+                    float dn = s_displayDepth[y * srcWidth + rowBase + (int)x] / s_displayDepthRef;
                     if (dn < 0.0f) dn = 0.0f;
                     else if (dn > 1.0f) dn = 1.0f;
                     off = (int)lroundf(eyeShiftPx * (dn - 0.35f) * (1.0f / 0.65f));
                 }
                 int sx = (int)x + off;
-                pixel = (sx >= -rowBase && sx < (int)s_displayWidth - rowBase) ? row[sx] : 0;
+                pixel = (sx >= -rowBase && sx < (int)srcWidth - rowBase) ? row[sx] : 0;
                 if (!(pixel & 0x8000)) pixel = row[x];
             } else {
                 pixel = row[x];
@@ -1521,7 +1725,44 @@ bool PbW2_G3RasterComposite(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawC
             }
         }
     }
-    bool wide = sides && s_displayWidth == WIDE_WIDTH;
+    bool wide = sides && srcWidth == WIDE_WIDTH;
+    return wide;
+}
+
+bool PbW2_G3RasterComposite(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawColors, u16 *sides, u16 backdrop,
+                            const u16 **native, u32 *ink, int eyeShiftPx) {
+    lock_display();
+    bool wide = composite_body(rgb565, window, planes, rawColors, sides, backdrop, native, ink, eyeShiftPx,
+                               s_display, s_displayWidth, s_displayHasDepth);
+    unlock_display();
+    return wide;
+}
+
+/* Stereo entry point (ds2d_compose, eye passes only): when the
+ * record/replay layer produced a right-eye geometry frame for the
+ * currently published generation, the right eye samples it directly
+ * (a true second viewpoint, no reprojection) and the left eye is the
+ * live frame unshifted — the live frame is the reference eye, and
+ * the replay was shifted by the full inter-eye separation. On any
+ * mismatch (GPU frame, deferred swap, capture, overflow, slider
+ * just raised) this is exactly PbW2_G3RasterComposite with the
+ * caller's shift: the depth-graded reprojection path. */
+bool PbW2_G3RasterCompositeStereo(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawColors, u16 *sides,
+                                  u16 backdrop, const u16 **native, u32 *ink, int eyeShiftPx) {
+    lock_display();
+    bool wide;
+    if (eyeShiftPx && s_rightValid && s_rightGeneration == s_publishGeneration &&
+        s_rightWidth == s_displayWidth) {
+        if (eyeShiftPx > 0)
+            wide = composite_body(rgb565, window, planes, rawColors, sides, backdrop, native, ink, 0,
+                                  s_displayRight, s_rightWidth, false);
+        else
+            wide = composite_body(rgb565, window, planes, rawColors, sides, backdrop, native, ink, 0,
+                                  s_display, s_displayWidth, false);
+    } else {
+        wide = composite_body(rgb565, window, planes, rawColors, sides, backdrop, native, ink, eyeShiftPx,
+                              s_display, s_displayWidth, s_displayHasDepth);
+    }
     unlock_display();
     return wide;
 }

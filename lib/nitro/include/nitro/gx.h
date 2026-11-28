@@ -1787,13 +1787,26 @@ GX_DEFINE_BG_MOSAIC(G2S_BG3Mosaic, reg_G2S_DB_BG3CNT)
 
 #define REG_G2_MOSAIC_BGVSIZE_SHIFT 4
 
+// The mosaic size registers, routed through the host I/O shadow under
+// PBW2_N3DS like every other display register (reg_GX_MASTER_BRIGHT &c).
+// The raw DS addresses 0x0400004c/0x0400104c are unmapped on the 3DS: the
+// unguarded write here crashed the summary screen's redraw mosaic
+// (PStatus_UpdateRedraw) with a data abort on real hardware.
+#ifdef PBW2_N3DS
+#define reg_G2_MOSAIC PBW2_VU8(REG_MOSAIC_ADDR)
+#define reg_G2S_MOSAIC PBW2_VU8(REG_DB_MOSAIC_ADDR)
+#else
+#define reg_G2_MOSAIC (*(vu8 *)REG_MOSAIC_ADDR)
+#define reg_G2S_MOSAIC (*(vu8 *)REG_DB_MOSAIC_ADDR)
+#endif
+
                                                                                 static inline void G2_SetBGMosaicSize(
                                                                                     int hSize, int vSize) {
-    *(vu8 *)REG_MOSAIC_ADDR = (u8)(hSize | (vSize << REG_G2_MOSAIC_BGVSIZE_SHIFT));
+    reg_G2_MOSAIC = (u8)(hSize | (vSize << REG_G2_MOSAIC_BGVSIZE_SHIFT));
 }
 
 static inline void G2S_SetBGMosaicSize(int hSize, int vSize) {
-    *(vu8 *)REG_DB_MOSAIC_ADDR = (u8)(hSize | (vSize << REG_G2_MOSAIC_BGVSIZE_SHIFT));
+    reg_G2S_MOSAIC = (u8)(hSize | (vSize << REG_G2_MOSAIC_BGVSIZE_SHIFT));
 }
 // clang-format off
 

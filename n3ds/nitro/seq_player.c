@@ -178,7 +178,7 @@ typedef struct {
     BOOL stopAtFadeEnd;
     BOOL paused;
     int tempoRatio; /* 256 = 1.0 */
-    u32 noteCount, droppedNotes;
+    u32 noteCount, droppedNotes, gatedNotes;
     unsigned missingWave, synthesisFailed, channelUnavailable, queueFailed;
     SeqTrack tracks[SEQ_TRACKS];
 } SeqSlot;
@@ -773,6 +773,19 @@ static void seq_note_on(SeqSlot *slot, int trackIdx, int note, int velocity, u32
     float releaseSeconds = 0.0f;
 
     if (track->muted) return;
+    /* Volume-0 gate, mirroring the mute path: a track faded fully to
+     * 0 (the ISS movement/proximity gate via SetTrackVolume, or an
+     * authored 0xC1 volume of 0) is silent by design, so its notes
+     * must not resolve waves, consume voices, inflate noteCount, or
+     * count as drops. They are accounted separately in gatedNotes.
+     * Only an exact 0 gates: during a partial fade (volume 1..127)
+     * notes still sound at the faded volume, as on the original.
+     * Placed before the tie continuation so a tied gated note cannot
+     * re-enter through seq_continue_tied_note either. */
+    if (track->volume == 0) {
+        ++slot->gatedNotes;
+        return;
+    }
     if (track->tie && seq_continue_tied_note(slot, trackIdx, note, velocity)) return;
     /* Retrigger the same pitch on this track. */
     for (i = 0; i < SEQ_TRACK_NOTES; ++i) {
@@ -1075,9 +1088,9 @@ static void seq_finish_slot(int idx) {
         for (n = 0; n < SEQ_TRACK_NOTES; ++n) seq_note_off(slot, t, n);
     }
     if (slot->handle && slot->handle->player == (struct NNSSndSeqPlayer *)slot) slot->handle->player = NULL;
-    Log_Line("AUDIO", "SeqPlayer seq=%d finished: %lu notes, %lu dropped, %lu ticks",
+    Log_Line("AUDIO", "SeqPlayer seq=%d finished: %lu notes, %lu dropped, gated=%lu, %lu ticks",
              slot->seqNo, (unsigned long)slot->noteCount, (unsigned long)slot->droppedNotes,
-             (unsigned long)slot->tick);
+             (unsigned long)slot->gatedNotes, (unsigned long)slot->tick);
     if (slot->droppedNotes)
         Log_Line("AUDIO", "SeqPlayer seq=%d drop reasons: wave=%u synth=%u channels=%u queue=%u",
                  slot->seqNo, slot->missingWave, slot->synthesisFailed, slot->channelUnavailable, slot->queueFailed);

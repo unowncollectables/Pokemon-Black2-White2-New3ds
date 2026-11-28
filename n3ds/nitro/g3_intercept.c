@@ -7,6 +7,7 @@
 #if defined(PBW2_LINK_GAME)
 
 #include "g3_raster.h"
+#include "g3_replay.h"
 #include "nitro/gx.h"
 #include "types.h"
 
@@ -35,6 +36,70 @@ static unsigned s_mode, s_depth;
 static MtxFx44 s_clip;
 static int s_clipDirty;
 
+/* GX record/replay (g3_replay.c): while s_replaying is set, commands
+ * are being re-executed from a recorded stream — test commands are
+ * suppressed and the clip matrix carries the right eye's projection
+ * shift. s_recActive caches the recorder's state so the per-command
+ * cost while recording is off is a single branch. */
+static bool s_replaying;
+static float s_replayShift;
+static bool s_recActive;
+
+/* The intercept's complete state, for the recorder's frame-start /
+ * frame-end snapshots. The packet decoder state is excluded: it is
+ * always empty at a command boundary, and replay feeds whole commands
+ * directly, bypassing the decoder. */
+typedef struct {
+    MtxFx44 matrix[4];
+    MtxFx44 positionStack[32], vectorStack[32];
+    MtxFx44 projectionStack, textureStack;
+    MtxFx44 clip;
+    unsigned mode, depth;
+    int clipDirty;
+} InterceptState;
+
+size_t PbW2_G3InterceptStateSize(void) {
+    return sizeof(InterceptState);
+}
+
+void PbW2_G3InterceptStateSave(void *dst) {
+    InterceptState *state = dst;
+    memcpy(state->matrix, s_matrix, sizeof state->matrix);
+    memcpy(state->positionStack, s_positionStack, sizeof state->positionStack);
+    memcpy(state->vectorStack, s_vectorStack, sizeof state->vectorStack);
+    state->projectionStack = s_projectionStack;
+    state->textureStack = s_textureStack;
+    state->clip = s_clip;
+    state->mode = s_mode;
+    state->depth = s_depth;
+    state->clipDirty = s_clipDirty;
+}
+
+void PbW2_G3InterceptStateRestore(const void *src) {
+    const InterceptState *state = src;
+    memcpy(s_matrix, state->matrix, sizeof s_matrix);
+    memcpy(s_positionStack, state->positionStack, sizeof s_positionStack);
+    memcpy(s_vectorStack, state->vectorStack, sizeof s_vectorStack);
+    s_projectionStack = state->projectionStack;
+    s_textureStack = state->textureStack;
+    s_clip = state->clip;
+    s_mode = state->mode;
+    s_depth = state->depth;
+    s_clipDirty = state->clipDirty;
+}
+
+void PbW2_G3InterceptReplayBegin(float ndcShiftX) {
+    s_replaying = true;
+    s_replayShift = ndcShiftX;
+    s_clipDirty = 1;
+}
+
+void PbW2_G3InterceptReplayEnd(void) {
+    s_replaying = false;
+    s_replayShift = 0.0f;
+    s_clipDirty = 1;
+}
+
 void PbW2_G3InterceptInit(void) {
     memset(&s_packet, 0, sizeof s_packet);
     for (unsigned i = 0; i < 4; ++i) {
@@ -49,7 +114,11 @@ void PbW2_G3InterceptInit(void) {
     s_mode = GX_MTXMODE_PROJECTION;
     s_depth = 0;
     s_clipDirty = 1;
+    s_replaying = false;
+    s_replayShift = 0.0f;
+    s_recActive = false;
     PbW2_G3RasterReset();
+    PbW2_G3ReplayInit();
 }
 
 static void store_matrix(unsigned index, int restore) {
@@ -102,7 +171,13 @@ static void box_test(const u32 *params) {
     if (!outside) reg_G3X_GXSTAT |= REG_G3X_GXSTAT_TR_MASK;
 }
 
-void PbW2_G3Command(u32 opcode, const u32 *p) {
+static void g3_command_impl(u32 opcode, const u32 *p) {
+    /* Replay suppression: the test commands must not re-run. BOX_TEST
+     * writes GXSTAT bits the game reads back, and under the shifted
+     * projection its answer could differ from the live test the
+     * recorded geometry was submitted under; POS_TEST / VEC_TEST are
+     * no-ops in the rasterizer already. None of them affects a pixel. */
+    if (s_replaying && (opcode == G3OP_BOX_TEST || opcode == 0x71 || opcode == 0x72)) return;
     MtxFx44 matrix;
     unsigned mode = s_mode == GX_MTXMODE_POSITION_VECTOR ? GX_MTXMODE_POSITION : s_mode;
     int load = opcode <= G3OP_MTX_LOAD_4x3;
@@ -174,6 +249,29 @@ void PbW2_G3Command(u32 opcode, const u32 *p) {
     }
 }
 
+/* The single GX command entry point — and the record/replay layer's
+ * record point (see g3_replay.c for the audit). Commands are recorded
+ * post-decoder, exactly as executed; SWAP_BUFFERS is the frame
+ * delimiter and is never recorded: the recorder is notified after it
+ * has been fully processed, which is also where a replay of the
+ * just-closed frame runs. Replayed commands enter here too (the
+ * recorder feeds them) and skip both hooks. */
+void PbW2_G3Command(u32 opcode, const u32 *p) {
+    if (s_replaying) {
+        g3_command_impl(opcode, p);
+        return;
+    }
+    if (opcode == 0x50) { /* G3OP_SWAP_BUFFERS */
+        g3_command_impl(opcode, p);
+        PbW2_G3ReplayFrameSwapped();
+        s_recActive = PbW2_G3ReplayRecording();
+        return;
+    }
+    if (s_recActive)
+        PbW2_G3ReplayRecord(opcode, p, opcode < sizeof s_arguments ? s_arguments[opcode] : 0);
+    g3_command_impl(opcode, p);
+}
+
 void PbW2_G3FifoWord(u32 word) {
     if (s_packet.remaining == 0) {
         s_packet.opcodes = word;
@@ -202,6 +300,18 @@ void PbW2_G3RecordFifo(const void *src, u32 words) {
 
 int G3X_GetClipMtx(MtxFx44 *dest) {
     MTX_Concat44(&s_matrix[GX_MTXMODE_POSITION], &s_matrix[GX_MTXMODE_PROJECTION], dest);
+    if (s_replaying && s_replayShift != 0.0f) {
+        /* Per-eye geometry: shift clip X by a fraction of clip W, so
+         * the perspective divide moves every vertex by the same NDC
+         * offset — a true second viewpoint of the recorded scene,
+         * not a layer shift. Only the replay's private clip matrix
+         * (a local copy here, or the intercept's cached s_clip via
+         * update_clip_matrix) is modified; the game-visible matrix
+         * state is the restored snapshot and ReplayEnd clears this
+         * before any live command can observe it. */
+        for (unsigned row = 0; row < 4; ++row)
+            dest->m[row][0] += (fx32)(s_replayShift * (float)dest->m[row][3]);
+    }
     return 0;
 }
 

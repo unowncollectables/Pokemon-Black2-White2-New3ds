@@ -14,6 +14,7 @@ void Pbw2_GspVblank(void) {
 #include "ds2d_compose.h"
 #include "game_present.h"
 #include "g3_raster.h"
+#include "g3_replay.h"
 #include "game_text.h"
 #include "vram_host.h"
 #include "workers.h"
@@ -224,9 +225,16 @@ void GxShim_Present(uint32_t flags) {
                 gfxSet3D(wantStereo);
                 s_stereoOn = wantStereo;
                 PbW2_G3RasterSetDepthPublish(wantStereo);
+                /* Arm the GX recorder with the same gate: while the
+                 * slider is up it retains each frame's command stream
+                 * so the rasterizer can replay it into a true
+                 * right-eye geometry frame (g3_replay.c). Slider down
+                 * disarms it and the flat path is exactly as before. */
+                PbW2_G3ReplaySetArmed(wantStereo);
                 Log_Line("GX", "stereo %s", wantStereo ? "on" : "off");
             }
             int eyeShift = s_stereoOn ? (int)(6.0f * slider + 0.5f) : 0;
+            if (s_stereoOn) PbW2_G3ReplaySetShiftPx(2 * eyeShift);
             if (s_stereoOn) PbW2_ComposeSetEyeShift(-eyeShift);
             /* Compose in phases (Build 19): Begin samples the frame's
              * LCD routing; the sub engine then composes on the worker

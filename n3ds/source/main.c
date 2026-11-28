@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "audio.h"
 #include "config.h"
+#include "follower_behaviour.h"
 #include "fps_overlay.h"
 #include "host.h"
 #include "input.h"
@@ -253,6 +254,13 @@ int main(int argc, char **argv) {
             if (flags & PBW2_SCREEN_TOP) Settings_DrawTop();
         } else if ((flags & PBW2_SCREEN_TOP) && Settings_FpsCounterOn() && PbW2_GameHasPresented()) {
             FpsOverlay_Draw();
+        }
+        /* Followers Behaviour Stage 2: the talk-reaction line,
+         * staged by the game thread, drawn here on the host's
+         * present pass (bottom of the top screen; the FPS block
+         * owns the top-left, so they never overlap). */
+        if ((flags & PBW2_SCREEN_TOP) && !Settings_Open() && PbW2_GameHasPresented()) {
+            PbW2_FollowerTalkOverlay();
         }
         u64 flushStart = svcGetSystemTick();
 #endif
