@@ -682,6 +682,47 @@ static void prepare_obj_scene(ObjScene *scene, u32 dc, int is_sub) {
     }
 }
 
+static inline void put_obj_pixel(const ObjScene *scene, u16 *out, BgBlend *blend, u8 *window,
+                                 u8 inside, unsigned pixel, unsigned paletteIndex) {
+    if (!out) window[pixel] = inside;
+    else if (!window || (window[pixel] & GX_WND_PLANEMASK_OBJ)) {
+        u16 color = rgb555_to_565(scene->palette[paletteIndex]);
+        out[pixel] = color;
+        if (blend && blend->ink) blend->ink[pixel] = 0;
+        if (blend && blend->track) {
+            if (blend->first) blend->colors[pixel] = color;
+            blend->planes[pixel] = GX_WND_PLANEMASK_OBJ;
+        }
+    }
+}
+
+/* An untransformed OBJ uses contiguous eight-pixel tile rows, including
+ * when flipped. Skip transparent rows without visiting individual texels. */
+static void draw_obj_tile_row(const ObjScene *scene, u16 *out, BgBlend *blend, u8 *window, u8 inside,
+                              unsigned dst, unsigned count, unsigned px, bool flipped, unsigned base,
+                              bool bpp8, unsigned paletteBase) {
+    while (count) {
+        unsigned start = px & 7;
+        unsigned span = flipped ? start + 1 : 8 - start;
+        if (span > count) span = count;
+        const u8 *row = scene->vram + ((base + (px >> 3) * (bpp8 ? 64 : 32)) & 0x3ffffu);
+        u32 lo;
+        memcpy(&lo, row, sizeof lo);
+        u32 hi = 0;
+        if (bpp8) memcpy(&hi, row + 4, sizeof hi);
+        if (lo | hi) {
+            for (unsigned i = 0; i < span; ++i) {
+                unsigned tx = flipped ? start - i : start + i;
+                unsigned ci = bpp8 ? row[tx] : (lo >> (4 * tx)) & 15;
+                if (ci) put_obj_pixel(scene, out, blend, window, inside, dst + i, paletteBase + ci);
+            }
+        }
+        px = flipped ? px - span : px + span;
+        count -= span;
+        dst += span;
+    }
+}
+
 static void draw_obj_layer(const ObjScene *scene, u16 *out, u8 *window, u8 inside, unsigned list, BgBlend *blend) {
     static const u8 spw[3][4] = {{8, 16, 32, 64}, {16, 32, 32, 64}, {8, 8, 16, 32}};
     static const u8 sph[3][4] = {{8, 16, 32, 64}, {8, 8, 16, 32}, {16, 32, 32, 64}};
@@ -725,12 +766,19 @@ static void draw_obj_layer(const ObjScene *scene, u16 *out, u8 *window, u8 insid
             int y = ypos + yo;
             int sx = sxAtLeft + (yOrigin + yo) * pb;
             int sy = syAtLeft + (yOrigin + yo) * pd;
+            if (!affine) {
+                unsigned py = sy >> 8;
+                unsigned base = tile_base + (py >> 3) * tile_row_bytes + (py & 7) * (tile_bytes >> 3);
+                draw_obj_tile_row(scene, out, blend, window, inside, y * 256 + xs + left, right - left,
+                                  sx >> 8, pa < 0, base, bpp8, bpp8 ? 0 : (a[2] >> 12) * 16u);
+                continue;
+            }
             for (int xo = left; xo < right; ++xo, sx += pa, sy += pc) {
                 int x = xs + xo;
                 unsigned addr;
                 unsigned px = sx >> 8, py = sy >> 8;
                 unsigned ci, paletteIndex;
-                if (affine && (px >= (unsigned)width || py >= (unsigned)height)) continue;
+                if (px >= (unsigned)width || py >= (unsigned)height) continue;
                 addr = tile_base + (py >> 3) * tile_row_bytes + (py & 7u) * (tile_bytes >> 3)
                      + (px >> 3) * tile_bytes;
                 if (bpp8) {
@@ -743,18 +791,7 @@ static void draw_obj_layer(const ObjScene *scene, u16 *out, u8 *window, u8 insid
                     ci = (px & 1) ? (nib >> 4) : (nib & 0x0f);
                     paletteIndex = (a[2] >> 12) * 16u + ci;
                 }
-                if (!ci) continue;
-                unsigned pixel = y * 256 + x;
-                if (!out) window[pixel] = inside;
-                else if (!window || (window[pixel] & GX_WND_PLANEMASK_OBJ)) {
-                    u16 color = rgb555_to_565(scene->palette[paletteIndex]);
-                    out[pixel] = color;
-                    if (blend && blend->ink) blend->ink[pixel] = 0;
-                    if (blend && blend->track) {
-                        if (blend->first) blend->colors[pixel] = color;
-                        blend->planes[pixel] = GX_WND_PLANEMASK_OBJ;
-                    }
-                }
+                if (ci) put_obj_pixel(scene, out, blend, window, inside, y * 256 + x, paletteIndex);
             }
         }
     }
