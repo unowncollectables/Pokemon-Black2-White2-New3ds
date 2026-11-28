@@ -19,6 +19,18 @@
 
 extern u8 pbw2_io[];
 
+/* Stereo (present-driven): the per-eye disparity for the 3D layer,
+ * set via PbW2_ComposeSetEyeShift before a compose. It is consumed
+ * only when the main engine is composed into the TOP screen's buffer
+ * (s_mainEyeShift), so the bottom screen and the DS capture path
+ * always see the flat image. 0 = flat. */
+static int s_eyeShiftSetting;
+static int s_mainEyeShift;
+
+void PbW2_ComposeSetEyeShift(int shiftPx) {
+    s_eyeShiftSetting = shiftPx;
+}
+
 static u16 rgb555_to_565(u16 c) {
     u32 r = c & 0x1f;
     u32 g = (c >> 5) & 0x1f;
@@ -1104,7 +1116,8 @@ static void compose_engine(const u8 *regs, int is_sub, u16 *out, u32 *ink) {
                 if (extend) memcpy(underGeometry, out, sizeof underGeometry);
                 s_haveSides = PbW2_G3RasterComposite(out, window, bg_blend.track ? bg_blend.planes : NULL,
                                                      layerAlpha ? bg_blend.colors : NULL, extend ? s_sides : NULL,
-                                                     backdrop, extend ? &nativeFrame : NULL, bg_blend.ink);
+                                                     backdrop, extend ? &nativeFrame : NULL, bg_blend.ink,
+                                                     s_mainEyeShift);
                 if (nativeFrame) {
                     /* Subsequent layers sit in front of the 3D layer. */
                     bg_blend.track = true;
@@ -1245,6 +1258,162 @@ static void compose_sub(const u8 *regs, u16 *out, u32 *ink) {
     if (ink) memcpy(ink, s_subCache.ink, sizeof s_subCache.ink);
 }
 
+/* Main-engine frame reuse (Lane B P1, SoulSilver's content-validated
+ * reuse applied to B2W2's existing sub-engine pattern): the host
+ * re-presents unchanged frames roughly twice per game frame, and the
+ * main engine — unlike the sub engine — recomposed from scratch every
+ * time. When every input the composed picture depends on is
+ * byte-identical to the inputs of the cached frame, the cached pixels
+ * (+ink) are the composed picture, by construction.
+ *
+ * Envelope (deliberately the sub cache's proven one, tightened where
+ * the main engine has extra inputs): graphics display mode only,
+ * all-text BG mode, no extended palettes, no display capture, and the
+ * wide/native side outputs declined (they are produced inside
+ * compose_engine, so a hit must never skip them). The 3D layer is
+ * keyed on the rasterizer's published-frame generation. The stereo
+ * eye shift is part of the key.
+ *
+ * Store discipline differs from the sub cache in one respect: the sub
+ * cache composes from a replay snapshot because vram_ptr() redirects
+ * its reads; the main engine's reads are not all redirected, so here
+ * the inputs are snapshotted, the frame is composed live, and the
+ * result is cached only if a full re-compare proves the inputs did
+ * not move during the compose. Reuse likewise re-verifies against
+ * live memory first. A frame whose inputs move mid-compose is
+ * presented exactly as the uncached path presents it — it is simply
+ * not cached. */
+enum { MAIN_BG_CACHE_BYTES = 0x40000 };
+typedef struct {
+    u32 regs[0x70 / sizeof(u32)];
+    u32 bgAddress, bgBytes, objAddress, textRevision, hasText, generation, hasGeneration;
+    s32 eyeShift;
+} MainInputs;
+
+static struct {
+    MainInputs inputs;
+    u8 bg[MAIN_BG_CACHE_BYTES], obj[OBJ_VRAM_BYTES];
+    u16 palette[512], oam[512], pixels[ENGINE_PIXELS];
+    u32 ink[ENGINE_PIXELS];
+    bool valid;
+    unsigned cooldown, misses;
+} s_mainCache;
+
+static bool main_inputs(MainInputs *in, const u8 *regs, bool hasText) {
+    memset(in, 0, sizeof(*in));
+    memcpy(in->regs, regs, sizeof in->regs);
+    const u8 *snapshot = (const u8 *)in->regs;
+    u32 dc = in->regs[0];
+    if (dc & 0x80u) return false; /* forced blank */
+    if (dc & REG_GX_DISPCNT_MODE_MASK) return false; /* graphics display only */
+    if (dc & REG_GX_DISPCNT_BGMODE_MASK) return false; /* all-text BG mode only */
+    if (dc & 0xc0000000u) return false; /* BG/OBJ extended palettes */
+    if (reg_GX_DISPCAPCNT & REG_GX_DISPCAPCNT_E_MASK) return false; /* capture active */
+    bool bg0_3d = (dc & REG_GX_DISPCNT_BG02D3D_MASK) != 0;
+    if (bg0_3d) {
+        /* The wide/native path replaces the composed picture with
+         * the renderer's native frame; a cache hit must never skip
+         * producing it, so decline exactly when compose_engine would
+         * extend (its own preconditions, on the snapshot regs). */
+        u16 bldcnt = reg_u16(snapshot, 0x50);
+        unsigned effect = bldcnt & REG_G2_BLDCNT_EFFECT_MASK;
+        unsigned factor = reg_u16(snapshot, 0x54) & 31;
+        bool bg0Brightness = (effect == REG_G2_BLDCNT_EFFECT_INCREASE ||
+                              effect == REG_G2_BLDCNT_EFFECT_DECREASE) &&
+                             (bldcnt & 0x0001) && factor;
+        bool bg0Alpha = effect == REG_G2_BLDCNT_EFFECT_ALPHA &&
+                        ((bldcnt & 0x0001) || (bldcnt & 0x0100));
+        if (PbW2_G3PublishedWide() && ((dc >> 16) & 3) == 1 && !bg0Brightness && !bg0Alpha &&
+            PbW2_G3PublishedNative()) return false;
+        in->generation = PbW2_G3PublishedGeneration();
+        in->hasGeneration = 1;
+    }
+    unsigned first = 0xffffffffu, end = 0;
+    for (int bg = 0; bg < 4; ++bg) {
+        if (!(dc & (0x100u << bg))) continue;
+        if (bg == 0 && bg0_3d) continue;
+        u16 cnt = reg_u16(snapshot, 8 + bg * 2);
+        unsigned map = bg_screen_addr(dc, cnt, 0, 0, bg);
+        unsigned chars = bg_char_addr(dc, cnt, 0);
+        unsigned mapEnd = map + 2048 * (1 + ((cnt >> 14) & 1)) * (1 + (cnt >> 15));
+        unsigned charsEnd = chars + ((cnt & 0x80u) ? 65536 : 32768);
+        if (chars < first) first = chars;
+        if (map < first) first = map;
+        if (charsEnd > end) end = charsEnd;
+        if (mapEnd > end) end = mapEnd;
+    }
+    if (end) {
+        in->bgAddress = first;
+        in->bgBytes = end - first;
+        if (in->bgBytes > MAIN_BG_CACHE_BYTES) return false;
+    }
+    in->objAddress = (dc & 0x1000u) ? engine_obj_vram_mapped(0) : 0;
+    in->hasText = hasText;
+    in->textRevision = hasText ? PbW2_TextVramRevision() : 0;
+    in->eyeShift = s_mainEyeShift;
+    return true;
+}
+
+static bool same_main_inputs(const MainInputs *in) {
+    return !memcmp(in, &s_mainCache.inputs, sizeof(*in)) &&
+           !memcmp(s_mainCache.palette, live_vram_ptr(HW_BG_PLTT), 512) &&
+           !memcmp(s_mainCache.palette + 256, live_vram_ptr(HW_OBJ_PLTT), 512) &&
+           (!in->objAddress || (!memcmp(s_mainCache.oam, live_vram_ptr(HW_OAM), sizeof s_mainCache.oam) &&
+                                !memcmp(s_mainCache.obj, live_vram_ptr(in->objAddress), sizeof s_mainCache.obj))) &&
+           (!in->bgBytes || !memcmp(s_mainCache.bg, live_vram_ptr(in->bgAddress), in->bgBytes));
+}
+
+static void compose_main(const u8 *regs, u16 *out, u32 *ink) {
+    MainInputs in;
+    if (s_mainCache.cooldown) {
+        --s_mainCache.cooldown;
+        compose_engine(regs, 0, out, ink);
+        return;
+    }
+    if (!main_inputs(&in, regs, ink != NULL)) {
+        s_mainCache.valid = false;
+        compose_engine(regs, 0, out, ink);
+        return;
+    }
+    if (s_mainCache.valid && same_main_inputs(&in) &&
+        (!in.hasGeneration || in.generation == PbW2_G3PublishedGeneration()) &&
+        (!ink || in.textRevision == PbW2_TextVramRevision())) {
+        s_mainCache.misses = 0;
+        memcpy(out, s_mainCache.pixels, sizeof s_mainCache.pixels);
+        if (ink) memcpy(ink, s_mainCache.ink, sizeof s_mainCache.ink);
+        return;
+    }
+    /* Give animated screens a few frames before trying to cache again. */
+    if (++s_mainCache.misses == 3) {
+        s_mainCache.misses = 0;
+        s_mainCache.cooldown = 6;
+        s_mainCache.valid = false;
+        compose_engine(regs, 0, out, ink);
+        return;
+    }
+    s_mainCache.inputs = in;
+    memcpy(s_mainCache.palette, live_vram_ptr(HW_BG_PLTT), 512);
+    memcpy(s_mainCache.palette + 256, live_vram_ptr(HW_OBJ_PLTT), 512);
+    if (in.objAddress) {
+        memcpy(s_mainCache.oam, live_vram_ptr(HW_OAM), sizeof s_mainCache.oam);
+        memcpy(s_mainCache.obj, live_vram_ptr(in.objAddress), sizeof s_mainCache.obj);
+    }
+    if (in.bgBytes) memcpy(s_mainCache.bg, live_vram_ptr(in.bgAddress), in.bgBytes);
+    compose_engine(regs, 0, out, ink);
+    /* Cache only if a fresh input build still matches the snapshot
+     * exactly — registers, spans, generation, text revision — i.e.
+     * the inputs provably did not move while the frame composed. */
+    MainInputs after;
+    if (main_inputs(&after, regs, ink != NULL) && !memcmp(&after, &in, sizeof in) &&
+        same_main_inputs(&in)) {
+        memcpy(s_mainCache.pixels, out, sizeof s_mainCache.pixels);
+        if (ink) memcpy(s_mainCache.ink, ink, sizeof s_mainCache.ink);
+        s_mainCache.valid = true;
+    } else {
+        s_mainCache.valid = false;
+    }
+}
+
 void PbW2_ComposeScreensWithText(u16 *top_rgb565, u16 *bottom_rgb565, u32 *topInk, u32 *bottomInk) {
     int main_upper = (*(const u16 *)(pbw2_io + 0x304) & 0x8000u) != 0;
     u16 *main_fb;
@@ -1263,7 +1432,11 @@ void PbW2_ComposeScreensWithText(u16 *top_rgb565, u16 *bottom_rgb565, u32 *topIn
         sub_fb = top_rgb565;
     }
     if (main_fb) {
-        compose_engine(pbw2_io + 0, 0, main_fb, main_upper ? topInk : bottomInk);
+        /* The eye shift applies only when the main engine lands on
+         * the top screen; a swapped or capture-only compose is flat. */
+        s_mainEyeShift = (s_eyeShiftSetting && main_upper && top_rgb565) ? s_eyeShiftSetting : 0;
+        compose_main(pbw2_io + 0, main_fb, main_upper ? topInk : bottomInk);
+        s_mainEyeShift = 0;
     } else if (reg_GX_DISPCAPCNT & REG_GX_DISPCAPCNT_E_MASK) {
         /* A hidden main LCD still drives the DS capture unit. */
         static u16 captureMain[256 * 192];

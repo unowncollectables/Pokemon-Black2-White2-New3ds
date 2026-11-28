@@ -24,6 +24,12 @@ void Pbw2_GspVblank(void) {
 
 static uint32_t s_flags;
 static bool s_logged;
+/* Stereo: s_drawSide selects which eye landscape_fb returns for the
+ * top screen (GFX_LEFT everywhere except the right-eye draw pass).
+ * s_stereoOn mirrors the libctru 3D state so gfxSet3D is only called
+ * when the 3D slider crosses zero. */
+static gfx3dSide_t s_drawSide = GFX_LEFT;
+static bool s_stereoOn;
 enum { GAME_WIDTH = 256, GAME_HEIGHT = 192 };
 
 typedef struct {
@@ -65,11 +71,39 @@ static bool has_text_ink(const u32 *ink) {
 }
 #endif
 
+#if defined(PBW2_LINK_GAME)
+/* Distinct-frame fingerprint for the present-rate stats (the window
+ * below): the composed top picture's FNV-1a hash, refreshed by
+ * GxShim_Present on every present. s_topFresh marks that the latest
+ * composed picture differs from the previous present's, i.e. this
+ * present carries a frame the display has not already shown. */
+static uint64_t s_topHash;
+static bool s_topHashValid;
+static bool s_topFresh;
+
+static uint64_t top_frame_hash(const u16 *pic, const u32 *ink) {
+    uint64_t hash = 1469598103934665603ull;
+    for (unsigned i = 0; i < GAME_WIDTH * GAME_HEIGHT; i += 2) {
+        hash ^= (uint32_t)pic[i] | ((uint32_t)pic[i + 1] << 16);
+        hash *= 1099511628211ull;
+    }
+    if (ink) {
+        for (unsigned i = 0; i < GAME_WIDTH * GAME_HEIGHT; i++) {
+            hash ^= ink[i];
+            hash *= 1099511628211ull;
+        }
+    }
+    return hash;
+}
+#endif
+
 void GxShim_Present(uint32_t flags) {
 #if defined(PBW2_LINK_GAME)
     static u16 s_top[256 * 192];
     static u16 s_bottom[256 * 192];
     static u32 s_topInk[256 * 192], s_bottomInk[256 * 192];
+    static u16 s_topRight[256 * 192];
+    static u32 s_topInkRight[256 * 192];
     if (PbW2_VramHostReady()) {
         PbW2_GxDisplayTrace();
         /* Readiness gates the first game frame. Later frames can intentionally blank the LCDs. */
@@ -81,14 +115,46 @@ void GxShim_Present(uint32_t flags) {
             u32 *topInk = top && sharpText && (options & (DISPLAY_TOP_FIT | DISPLAY_LCD_FIT | DISPLAY_WIDE_FIELD))
                              ? s_topInk : NULL;
             u32 *bottomInk = bottom && sharpText && (options & DISPLAY_LCD_FIT) ? s_bottomInk : NULL;
+            /* Stereo: the 3D slider gates everything. While it is up,
+             * the top screen is composed and drawn per eye — the 3D
+             * layer carries the disparity (ds2d_compose / g3_raster),
+             * 2D layers stay at screen depth. While it is down, the
+             * flat path runs exactly as before. Per-eye disparity
+             * tops out at 6 DS pixels at full slider, SoulSilver's
+             * scale. */
+            float slider = top ? osGet3DSliderState() : 0.0f;
+            bool wantStereo = slider > 0.0f;
+            if (wantStereo != s_stereoOn) {
+                gfxSet3D(wantStereo);
+                s_stereoOn = wantStereo;
+                PbW2_G3RasterSetDepthPublish(wantStereo);
+                Log_Line("GX", "stereo %s", wantStereo ? "on" : "off");
+            }
+            int eyeShift = s_stereoOn ? (int)(6.0f * slider + 0.5f) : 0;
+            if (s_stereoOn) PbW2_ComposeSetEyeShift(-eyeShift);
             PbW2_ComposeScreensWithText(top, bottom, topInk, bottomInk);
             if (!has_text_ink(topInk)) topInk = NULL;
             if (!has_text_ink(bottomInk)) bottomInk = NULL;
             if (top) {
+                /* Fingerprint the composed top picture for the FPS
+                 * stats: a present whose picture matches the previous
+                 * present's is a re-present, not a new frame. */
+                uint64_t hash = top_frame_hash(top, topInk);
+                s_topFresh = !s_topHashValid || hash != s_topHash;
+                s_topHash = hash;
+                s_topHashValid = true;
+            }
+            if (top) {
                 const u16 *sides = PbW2_TopSides();
                 const u16 *native = PbW2_NativeTop();
                 const u16 *wideTop = PbW2_WideTop();
-                if (wideTop && (options & DISPLAY_WIDE_FIELD)) {
+                if (s_stereoOn) {
+                    /* The wide/native variants bake their own layout
+                     * into a single image; in stereo both eyes draw
+                     * the composed buffer so the disparity the
+                     * compositor produced stays consistent. */
+                    Present_DrawGameWithText(GFX_TOP, top, options, topInk);
+                } else if (wideTop && (options & DISPLAY_WIDE_FIELD)) {
                     /* The Bag keeps its DS centre at column 32. */
                     draw_scaled(GFX_TOP, wideTop, 320, options, topInk);
                 } else if (native && (options & DISPLAY_WIDE_FIELD)) {
@@ -113,6 +179,21 @@ void GxShim_Present(uint32_t flags) {
                     Present_DrawBottomCached(bottom, options, bottomInk);
                 }
             }
+            if (s_stereoOn && top) {
+                /* Right eye: compose the top screen again with the
+                 * opposite disparity and draw it to the right
+                 * framebuffer. The bottom screen has no second eye
+                 * and was already drawn from the left pass. */
+                u32 *rightInk = sharpText && (options & (DISPLAY_TOP_FIT | DISPLAY_LCD_FIT | DISPLAY_WIDE_FIELD))
+                                    ? s_topInkRight : NULL;
+                PbW2_ComposeSetEyeShift(eyeShift);
+                PbW2_ComposeScreensWithText(s_topRight, NULL, rightInk, NULL);
+                if (!has_text_ink(rightInk)) rightInk = NULL;
+                s_drawSide = GFX_RIGHT;
+                Present_DrawGameWithText(GFX_TOP, s_topRight, options, rightInk);
+                s_drawSide = GFX_LEFT;
+            }
+            if (s_stereoOn) PbW2_ComposeSetEyeShift(0);
             pbw2_game_notify_present();
         }
     }
@@ -130,7 +211,7 @@ void GxShim_Present(uint32_t flags) {
  * row within the column flipped like consoleDrawChar (sx*stride+(stride-1-sy)). */
 static u16 *landscape_fb(gfxScreen_t screen, u16 *stride, u16 *land_w) {
     u16 land_h = 0;
-    u16 *fb = (u16 *)gfxGetFramebuffer(screen, GFX_LEFT, stride, &land_h);
+    u16 *fb = (u16 *)gfxGetFramebuffer(screen, screen == GFX_TOP ? s_drawSide : GFX_LEFT, stride, &land_h);
     if (!fb || *stride == 0 || land_h == 0) {
         return NULL;
     }
@@ -338,35 +419,80 @@ void Present_DrawBottomCached(const u16 *src, uint32_t options, const u32 *ink) 
     Present_DrawGameWithText(GFX_BOTTOM, src, options, ink);
 }
 
-/* Present-rate window: fed once per main-loop present, emits the
- * PERF line every 120 frames and keeps the average for the FPS
- * overlay. This is LCD present rate, not game-logic rate. */
-static unsigned s_presentFps;
+/* Present-rate window: fed once per main-loop present, closes about
+ * every 500 ms so the FPS overlay refreshes ~2x/s, and emits the PERF
+ * line about every 8th window in its long-standing format.
+ *
+ * The FPS figure counts DISTINCT presented frames: a present counts
+ * only when GxShim_Present's fingerprint shows the composed top
+ * picture changed since the previous present. The pre-Build-18 window
+ * counted every host present in a 120-frame window, so when the game
+ * produced ~20 new frames/s and the host loop re-presented each one
+ * about twice, the counter (and the PERF line) read ~40 - the host
+ * loop's present rate, not the rate of new frames reaching the
+ * display. (It was never a both-screens sum: one loop iteration
+ * commits both screens, and this was called once per iteration.)
+ *
+ * The frame-work figures (average / worst) deliberately cover ALL
+ * presents in the window, re-presents included: they price the host's
+ * per-present work, which is what presentation cost cutting moves. */
+static PresentStats s_stats;
+static bool s_statsValid;
 
 void Present_NoteFrame(uint64_t start, uint64_t flushStart, uint64_t finish) {
     static uint64_t windowStart;
-    static uint64_t drawTicks, flushTicks;
-    static unsigned frames;
-    if (!frames) windowStart = start;
+    static uint64_t drawTicks, flushTicks, workTicks, worstTicks;
+    static unsigned presents, freshFrames, windows;
+    if (!presents) windowStart = start;
+    uint64_t work = finish - start;
     drawTicks += flushStart - start;
     flushTicks += finish - flushStart;
-    if (++frames == 120) {
-        uint64_t elapsed = finish - windowStart;
-        unsigned fps = elapsed ? frames * (uint64_t)SYSCLOCK_ARM11 / elapsed : 0;
-        unsigned drawUs = drawTicks * 1000000ull / ((uint64_t)frames * SYSCLOCK_ARM11);
-        unsigned flushUs = flushTicks * 1000000ull / ((uint64_t)frames * SYSCLOCK_ARM11);
-        Log_Line("PERF", "LCD %u fps, update and compose avg %u us, flush and swap avg %u us", fps, drawUs, flushUs);
-        s_presentFps = fps;
-        frames = 0;
-        drawTicks = flushTicks = 0;
+    workTicks += work;
+    if (work > worstTicks) worstTicks = work;
+#if defined(PBW2_LINK_GAME)
+    /* The fingerprint only exists in the game build; the shell build
+     * never calls this function. */
+    if (s_topFresh) {
+        s_topFresh = false;
+        freshFrames++;
     }
+#endif
+    presents++;
+    uint64_t elapsed = finish - windowStart;
+    if (elapsed < (uint64_t)SYSCLOCK_ARM11 / 2) return;
+    PresentStats next;
+    next.fps = (unsigned)(freshFrames * (uint64_t)SYSCLOCK_ARM11 / elapsed);
+    next.avgFrameMs10 = (unsigned)(workTicks * 10000ull / ((uint64_t)presents * SYSCLOCK_ARM11));
+    next.worstFrameMs10 = (unsigned)(worstTicks * 10000ull / (uint64_t)SYSCLOCK_ARM11);
+    s_stats = next;
+    s_statsValid = true;
+    if ((++windows & 7) == 0) {
+        unsigned drawUs = drawTicks * 1000000ull / ((uint64_t)presents * SYSCLOCK_ARM11);
+        unsigned flushUs = flushTicks * 1000000ull / ((uint64_t)presents * SYSCLOCK_ARM11);
+        Log_Line("PERF", "LCD %u fps, update and compose avg %u us, flush and swap avg %u us", next.fps, drawUs, flushUs);
+    }
+    presents = freshFrames = 0;
+    drawTicks = flushTicks = workTicks = worstTicks = 0;
 }
 
 unsigned Present_Fps(void) {
-    return s_presentFps;
+    return s_stats.fps;
+}
+
+bool Present_ReadStats(PresentStats *out) {
+    if (!s_statsValid) return false;
+    *out = s_stats;
+    return true;
 }
 
 void Present_Flush(void) {
+    if (s_stereoOn) {
+        /* The retained-bottom shortcut below flushes only the
+         * top-left buffer by hand; in stereo both eyes need the
+         * full flush. */
+        gfxFlushBuffers();
+        return;
+    }
     if (s_bottomCache.reused) {
         /* The game uses a single RGB565 image at the top. The retained bottom
          * buffer was already flushed when it was last written. */
@@ -384,6 +510,14 @@ static void clear_screen(gfxScreen_t screen) {
     u16 *fb = landscape_fb(screen, &stride, &width);
     if (fb != NULL) {
         memset(fb, 0, (size_t)stride * width * sizeof(*fb));
+    }
+    if (screen == GFX_TOP && s_stereoOn) {
+        s_drawSide = GFX_RIGHT;
+        fb = landscape_fb(screen, &stride, &width);
+        if (fb != NULL) {
+            memset(fb, 0, (size_t)stride * width * sizeof(*fb));
+        }
+        s_drawSide = GFX_LEFT;
     }
 }
 

@@ -29,8 +29,24 @@ void PbW2_G3RasterTraceScene(void);
 void PbW2_G3RasterCommand(u32 opcode, const u32 *args, const MtxFx44 *clip,
                          const MtxFx44 *texture, const MtxFx44 *vector);
 /* The single presenter can borrow the native frame until it finishes composing. */
+/* eyeShiftPx (stereo, present-driven): 0 = flat (the historical path,
+ * byte-identical). >0 = right eye, <0 = left eye; magnitude is the
+ * per-eye disparity in DS pixels at the far plane. The 3D layer is
+ * sampled with a depth-graded offset when the published frame carries
+ * depth (CPU-rasterized Z-buffer frames), and with a uniform offset
+ * otherwise (GPU frames, W-buffer frames) — the SoulSilver layer-shift
+ * model: the 3D world sits behind the screen plane, 2D layers and HUD
+ * stay at screen depth. */
 bool PbW2_G3RasterComposite(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawColors, u16 *sides, u16 backdrop,
-                            const u16 **native, u32 *ink);
+                            const u16 **native, u32 *ink, int eyeShiftPx);
+/* Stereo: ask the rasterizer to publish per-pixel depth alongside the
+ * colour frame at swap time (CPU Z-buffer frames only). Off by
+ * default; present enables it only while the 3D slider is up. */
+void PbW2_G3RasterSetDepthPublish(bool enabled);
+/* Monotonic counter of published-frame replacements. While it is
+ * unchanged, the published 3D layer (PbW2_G3RasterComposite's source)
+ * is unchanged. */
+unsigned PbW2_G3PublishedGeneration(void);
 void PbW2_G3ReleaseNative(void);
 /* Copy the DS 3D layer, including the validity bit used for capture. */
 void PbW2_G3RasterCapture(u16 *rgb555);

@@ -10,6 +10,11 @@
 
 void PbW2_ComposeScreensWithText(u16 *top_rgb565, u16 *bottom_rgb565, u32 *topInk, u32 *bottomInk);
 int PbW2_ComposeScreens(u16 *top_rgb565, u16 *bottom_rgb565);
+/* Stereo: per-eye disparity (DS pixels, signed; >0 right eye, <0 left
+ * eye, 0 flat) applied to the 3D layer when the main engine is
+ * composed for the top screen. Set before each compose; the flat
+ * default is 0 and present restores 0 after its eye passes. */
+void PbW2_ComposeSetEyeShift(int shiftPx);
 const u16 *PbW2_TopSides(void);
 const u16 *PbW2_NativeTop(void);
 /* 320x192 wide-layout pictures for the current frame (wide_layout.c),

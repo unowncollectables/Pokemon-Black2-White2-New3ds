@@ -72,6 +72,27 @@ bool PbW2_G3WideEnabled(void) {
 
 static Frame s_drawing;
 static u16 s_display[MAX_PIXELS];
+/* Stereo (present-driven): the published frame's depth, for the
+ * compositor's per-eye sampling. Only filled at swap time when
+ * s_publishDepth is set, and only meaningful when s_displayHasDepth
+ * (CPU-rasterized Z-buffer frames; GPU readback and W-buffer frames
+ * publish colour only and the compositor falls back to a uniform
+ * layer shift for them). */
+static float s_displayDepth[MAX_PIXELS];
+static bool s_publishDepth, s_displayHasDepth;
+static float s_displayDepthRef = 1.0f;
+/* Bumps on every publish that replaces s_display (and on reset).
+ * The compositor's main-engine frame cache keys on it: while the
+ * generation is unchanged, the published 3D layer is unchanged. */
+static unsigned s_publishGeneration;
+
+unsigned PbW2_G3PublishedGeneration(void) {
+    return s_publishGeneration;
+}
+
+void PbW2_G3RasterSetDepthPublish(bool enabled) {
+    s_publishDepth = enabled;
+}
 /* The game publishes a complete frame. Only the presentation thread reads it. */
 static unsigned char s_displayLock;
 static int s_frameStarted;
@@ -194,6 +215,7 @@ void PbW2_G3RasterReset(void) {
     s_requestedWBuffer = false;
     lock_display();
     memset(s_display, 0, sizeof s_display);
+    s_publishGeneration++;
     s_displayWidth = WIDTH;
     s_publishedCapture = false;
 #ifdef PBW2_GPU_GEOMETRY
@@ -1313,6 +1335,18 @@ static void publish_swap(u32 flags, bool afterVBlank) {
     s_displayWidth = s_width;
     s_publishedCapture = s_frameCapture;
     memcpy(s_display, s_drawing.color, s_width * HEIGHT * sizeof(*s_display));
+    /* Stereo depth publish: only CPU Z-buffer frames carry a depth
+     * buffer the compositor can grade the per-eye shift with. */
+    s_displayHasDepth = s_publishDepth && !s_wBuffer;
+#ifdef PBW2_GPU_GEOMETRY
+    if (s_gpuFrame) s_displayHasDepth = false;
+#endif
+    if (s_displayHasDepth) {
+        float ref = software_clear_depth();
+        s_displayDepthRef = (ref > 0.0f && ref < 1.5f) ? ref : 1.0f;
+        memcpy(s_displayDepth, s_drawing.depth, s_width * HEIGHT * sizeof(*s_displayDepth));
+    }
+    s_publishGeneration++;
     unlock_display();
     s_frameStarted = s_inPrimitive = 0;
 }
@@ -1434,7 +1468,7 @@ void PbW2_G3RasterCommand(u32 op, const u32 *p, const MtxFx44 *clip,
 }
 
 bool PbW2_G3RasterComposite(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawColors, u16 *sides, u16 backdrop,
-                            const u16 **native, u32 *ink) {
+                            const u16 **native, u32 *ink, int eyeShiftPx) {
     lock_display();
     if (native) *native = NULL;
 #ifdef PBW2_GPU_GEOMETRY
@@ -1443,6 +1477,7 @@ bool PbW2_G3RasterComposite(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawC
         *native = s_nativeFrames[s_nativeReader];
     }
 #endif
+    const int rowBase = (int)(s_displayWidth - WIDTH) / 2;
     for (unsigned y = 0; y < HEIGHT; ++y) {
         const u16 *row = s_display + y * s_displayWidth + (s_displayWidth - WIDTH) / 2;
         if (sides && s_displayWidth == WIDE_WIDTH) {
@@ -1455,7 +1490,28 @@ bool PbW2_G3RasterComposite(u16 *rgb565, const u8 *window, u8 *planes, u16 *rawC
         }
         for (unsigned x = 0; x < WIDTH; ++x) {
             unsigned i = y * WIDTH + x;
-            u16 pixel = row[x];
+            u16 pixel;
+            if (eyeShiftPx) {
+                /* Stereo: sample the 3D layer at a per-eye offset.
+                 * With published depth the offset is graded (near
+                 * pixels cross in front of the screen plane, far
+                 * pixels recede, convergence at depth 0.35); without
+                 * it the whole layer recedes uniformly. An invalid
+                 * (transparent) shifted sample falls back to the
+                 * unshifted pixel, so silhouettes never tear open. */
+                int off = eyeShiftPx;
+                if (s_displayHasDepth) {
+                    float dn = s_displayDepth[y * s_displayWidth + rowBase + (int)x] / s_displayDepthRef;
+                    if (dn < 0.0f) dn = 0.0f;
+                    else if (dn > 1.0f) dn = 1.0f;
+                    off = (int)lroundf(eyeShiftPx * (dn - 0.35f) * (1.0f / 0.65f));
+                }
+                int sx = (int)x + off;
+                pixel = (sx >= -rowBase && sx < (int)s_displayWidth - rowBase) ? row[sx] : 0;
+                if (!(pixel & 0x8000)) pixel = row[x];
+            } else {
+                pixel = row[x];
+            }
             if ((pixel & 0x8000) && (!window || (window[i] & GX_WND_PLANEMASK_BG0))) {
                 u16 color = ((pixel & 31) << 11) | ((pixel & 0x03e0) << 1) | ((pixel >> 10) & 31);
                 rgb565[i] = color;

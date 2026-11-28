@@ -21,6 +21,22 @@ void Present_NoteFrame(uint64_t start, uint64_t flushStart, uint64_t finish);
 unsigned Present_Fps(void);
 #endif
 
+/* One closed present window (~500 ms) of FPS-overlay statistics.
+ * fps counts distinct presented frames - presents whose composed top
+ * picture differed from the previous present's (see present.c) - per
+ * second. avgFrameMs10 / worstFrameMs10 price ALL host presents in
+ * the window (update + compose + flush + swap, the Present_NoteFrame
+ * span) in tenths of a millisecond: the average per present and the
+ * single most expensive present. Declared (and defined) outside the
+ * PBW2_LINK_GAME guard, like the window itself: the shell build
+ * compiles the overlay too. */
+typedef struct {
+    unsigned fps;
+    unsigned avgFrameMs10;
+    unsigned worstFrameMs10;
+} PresentStats;
+bool Present_ReadStats(PresentStats *out);
+
 /* Center pic_w x pic_h RGB565 on the chosen screen. Uses the GSP framebuffer
  * size (400x240 top, 320x240 bottom) from gfxGetFramebuffer. */
 void Present_BlitRGB565(gfxScreen_t screen, const uint16_t *pic, int pic_w, int pic_h);
